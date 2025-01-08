@@ -1,5 +1,6 @@
+import { sequelize } from '../config/db.js';
 import { DataTypes } from 'sequelize';
-import sequelize from '../config/db.js';
+
 
 const User = sequelize.define('User', {
     user_id: {
@@ -7,44 +8,48 @@ const User = sequelize.define('User', {
         primaryKey: true,
         autoIncrement: true
     },
+    email: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true,
+        validate: {
+            isEmail: true, // Ensures the email format is valid
+        }
+    },
+    phone_no: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true,
+        validate: {
+            len: [10, 15] // Ensures phone number length is between 10 and 15 characters
+        }
+    },
+    password: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        validate: {
+            len: [6, 100] // Password must be at least 6 characters long
+        }
+    },
+    referral_code: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
     referring_code: {
         type: DataTypes.STRING,
         unique: true
     },
-    referral_code: {
-        type: DataTypes.STRING,
-        unique: true
-    },
-    user_name: {
-        type: DataTypes.STRING,
-        allowNull: false
-    },
-    email: {
-        type: DataTypes.STRING,
-        unique: true,
-        allowNull: false
-    },
-    phone_no: {
-        type: DataTypes.STRING,
-        unique: true
-    },
-    password: {
-        type: DataTypes.STRING,
-        allowNull: false
-    },
-    wallet_balance: {
-        type: DataTypes.DECIMAL(10, 2),
-        defaultValue: 0.00
-    },
     current_ip: {
-        type: DataTypes.STRING
+        type: DataTypes.STRING,
+        validate: {
+            isIP: true // Ensures valid IP address format
+        }
     },
     registration_ip: {
-        type: DataTypes.STRING
-    },
-    created_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
+        type: DataTypes.STRING,
+        validate: {
+            isIP: true
+        }
     }
 }, {
     tableName: 'users',
