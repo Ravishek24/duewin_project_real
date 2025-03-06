@@ -2,12 +2,12 @@ import { DataTypes } from 'sequelize';
 import sequelize from '../config/db.js';
 
 const BetResultTrywix = sequelize.define('BetResultTrywix', {
-    bet_id: {
+    order_id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
     },
-    bet_number: {
+    period_number: {
         type: DataTypes.STRING, // Bet number/Period
         allowNull: false
     },

@@ -10,6 +10,14 @@ const BankAccount = sequelize.define('BankAccount', {
             key: 'user_id'
         }
     },
+    phone_no: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true,
+        validate: {
+            len: [10, 15] // Ensures phone number length is between 10 and 15 characters
+        }
+    },
     account_number: {
         type: DataTypes.STRING,
         allowNull: false
