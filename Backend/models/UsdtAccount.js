@@ -1,7 +1,7 @@
 import { DataTypes } from 'sequelize';
-import sequelize from '../config/db.js';
+import { sequelize } from '../config/db.js'; // Ensure correct import
 
-const BankAccount = sequelize.define('UsdtAccount', {
+const UsdtAccount = sequelize.define('UsdtAccount', { // Use correct variable name
     user_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
@@ -27,4 +27,4 @@ const BankAccount = sequelize.define('UsdtAccount', {
     timestamps: false
 });
 
-export default UsdtAccount;
+export default UsdtAccount; // Correctly export the variable

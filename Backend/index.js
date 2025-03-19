@@ -24,6 +24,11 @@ app.use(express.urlencoded({ extended: true }));
 // Connect to the database
 connectDB();
 
+app.get('/', (req, res) => {
+    res.send('Server is running successfully!');
+});
+
+
 // API Routes
 app.use('/api/users', userRoutes);
 app.use('/api/games', gameRoutes);

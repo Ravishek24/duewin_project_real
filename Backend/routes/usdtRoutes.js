@@ -1,11 +1,11 @@
 import express from 'express';
 import { 
-    getUsdtAccountsController, 
-    addUsdtAccountController, 
-    updateUsdtAccountController, 
-    deleteUsdtAccountController 
-} from '../controllers/usdtAccountController';
-import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
+    getUsdtAccounts, 
+    addUsdtAccount, 
+    updateUsdtAccount, 
+    deleteUsdtAccount 
+} from '../controllers/usdtAccountController.js';
+import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js'; // Fix this import
 
 const router = express.Router();
 
@@ -13,9 +13,9 @@ const router = express.Router();
 router.use(auth);
 router.use(requireEmailVerification);
 
-router.get('/', getUsdtAccountsController);
-router.post('/', addUsdtAccountController);
-router.put('/:id', updateUsdtAccountController);
-router.delete('/:id', deleteUsdtAccountController);
+router.get('/', getUsdtAccounts);
+router.post('/', addUsdtAccount);
+router.put('/:id', updateUsdtAccount);
+router.delete('/:id', deleteUsdtAccount);
 
 export default router;

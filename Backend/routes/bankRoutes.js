@@ -5,7 +5,7 @@ import {
     updateBankAccountController, 
     deleteBankAccountController 
 } from '../controllers/bankAccountController.js';
-import { auth, requireEmailVerification } from '../middleware/authMiddleware.js';
+import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
