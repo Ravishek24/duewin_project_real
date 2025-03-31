@@ -1,13 +1,9 @@
+// index.js
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { sequelize, connectDB } from './config/db.js';
-import userRoutes from './routes/userRoutes.js';
-import gameRoutes from './routes/gameRoutes.js';
-import paymentRoutes from './routes/paymentRoutes.js';
-import bankRoutes from './routes/bankRoutes.js';
-import usdtRoutes from './routes/usdtRoutes.js';
-import walletRoutes from './routes/walletRoutes.js';
+import allRoutes from './routes/index.js'; // Import the combined routes from routes/index.js
 
 // Load environment variables early
 dotenv.config();
@@ -28,14 +24,8 @@ app.get('/', (req, res) => {
     res.send('Server is running successfully!');
 });
 
-
 // API Routes
-app.use('/api/users', userRoutes);
-app.use('/api/games', gameRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/bank-accounts', bankRoutes);
-app.use('/api/usdt-accounts', usdtRoutes);
-app.use('/api/wallet', walletRoutes);
+app.use('/api', allRoutes); // Use the combined routes with /api prefix
 
 // Health check route
 app.get('/health', (req, res) => {
