@@ -1,5 +1,6 @@
+// Backend/models/BetResultWingo.js
 import { DataTypes } from 'sequelize';
-import sequelize from '../config/db.js';
+import { sequelize } from '../config/db.js';
 
 const BetResultWingo = sequelize.define('BetResultWingo', {
     bet_id: {
@@ -8,8 +9,9 @@ const BetResultWingo = sequelize.define('BetResultWingo', {
         autoIncrement: true
     },
     bet_number: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+        type: DataTypes.STRING, // This holds the period ID
+        allowNull: false,
+        unique: true
     },
     result_of_number: {
         type: DataTypes.INTEGER,
@@ -26,10 +28,23 @@ const BetResultWingo = sequelize.define('BetResultWingo', {
     time: {
         type: DataTypes.INTEGER, // Duration of the game in seconds
         allowNull: false
+    },
+    created_at: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'bet_result_wingo',
-    timestamps: false
+    timestamps: false,
+    indexes: [
+        {
+            unique: true,
+            fields: ['bet_number']
+        },
+        {
+            fields: ['created_at']
+        }
+    ]
 });
 
 export default BetResultWingo;

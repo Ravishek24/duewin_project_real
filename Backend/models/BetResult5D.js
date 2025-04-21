@@ -1,5 +1,6 @@
+// Backend/models/BetResult5D.js
 import { DataTypes } from 'sequelize';
-import sequelize from '../config/db.js';
+import { sequelize } from '../config/db.js';
 
 const BetResult5D = sequelize.define('BetResult5D', {
     bet_id: {
@@ -8,24 +9,54 @@ const BetResult5D = sequelize.define('BetResult5D', {
         autoIncrement: true
     },
     bet_number: {
-        type: DataTypes.STRING, 
+        type: DataTypes.STRING, // This holds the period ID
+        allowNull: false,
+        unique: true
+    },
+    result_a: {
+        type: DataTypes.INTEGER, // 0-9
         allowNull: false
     },
-    result: {
-        type: DataTypes.STRING, 
+    result_b: {
+        type: DataTypes.INTEGER, // 0-9
         allowNull: false
     },
-    total: {
-        type: DataTypes.INTEGER, 
+    result_c: {
+        type: DataTypes.INTEGER, // 0-9
+        allowNull: false
+    },
+    result_d: {
+        type: DataTypes.INTEGER, // 0-9
+        allowNull: false
+    },
+    result_e: {
+        type: DataTypes.INTEGER, // 0-9
+        allowNull: false
+    },
+    total_sum: {
+        type: DataTypes.INTEGER, // Sum of all 5 numbers
         allowNull: false
     },
     time: {
-        type: DataTypes.INTEGER,
+        type: DataTypes.INTEGER, // Duration of the game in seconds
         allowNull: false
+    },
+    created_at: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'bet_result_5d',
-    timestamps: false
+    timestamps: false,
+    indexes: [
+        {
+            unique: true,
+            fields: ['bet_number']
+        },
+        {
+            fields: ['created_at']
+        }
+    ]
 });
 
 export default BetResult5D;

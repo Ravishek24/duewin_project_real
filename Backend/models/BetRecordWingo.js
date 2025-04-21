@@ -1,5 +1,7 @@
+// Backend/models/BetRecordWingo.js
 import { DataTypes } from 'sequelize';
-import sequelize from '../config/db.js';
+import { sequelize } from '../config/db.js';
+import User from './User.js';
 
 const BetRecordWingo = sequelize.define('BetRecordWingo', {
     bet_id: {
@@ -11,7 +13,7 @@ const BetRecordWingo = sequelize.define('BetRecordWingo', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: 'users',
+            model: User,
             key: 'user_id'
         }
     },
@@ -21,32 +23,74 @@ const BetRecordWingo = sequelize.define('BetRecordWingo', {
     },
     bet_number: {
         type: DataTypes.INTEGER,
-        allowNull: false
+        allowNull: true
     },
     bet_color: {
-        type: DataTypes.STRING
+        type: DataTypes.STRING,
+        allowNull: true
     },
     bet_size: {
-        type: DataTypes.ENUM('Big', 'Small')
+        type: DataTypes.ENUM('Big', 'Small'),
+        allowNull: true
     },
-    result_color: {
-        type: DataTypes.STRING
+    bet_parity: {
+        type: DataTypes.ENUM('odd', 'even'),
+        allowNull: true
+    },
+    bet_amount: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false
     },
     result_number: {
-        type: DataTypes.INTEGER
+        type: DataTypes.INTEGER,
+        allowNull: true
+    },
+    result_color: {
+        type: DataTypes.STRING,
+        allowNull: true
     },
     result_size: {
-        type: DataTypes.ENUM('Big', 'Small')
+        type: DataTypes.ENUM('Big', 'Small'),
+        allowNull: true
+    },
+    result_parity: {
+        type: DataTypes.ENUM('odd', 'even'),
+        allowNull: true
     },
     win_loss: {
-        type: DataTypes.BOOLEAN
+        type: DataTypes.BOOLEAN,
+        allowNull: true
+    },
+    payout_amount: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: true
     },
     duration: {
-        type: DataTypes.INTEGER // Duration of the game in seconds
+        type: DataTypes.INTEGER, // Duration of the game in seconds
+        allowNull: false
+    },
+    period_id: {
+        type: DataTypes.STRING,
+        allowNull: false
     }
 }, {
     tableName: 'bet_record_wingo',
-    timestamps: false
+    timestamps: false,
+    indexes: [
+        {
+            fields: ['user_id']
+        },
+        {
+            fields: ['period_id']
+        },
+        {
+            fields: ['time']
+        }
+    ]
 });
+
+// Set up relationship
+User.hasMany(BetRecordWingo, { foreignKey: 'user_id' });
+BetRecordWingo.belongsTo(User, { foreignKey: 'user_id' });
 
 export default BetRecordWingo;
