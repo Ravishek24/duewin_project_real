@@ -70,14 +70,6 @@ export const launchGameController = async (req, res) => {
  */
 export const balanceCallbackController = async (req, res) => {
   try {
-    // Validate the request signature
-    if (!validateSeamlessSignature(req.query)) {
-      return res.status(200).json({
-        status: '403',
-        msg: 'Invalid signature'
-      });
-    }
-    
     // Process the balance request
     const result = await processBalanceRequest(req.query);
     
@@ -99,14 +91,6 @@ export const balanceCallbackController = async (req, res) => {
  */
 export const debitCallbackController = async (req, res) => {
   try {
-    // Validate the request signature
-    if (!validateSeamlessSignature(req.query)) {
-      return res.status(200).json({
-        status: '403',
-        msg: 'Invalid signature'
-      });
-    }
-    
     // Process the debit request
     const result = await processDebitRequest(req.query);
     
@@ -128,14 +112,6 @@ export const debitCallbackController = async (req, res) => {
  */
 export const creditCallbackController = async (req, res) => {
   try {
-    // Validate the request signature
-    if (!validateSeamlessSignature(req.query)) {
-      return res.status(200).json({
-        status: '403',
-        msg: 'Invalid signature'
-      });
-    }
-    
     // Process the credit request
     const result = await processCreditRequest(req.query);
     
@@ -157,14 +133,6 @@ export const creditCallbackController = async (req, res) => {
  */
 export const rollbackCallbackController = async (req, res) => {
   try {
-    // Validate the request signature
-    if (!validateSeamlessSignature(req.query)) {
-      return res.status(200).json({
-        status: '403',
-        msg: 'Invalid signature'
-      });
-    }
-    
     // Process the rollback request
     const result = await processRollbackRequest(req.query);
     

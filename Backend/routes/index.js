@@ -1,4 +1,4 @@
-// routes/index.js (updated)
+// routes/index.js
 import express from 'express';
 import userRoutes from './userRoutes.js';
 import bankRoutes from './bankRoutes.js';

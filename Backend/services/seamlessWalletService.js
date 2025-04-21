@@ -1,8 +1,8 @@
 // services/seamlessWalletService.js
 import axios from 'axios';
+import { Op } from 'sequelize';
 import { sequelize } from '../config/db.js';
 import { seamlessConfig } from '../config/seamlessConfig.js';
-import { generateSeamlessSignature } from '../utils/seamlessUtils.js';
 import User from '../models/User.js';
 import SeamlessTransaction from '../models/SeamlessTransaction.js';
 import SeamlessGameSession from '../models/SeamlessGameSession.js';
@@ -239,8 +239,7 @@ export const processBalanceRequest = async (queryParams) => {
       session_id,
       game_id,
       game_id_hash,
-      provider,
-      currency
+      provider
     } = queryParams;
     
     // Find user by remote_id (the ID assigned by the game provider)
@@ -573,14 +572,10 @@ export const processRollbackRequest = async (queryParams) => {
     // Extract needed parameters
     const {
       remote_id,
+      transaction_id,
       session_id,
-      transaction_id, // Original transaction to rollback
-      amount, // Amount to rollback (might be ignored as we use the original transaction amount)
       provider
     } = queryParams;
-    
-    // Generate a unique ID for this rollback
-    const rollbackTransactionId = `rollback_${transaction_id}_${Date.now()}`;
     
     // Check for duplicate rollback
     const existingRollback = await SeamlessTransaction.findOne({
@@ -623,3 +618,288 @@ export const processRollbackRequest = async (queryParams) => {
         balance: parseFloat(originalTransaction.wallet_balance_before).toFixed(2),
         msg: 'Transaction already rolled back'
       };
+    }
+    
+    // Get user with locking to prevent race conditions
+    const user = await User.findByPk(originalTransaction.user_id, {
+      lock: true,
+      transaction: t
+    });
+    
+    if (!user) {
+      await t.rollback();
+      return {
+        status: '500',
+        msg: 'User not found'
+      };
+    }
+    
+    // Process the rollback - reverse the original transaction effect
+    const oldBalance = parseFloat(user.wallet_balance);
+    let newBalance = oldBalance;
+    
+    // If original was debit (bet), add money back to wallet
+    if (originalTransaction.type === 'debit') {
+      newBalance += parseFloat(originalTransaction.amount);
+    } 
+    // If original was credit (win), subtract money from wallet
+    else if (originalTransaction.type === 'credit') {
+      newBalance -= parseFloat(originalTransaction.amount);
+      
+      // Check if user has enough balance for the rollback
+
+      // Check if user has enough balance for the rollback
+      if (newBalance < 0) {
+        await t.rollback();
+        return {
+          status: '403',
+          balance: oldBalance.toFixed(2),
+          msg: 'Insufficient funds for rollback'
+        };
+      }
+    }
+    
+    // Update wallet balance
+    await User.update(
+      { wallet_balance: newBalance },
+      { 
+        where: { user_id: user.user_id },
+        transaction: t 
+      }
+    );
+    
+    // Mark original transaction as rolled back
+    await originalTransaction.update({
+      status: 'rolledback',
+      updated_at: new Date()
+    }, { transaction: t });
+    
+    // Record rollback transaction
+    const rollbackTransactionId = `rollback_${transaction_id}_${Date.now()}`;
+    const transactionRecord = await SeamlessTransaction.create({
+      user_id: user.user_id,
+      remote_id,
+      provider_transaction_id: rollbackTransactionId,
+      provider: provider || 'unknown',
+      game_id: originalTransaction.game_id,
+      game_id_hash: originalTransaction.game_id_hash,
+      round_id: originalTransaction.round_id,
+      type: 'rollback',
+      amount: parseFloat(originalTransaction.amount),
+      session_id: session_id || null,
+      wallet_balance_before: oldBalance,
+      wallet_balance_after: newBalance,
+      related_transaction_id: transaction_id,
+      status: 'success'
+    }, { transaction: t });
+    
+    await t.commit();
+    
+    return {
+      status: '200',
+      balance: newBalance.toFixed(2),
+      transactionId: transactionRecord.transaction_id
+    };
+  } catch (error) {
+    await t.rollback();
+    console.error('Error processing rollback request:', error);
+    return {
+      status: '500',
+      msg: 'Internal server error'
+    };
+  }
+};
+
+/**
+ * Close an active game session
+ * @param {string} sessionToken - Session token
+ * @returns {Promise<Object>} Result
+ */
+export const closeGameSession = async (sessionToken) => {
+  try {
+    const gameSession = await SeamlessGameSession.findOne({
+      where: { session_token: sessionToken, is_active: true }
+    });
+    
+    if (!gameSession) {
+      return {
+        success: false,
+        message: 'Active session not found'
+      };
+    }
+    
+    // Update session
+    await gameSession.update({
+      is_active: false,
+      closed_at: new Date()
+    });
+    
+    return {
+      success: true,
+      message: 'Game session closed successfully'
+    };
+  } catch (error) {
+    console.error('Error closing game session:', error);
+    return {
+      success: false,
+      message: 'Failed to close game session'
+    };
+  }
+};
+
+/**
+ * Check for and close expired sessions
+ * @returns {Promise<Object>} Result with count of closed sessions
+ */
+export const cleanupExpiredSessions = async () => {
+  try {
+    // Find sessions that haven't had activity for the configured expiry time
+    const expiryTime = new Date();
+    expiryTime.setSeconds(expiryTime.getSeconds() - seamlessConfig.session_expiry);
+    
+    const expiredSessions = await SeamlessGameSession.findAll({
+      where: {
+        is_active: true,
+        last_activity: {
+          [Op.lt]: expiryTime
+        }
+      }
+    });
+    
+    // Close expired sessions
+    for (const session of expiredSessions) {
+      await session.update({
+        is_active: false,
+        closed_at: new Date()
+      });
+    }
+    
+    return {
+      success: true,
+      message: `Closed ${expiredSessions.length} expired sessions`
+    };
+  } catch (error) {
+    console.error('Error cleaning up expired sessions:', error);
+    return {
+      success: false,
+      message: 'Failed to clean up expired sessions'
+    };
+  }
+};
+
+/**
+ * Add free rounds to players
+ * @param {string} title - Free rounds campaign title
+ * @param {string} playerIds - Comma-separated player IDs
+ * @param {string} gameIds - Comma-separated game IDs
+ * @param {number} available - Number of free rounds
+ * @param {Date} validTo - Expiry date
+ * @param {Date} validFrom - Start date (optional)
+ * @param {string} betLevel - Bet level (min, med, max)
+ * @returns {Promise<Object>} Response from API
+ */
+export const addFreeRounds = async (
+  title,
+  playerIds,
+  gameIds,
+  available,
+  validTo,
+  validFrom = null,
+  betLevel = seamlessConfig.default_betlevel
+) => {
+  try {
+    const requestData = {
+      api_login: seamlessConfig.api_login,
+      api_password: seamlessConfig.api_password,
+      method: 'addFreeRounds',
+      title,
+      playerids: playerIds,
+      gameids: gameIds,
+      available: parseInt(available),
+      validTo: validTo,
+      betlevel: betLevel
+    };
+    
+    if (validFrom) {
+      requestData.validFrom = validFrom;
+    }
+
+    const response = await axios.post(
+      seamlessConfig.api_url.production,
+      requestData
+    );
+
+    if (response.data.error !== 0) {
+      throw new Error(`Error adding free rounds: ${response.data.message || 'Unknown error'}`);
+    }
+
+    return {
+      success: true,
+      message: 'Free rounds added successfully',
+      data: response.data.response
+    };
+  } catch (error) {
+    console.error('Error in addFreeRounds:', error);
+    return {
+      success: false,
+      message: error.message || 'Failed to add free rounds'
+    };
+  }
+};
+
+/**
+ * Remove free rounds from players
+ * @param {string} freeRoundId - Free round ID to remove
+ * @param {string} playerIds - Comma-separated player IDs (optional)
+ * @returns {Promise<Object>} Response from API
+ */
+export const removeFreeRounds = async (freeRoundId, playerIds = '') => {
+  try {
+    const requestData = {
+      api_login: seamlessConfig.api_login,
+      api_password: seamlessConfig.api_password,
+      method: 'removeFreeRounds',
+      freeround_id: freeRoundId
+    };
+    
+    if (playerIds) {
+      requestData.playerids = playerIds;
+    }
+
+    const response = await axios.post(
+      seamlessConfig.api_url.production,
+      requestData
+    );
+
+    if (response.data.error !== 0) {
+      throw new Error(`Error removing free rounds: ${response.data.message || 'Unknown error'}`);
+    }
+
+    return {
+      success: true,
+      message: 'Free rounds removed successfully',
+      data: response.data.response
+    };
+  } catch (error) {
+    console.error('Error in removeFreeRounds:', error);
+    return {
+      success: false,
+      message: error.message || 'Failed to remove free rounds'
+    };
+  }
+};
+
+export default {
+  getGameList,
+  playerExists,
+  createPlayer,
+  getGameUrl,
+  processBalanceRequest,
+  processDebitRequest,
+  processCreditRequest,
+  processRollbackRequest,
+  closeGameSession,
+  cleanupExpiredSessions,
+  addFreeRounds,
+  removeFreeRounds
+};

@@ -11,6 +11,7 @@ import {
   removeFreeRoundsController
 } from '../controllers/seamlessController.js';
 import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
+import { validateSeamlessRequest } from '../middlewares/seamlessMiddleware.js';
 
 const router = express.Router();
 
@@ -22,10 +23,10 @@ router.get('/launch/:gameId', auth, requireEmailVerification, launchGameControll
 router.post('/freerounds/add', auth, requireEmailVerification, addFreeRoundsController);
 router.post('/freerounds/remove', auth, requireEmailVerification, removeFreeRoundsController);
 
-// Callback routes for game providers (no auth needed, validation done via signature)
-router.get('/callback/balance', balanceCallbackController);
-router.get('/callback/debit', debitCallbackController);
-router.get('/callback/credit', creditCallbackController);
-router.get('/callback/rollback', rollbackCallbackController);
+// Callback routes for game providers (validate signatures)
+router.get('/callback/balance', validateSeamlessRequest, balanceCallbackController);
+router.get('/callback/debit', validateSeamlessRequest, debitCallbackController);
+router.get('/callback/credit', validateSeamlessRequest, creditCallbackController);
+router.get('/callback/rollback', validateSeamlessRequest, rollbackCallbackController);
 
 export default router;
