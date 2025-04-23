@@ -3,6 +3,8 @@ import User from '../models/User.js';
 import { Op } from 'sequelize';
 import { generateToken, generateJWT } from '../utils/tokenUtils.js';
 import { sendEmail } from '../utils/emailService.js';
+import referralService from './referralService.js';
+
 
 // Function to generate a unique referral code
 const generateReferralCode = async () => {
@@ -75,6 +77,8 @@ export const createUser = async (userData, ipAddress) => {
             email_verification_token: verificationToken,
             email_verification_expiry: verificationExpiry
         });
+
+        await referralService.createReferralTree(newUser.user_id, referral_code);
 
         // Send verification email
         await sendEmail(email, 'verification', {

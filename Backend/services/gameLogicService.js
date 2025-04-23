@@ -5,6 +5,8 @@ import User from '../models/User.js';
 import BetRecordWingo from '../models/BetRecordWingo.js';
 import BetResultWingo from '../models/BetResultWingo.js';
 import { v4 as uuidv4 } from 'uuid';
+import referralService from './referralService.js';
+
 
 /**
  * Calculate optimized game result based on 60/40 algorithm
@@ -399,6 +401,8 @@ export const processBet = async (betData) => {
         transaction: t 
       }
     );
+
+    await referralService.recordBetExperience(userId, effectiveBetAmount);
     
     // Store bet in Redis for real-time analysis
     await storeBetInRedis(

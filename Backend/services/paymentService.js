@@ -6,6 +6,8 @@ import User from '../models/User.js';
 import WalletRecharge from '../models/WalletRecharge.js';
 import WalletWithdrawal from '../models/WalletWithdrawal.js';
 import BankAccount from '../models/BankAccount.js';
+import referralService from './referralService.js';
+
 
 /**
  * Creates a PayIn order (deposit)
@@ -349,13 +351,21 @@ export const processPayInCallback = async (callbackData) => {
         where: { user_id: rechargeRecord.user_id },
         transaction: t
       });
-      
+
+
+      if (status === "1" && rechargeRecord.payment_status === false) {
+        await referralService.processFirstRechargeBonus(rechargeRecord.user_id, parseFloat(pay_money || money));
+      }
+
       await t.commit();
       
       return {
         success: true,
         message: "Payment processed successfully"
       };
+
+  
+
     } else { // Payment failed
       await WalletRecharge.update({
         payment_status: false,

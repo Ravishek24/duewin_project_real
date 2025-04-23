@@ -67,6 +67,31 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         unique: true
     },
+
+    // Update to User.js model
+    // Add these fields to the User model
+
+    vip_exp: {
+        type: DataTypes.BIGINT,
+        allowNull: false,
+        defaultValue: 0
+    },
+    vip_level: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0
+    },
+    direct_referral_count: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0
+    },
+    referral_level: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        defaultValue: 'L0'
+    },
+
     current_ip: {
         type: DataTypes.STRING,
         validate: {
