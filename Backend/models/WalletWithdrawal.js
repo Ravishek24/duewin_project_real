@@ -54,6 +54,23 @@ const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
         type: DataTypes.STRING,
         allowNull: true
     },
+    // New fields for OTP verification
+    otp_verified: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false,
+        comment: 'Whether the withdrawal has been verified via OTP'
+    },
+    otp_session_id: {
+        type: DataTypes.STRING,
+        allowNull: true,
+        comment: 'OTP session ID for verification'
+    },
+    // New field for admin approval status
+    admin_status: {
+        type: DataTypes.ENUM('pending', 'approved', 'rejected'),
+        defaultValue: 'pending',
+        comment: 'Status of admin approval for this withdrawal'
+    },
     time_of_request: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW

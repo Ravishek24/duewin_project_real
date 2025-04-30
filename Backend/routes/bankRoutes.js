@@ -1,20 +1,25 @@
 import express from 'express';
 import { 
     getBankAccountsController, 
-    addBankAccountController, 
+    initBankAccountController, 
+    completeBankAccountController,
     updateBankAccountController, 
     deleteBankAccountController 
 } from '../controllers/bankAccountController.js';
-import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
+import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
-// All bank account routes require authentication and email verification
+// All bank account routes require authentication and phone verification
 router.use(auth);
-router.use(requireEmailVerification);
+router.use(requirePhoneVerification);
 
 router.get('/', getBankAccountsController);
-router.post('/', addBankAccountController);
+
+// Two-step bank account addition with OTP verification
+router.post('/init', initBankAccountController);
+router.post('/complete', completeBankAccountController);
+
 router.put('/:id', updateBankAccountController);
 router.delete('/:id', deleteBankAccountController);
 

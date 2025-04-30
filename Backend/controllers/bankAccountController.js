@@ -1,6 +1,7 @@
 import { 
     getBankAccounts, 
-    addBankAccount, 
+    initBankAccountAddition,
+    completeBankAccountAddition,
     updateBankAccount, 
     deleteBankAccount 
 } from '../services/bankAccountServices.js';
@@ -25,8 +26,8 @@ export const getBankAccountsController = async (req, res) => {
     }
 };
 
-// Controller to add a bank account
-export const addBankAccountController = async (req, res) => {
+// Controller to initialize bank account addition (sent OTP)
+export const initBankAccountController = async (req, res) => {
     const { 
         account_holder_name, 
         account_number, 
@@ -46,7 +47,7 @@ export const addBankAccountController = async (req, res) => {
 
     try {
         const userId = req.user.user_id;
-        const result = await addBankAccount(userId, {
+        const result = await initBankAccountAddition(userId, {
             account_holder_name,
             account_number,
             bank_name,
@@ -56,15 +57,44 @@ export const addBankAccountController = async (req, res) => {
         });
         
         if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('Error initializing bank account addition:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error during bank account addition initialization.' 
+        });
+    }
+};
+
+// Controller to complete bank account addition after OTP verification
+export const completeBankAccountController = async (req, res) => {
+    const { otp_session_id } = req.body;
+
+    if (!otp_session_id) {
+        return res.status(400).json({
+            success: false,
+            message: 'OTP session ID is required.'
+        });
+    }
+
+    try {
+        const userId = req.user.user_id;
+        const result = await completeBankAccountAddition(userId, otp_session_id);
+        
+        if (result.success) {
             return res.status(201).json(result);
         } else {
             return res.status(400).json(result);
         }
     } catch (error) {
-        console.error('Error adding bank account:', error);
+        console.error('Error completing bank account addition:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Server error adding bank account.' 
+            message: 'Server error completing bank account addition.' 
         });
     }
 };
@@ -128,7 +158,8 @@ export const deleteBankAccountController = async (req, res) => {
 
 export default {
     getBankAccountsController,
-    addBankAccountController,
+    initBankAccountController,
+    completeBankAccountController,
     updateBankAccountController,
     deleteBankAccountController
 };

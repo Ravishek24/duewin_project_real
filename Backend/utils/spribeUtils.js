@@ -1,6 +1,7 @@
 // utils/spriteUtils.js
 import crypto from 'crypto';
-import { spriteConfig } from '../config/spriteConfig.js';
+// utils/spribeUtils.js (renamed from spriteUtils.js)
+import { spribeConfig } from '../config/spribeConfig.js';  // Updated import
 
 /**
  * Generate a unique one-time token for game launch
@@ -29,9 +30,9 @@ export const generateGameLaunchUrl = (gameId, user, options = {}) => {
     game: gameId,
     user: user.user_id,
     token: token,
-    currency: options.currency || spriteConfig.defaultCurrency,
-    operator: spriteConfig.operatorKey,
-    lang: options.language || spriteConfig.defaultLanguage
+    currency: options.currency || spribeConfig.defaultCurrency,
+    operator: spribeConfig.operatorKey,
+    lang: options.language || spribeConfig.defaultLanguage
   };
   
   // Add optional parameters if provided
@@ -46,7 +47,7 @@ export const generateGameLaunchUrl = (gameId, user, options = {}) => {
     .join('&');
   
   // Return complete URL
-  return `${spriteConfig.launchUrl}/${gameId}?${queryString}`;
+  return `${spribeConfig.launchUrl}/${gameId}?${queryString}`;
 };
 
 /**
@@ -57,7 +58,7 @@ export const generateGameLaunchUrl = (gameId, user, options = {}) => {
  * @returns {string} The HMAC-SHA256 signature in hex format
  */
 export const generateSignature = (timestamp, path, body = '') => {
-  const hmac = crypto.createHmac('sha256', spriteConfig.clientSecret);
+  const hmac = crypto.createHmac('sha256', spribeConfig.clientSecret);
   
   // Add timestamp and path
   hmac.update(`${timestamp}${path}`);
@@ -86,7 +87,7 @@ export const generateSecurityHeaders = (path, body = '') => {
   const signature = generateSignature(timestamp, path, body);
   
   return {
-    'X-Spribe-Client-ID': spriteConfig.clientId,
+    'X-Spribe-Client-ID': spribeConfig.clientId,
     'X-Spribe-Client-TS': timestamp.toString(),
     'X-Spribe-Client-Signature': signature,
     'Content-Type': 'application/json; charset=utf-8'
@@ -104,13 +105,13 @@ export const generateSecurityHeaders = (path, body = '') => {
  */
 export const validateSignature = (clientId, timestamp, signature, path, body = '') => {
   // Check if client ID matches our expected ID
-  if (clientId !== spriteConfig.clientId) {
+  if (clientId !== spribeConfig.clientId) {
     return false;
   }
   
   // Check if timestamp is within valid range (prevent replay attacks)
   const currentTime = Math.floor(Date.now() / 1000);
-  if (currentTime - timestamp > spriteConfig.signatureExpirationTime) {
+  if (currentTime - timestamp > spribeConfig.signatureExpirationTime) {
     return false;
   }
   

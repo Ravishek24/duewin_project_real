@@ -8,7 +8,9 @@ import gameRoutes from './gameRoutes.js';
 import paymentRoutes from './paymentRoutes.js';
 import spriteRoutes from './spriteRoutes.js';
 import seamlessWalletRoutes from './seamlessWalletRoutes.js';
-import referralRoutes from './referralRoutes.js';  // Add this line
+import referralRoutes from './referralRoutes.js';
+import otpRoutes from './otpRoutes.js';
+import adminRoutes from './adminRoutes.js';  // Add this line
 
 const router = express.Router();
 
@@ -21,6 +23,8 @@ router.use('/games', gameRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/sprite', spriteRoutes);
 router.use('/seamless', seamlessWalletRoutes);
-router.use('/referrals', referralRoutes);  // Add this line
+router.use('/referrals', referralRoutes);
+router.use('/otp', otpRoutes);
+router.use('/admin', adminRoutes);  // Add this line
 
 export default router;

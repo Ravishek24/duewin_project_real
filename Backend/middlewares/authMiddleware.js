@@ -30,7 +30,7 @@ export const auth = async (req, res, next) => {
         
         // Check if user exists
         const user = await User.findByPk(decoded.id, {
-            attributes: ['user_id', 'email', 'is_email_verified']
+            attributes: ['user_id', 'email', 'is_phone_verified']
         });
         
         if (!user) {
@@ -67,15 +67,15 @@ export const auth = async (req, res, next) => {
     }
 };
 
-// Middleware to check if email is verified
-export const requireEmailVerification = (req, res, next) => {
-    if (!req.user.is_email_verified) {
+// Middleware to check if phone is verified
+export const requirePhoneVerification = (req, res, next) => {
+    if (!req.user.is_phone_verified) {
         return res.status(403).json({
             success: false,
-            message: 'Email verification required. Please verify your email before accessing this resource.'
+            message: 'Phone verification required. Please verify your phone number before accessing this resource.'
         });
     }
     next();
 };
 
-export default { auth, requireEmailVerification };
+export default { auth, requirePhoneVerification };

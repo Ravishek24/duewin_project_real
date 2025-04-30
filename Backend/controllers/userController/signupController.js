@@ -1,7 +1,7 @@
 import { createUser } from '../../services/userServices.js';
 
 export const signupController = async (req, res) => {
-    const { user_name, email, phone_no, password, referral_code } = req.body;
+    const { user_name, email, phone_no, password, referral_code, country_code } = req.body;
 
     // Validate required fields
     if (!user_name || !email || !phone_no || !password || !referral_code) {
@@ -41,9 +41,16 @@ export const signupController = async (req, res) => {
         // Get the client's IP address
         const ipAddress = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
         
-        // Create user
+        // Create user with OTP verification
         const result = await createUser(
-            { user_name, email, phone_no, password, referral_code },
+            { 
+                user_name, 
+                email, 
+                phone_no, 
+                password, 
+                referral_code,
+                country_code: country_code || '91' // Default to India if not provided
+            },
             ipAddress
         );
         

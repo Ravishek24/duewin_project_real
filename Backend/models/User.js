@@ -39,24 +39,12 @@ const User = sequelize.define('User', {
         allowNull: false,
         defaultValue: 0.00
     },
-    is_email_verified: {
+    is_phone_verified: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
     },
-    email_verification_token: {
+    phone_otp_session_id: {
         type: DataTypes.STRING,
-        allowNull: true
-    },
-    email_verification_expiry: {
-        type: DataTypes.DATE,
-        allowNull: true
-    },
-    password_reset_token: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    password_reset_expiry: {
-        type: DataTypes.DATE,
         allowNull: true
     },
     referral_code: {
@@ -67,10 +55,6 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         unique: true
     },
-
-    // Update to User.js model
-    // Add these fields to the User model
-
     vip_exp: {
         type: DataTypes.BIGINT,
         allowNull: false,
@@ -91,7 +75,6 @@ const User = sequelize.define('User', {
         allowNull: false,
         defaultValue: 'L0'
     },
-
     current_ip: {
         type: DataTypes.STRING,
         validate: {

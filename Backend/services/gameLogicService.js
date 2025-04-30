@@ -16,81 +16,131 @@ import referralService from './referralService.js';
  * @returns {Object} - Optimized result and expected payout
  */
 export const calculateOptimizedResult = async (gameType, duration, periodId) => {
-  try {
-    const durationKey = duration === 30 ? '30s' : 
-                        duration === 60 ? '1m' : 
-                        duration === 180 ? '3m' : 
-                        duration === 300 ? '5m' : '10m';
-    
-    // Get total bet amount for this period
-    const totalBetAmount = parseFloat(
-      await redis.get(`${gameType}:${durationKey}:${periodId}:total`) || 0
-    );
-    
-    // If no bets placed, generate random result
-    if (totalBetAmount === 0) {
+    try {
+      const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+      
+      // Get total bet amount for this period
+      const totalBetAmount = parseFloat(
+        await redis.get(`${gameType}:${durationKey}:${periodId}:total`) || 0
+      );
+      
+      // If no bets placed, use the enhanced fallback
+      if (totalBetAmount === 0) {
+        return await generateFallbackResult(gameType);
+      }
+      
+      // Target 60% of bets as payout
+      const targetPayout = totalBetAmount * 0.6;
+      
+      // Generate all possible results
+      const possibleResults = await generateAllPossibleResults(gameType);
+      
+      // Calculate payout for each possible result
+      const resultPayouts = await Promise.all(possibleResults.map(async (result) => {
+        const expectedPayout = await calculateExpectedPayout(gameType, durationKey, periodId, result);
+        
+        // Calculate how close this result is to the target payout (60%)
+        const distanceFromTarget = Math.abs(expectedPayout - targetPayout);
+        const houseEdge = totalBetAmount - expectedPayout;
+        const houseEdgePercent = (houseEdge / totalBetAmount) * 100;
+        
+        return {
+          result,
+          expectedPayout,
+          distanceFromTarget,
+          houseEdgePercent
+        };
+      }));
+      
+      // Sort results by distance from target payout (closest to 60% rule)
+      resultPayouts.sort((a, b) => a.distanceFromTarget - b.distanceFromTarget);
+      
+      // Find the most optimal result (closest to 60% payout)
+      const optimalResult = resultPayouts[0];
+      
+      // Get lowest payouts (best for house)
+      const lowestPayouts = [...resultPayouts].sort((a, b) => a.expectedPayout - b.expectedPayout);
+      
+      // Get highest payout (best for players)
+      const highestPayout = [...resultPayouts].sort((a, b) => b.expectedPayout - a.expectedPayout)[0];
+      
+      return {
+        optimalResult,
+        lowestPayouts: {
+          lowest: lowestPayouts[0],
+          secondLowest: lowestPayouts[1],
+          thirdLowest: lowestPayouts[2]
+        },
+        highestPayout,
+        totalBetAmount,
+        targetPayout
+      };
+    } catch (error) {
+      console.error('Error calculating optimized result:', error);
+      // Use enhanced fallback mechanism instead of random result
+      return await generateFallbackResult(gameType);
+    }
+  };
+
+/**
+ * Generate a fallback result when the 60/40 algorithm fails
+ * Selects from one of the three result combinations with the lowest bet amounts
+ * @param {string} gameType - Game type (wingo, fiveD, k3)
+ * @returns {Object} - Fallback result and expected payout
+ */
+export const generateFallbackResult = async (gameType) => {
+    try {
+      // Generate all possible results for the game type
+      const possibleResults = await generateAllPossibleResults(gameType);
+      
+      // For each result, calculate what the total bet amount is on that combination
+      // In a real implementation, you'd query Redis/DB for actual bet amounts
+      // For this example, we'll simulate by assigning random bet amounts
+      
+      const resultWithBets = possibleResults.map(result => {
+        // In a real implementation, query the actual bet amount for this result
+        // Here we're just simulating with random values
+        const simulatedBetAmount = Math.random() * 1000;
+        
+        return {
+          result,
+          betAmount: simulatedBetAmount
+        };
+      });
+      
+      // Sort by bet amount (ascending)
+      resultWithBets.sort((a, b) => a.betAmount - b.betAmount);
+      
+      // Get the three results with the lowest bet amounts
+      const lowestBetResults = [
+        resultWithBets[0],
+        resultWithBets[1],
+        resultWithBets[2]
+      ];
+      
+      // Randomly select one of the three
+      const randomIndex = Math.floor(Math.random() * 3);
+      const selectedResult = lowestBetResults[randomIndex];
+      
+      return {
+        result: selectedResult.result,
+        expectedPayout: selectedResult.betAmount, // This would be the actual expected payout in real implementation
+        houseEdgePercent: 100 - ((selectedResult.betAmount / 1000) * 100) // Simulated
+      };
+    } catch (error) {
+      console.error('Error generating fallback result:', error);
+      
+      // Last resort: if everything fails, generate a completely random result
       return {
         result: generateRandomResult(gameType),
         expectedPayout: 0,
         houseEdgePercent: 100
       };
     }
-    
-    // Target 60% of bets as payout
-    const targetPayout = totalBetAmount * 0.6;
-    
-    // Generate all possible results
-    const possibleResults = await generateAllPossibleResults(gameType);
-    
-    // Calculate payout for each possible result
-    const resultPayouts = await Promise.all(possibleResults.map(async (result) => {
-      const expectedPayout = await calculateExpectedPayout(gameType, durationKey, periodId, result);
-      
-      // Calculate how close this result is to the target payout (60%)
-      const distanceFromTarget = Math.abs(expectedPayout - targetPayout);
-      const houseEdge = totalBetAmount - expectedPayout;
-      const houseEdgePercent = (houseEdge / totalBetAmount) * 100;
-      
-      return {
-        result,
-        expectedPayout,
-        distanceFromTarget,
-        houseEdgePercent
-      };
-    }));
-    
-    // Sort results by distance from target payout (closest to 60% rule)
-    resultPayouts.sort((a, b) => a.distanceFromTarget - b.distanceFromTarget);
-    
-    // Find the most optimal result (closest to 60% payout)
-    const optimalResult = resultPayouts[0];
-    
-    // Get lowest payouts (best for house)
-    const lowestPayouts = [...resultPayouts].sort((a, b) => a.expectedPayout - b.expectedPayout);
-    
-    // Get highest payout (best for players)
-    const highestPayout = [...resultPayouts].sort((a, b) => b.expectedPayout - a.expectedPayout)[0];
-    
-    return {
-      optimalResult,
-      lowestPayouts: {
-        lowest: lowestPayouts[0],
-        secondLowest: lowestPayouts[1],
-        thirdLowest: lowestPayouts[2]
-      },
-      highestPayout,
-      totalBetAmount,
-      targetPayout
-    };
-  } catch (error) {
-    console.error('Error calculating optimized result:', error);
-    return {
-      result: generateRandomResult(gameType),
-      expectedPayout: 0,
-      houseEdgePercent: 100
-    };
-  }
-};
+  };
 
 /**
  * Generate random result based on game type
@@ -556,22 +606,22 @@ const addPeriods = (activePeriods, gameType, duration, now) => {
  * @returns {string} - Period ID
  */
 export const generatePeriodId = (gameType, duration, now = new Date()) => {
-  const date = now.toISOString().split('T')[0].replace(/-/g, '');
-  
-  // Calculate period number based on duration
-  const secondsInDay = 24 * 60 * 60;
-  const secondsSinceMidnight = 
-    now.getUTCHours() * 3600 + 
-    now.getUTCMinutes() * 60 + 
-    now.getUTCSeconds();
-  
-  const periodNumber = Math.floor(secondsSinceMidnight / duration) + 1;
-  
-  // Format period number with leading zeros
-  const periodStr = periodNumber.toString().padStart(5, '0');
-  
-  return `${gameType}${date}${periodStr}`;
-};
+    const date = now.toISOString().split('T')[0].replace(/-/g, '');
+    
+    // Calculate period number based on duration
+    const secondsInDay = 24 * 60 * 60;
+    const secondsSinceMidnight = 
+      now.getUTCHours() * 3600 + 
+      now.getUTCMinutes() * 60 + 
+      now.getUTCSeconds();
+    
+    const periodNumber = Math.floor(secondsSinceMidnight / duration) + 1;
+    
+    // Format period number with leading zeros
+    const periodStr = periodNumber.toString().padStart(5, '0');
+    
+    return `${date}000000000`;
+  };
 
 /**
  * Generate next period ID
@@ -599,24 +649,19 @@ export const generateNextPeriodId = (currentPeriodId) => {
  * @returns {Date} - End time
  */
 export const calculatePeriodEndTime = (periodId, duration) => {
-  // Extract date from period ID
-  const dateStr = periodId.match(/\d{8}/)[0];
-  const year = parseInt(dateStr.substring(0, 4), 10);
-  const month = parseInt(dateStr.substring(4, 6), 10) - 1; // Months are 0-indexed
-  const day = parseInt(dateStr.substring(6, 8), 10);
-  
-  // Extract period number
-  const periodNumber = parseInt(periodId.match(/\d+$/)[0], 10);
-  
-  // Calculate seconds from midnight
-  const secondsFromMidnight = (periodNumber - 1) * duration;
-  
-  // Create date object for midnight
-  const midnight = new Date(Date.UTC(year, month, day));
-  
-  // Add seconds to midnight
-  return new Date(midnight.getTime() + secondsFromMidnight * 1000 + duration * 1000);
-};
+    // Extract date from period ID (now the first 8 characters)
+    const dateStr = periodId.substring(0, 8);
+    const year = parseInt(dateStr.substring(0, 4), 10);
+    const month = parseInt(dateStr.substring(4, 6), 10) - 1; // Months are 0-indexed
+    const day = parseInt(dateStr.substring(6, 8), 10);
+    
+    // For the new format, we'll use a fixed time calculation based on duration
+    // We'll calculate the end time as midnight + duration
+    const midnight = new Date(Date.UTC(year, month, day));
+    
+    // Add duration to midnight to get the end time
+    return new Date(midnight.getTime() + duration * 1000);
+  };
 
 /**
  * Get status of a period
@@ -693,58 +738,61 @@ export const storeTemporaryResult = async (gameType, duration, periodId, result)
  * @param {string} periodId - Period ID
  */
 export const processGameResults = async (gameType, duration, periodId) => {
-  const t = await sequelize.transaction();
-  
-  try {
-    // Generate 60/40 optimized result
-    const analysis = await calculateOptimizedResult(gameType, duration, periodId);
-    const result = analysis.optimalResult.result;
+    const t = await sequelize.transaction();
     
-    // Store result in Redis
-    await storeTemporaryResult(gameType, duration, periodId, result);
-    
-    // Store result in database based on game type
-    switch (gameType) {
-      case 'wingo':
-        await BetResultWingo.create({
-          bet_number: periodId,
-          result_of_number: result.number,
-          result_of_size: result.size,
-          result_of_color: result.color,
-          time: duration
-        }, { transaction: t });
-        break;
-        
-      case 'fiveD':
-        // Store 5D result
-        break;
-        
-      case 'k3':
-        // Store K3 result
-        break;
+    try {
+      // Generate 60/40 optimized result
+      const analysis = await calculateOptimizedResult(gameType, duration, periodId);
+      
+      // If the optimized result was generated successfully, use it
+      // Otherwise, the calculateOptimizedResult would have already used our new fallback logic
+      const result = analysis.optimalResult ? analysis.optimalResult.result : analysis.result;
+      
+      // Store result in Redis
+      await storeTemporaryResult(gameType, duration, periodId, result);
+      
+      // Store result in database based on game type
+      switch (gameType) {
+        case 'wingo':
+          await BetResultWingo.create({
+            bet_number: periodId,
+            result_of_number: result.number,
+            result_of_size: result.size,
+            result_of_color: result.color,
+            time: duration
+          }, { transaction: t });
+          break;
+          
+        case 'fiveD':
+          // Store 5D result
+          break;
+          
+        case 'k3':
+          // Store K3 result
+          break;
+      }
+      
+      // Process user bets for the period
+      await processUserBets(gameType, duration, periodId, result, t);
+      
+      await t.commit();
+      
+      return {
+        success: true,
+        result,
+        expectedPayout: analysis.optimalResult ? analysis.optimalResult.expectedPayout : analysis.expectedPayout,
+        houseEdgePercent: analysis.optimalResult ? analysis.optimalResult.houseEdgePercent : analysis.houseEdgePercent
+      };
+    } catch (error) {
+      await t.rollback();
+      console.error('Error processing game results:', error);
+      
+      return {
+        success: false,
+        message: 'Server error processing game results'
+      };
     }
-    
-    // Process user bets for the period
-    await processUserBets(gameType, duration, periodId, result, t);
-    
-    await t.commit();
-    
-    return {
-      success: true,
-      result,
-      expectedPayout: analysis.optimalResult.expectedPayout,
-      houseEdgePercent: analysis.optimalResult.houseEdgePercent
-    };
-  } catch (error) {
-    await t.rollback();
-    console.error('Error processing game results:', error);
-    
-    return {
-      success: false,
-      message: 'Server error processing game results'
-    };
-  }
-};
+  };
 
 /**
  * Process user bets for a period

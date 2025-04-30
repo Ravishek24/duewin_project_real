@@ -8,7 +8,7 @@ import {
   withdrawCallbackController,
   depositCallbackController,
   rollbackCallbackController
-} from '../controllers/spriteController.js';
+} from '../controllers/spribeController.js';
 import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();

@@ -1,4 +1,4 @@
-// controllers/spriteController.js
+// controllers/spribeController.js
 import {
     getGameLaunchUrl,
     handleAuth,
@@ -7,8 +7,8 @@ import {
     handleDeposit,
     handleRollback,
     listGames
-  } from '../services/spriteService.js';
-  import { validateSignature } from '../utils/spriteUtils.js';
+  } from '../services/spribeService.js';
+  import { validateSignature } from '../utils/spribeUtils.js';
   
   /**
    * Get a list of available SPRIBE games

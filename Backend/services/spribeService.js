@@ -1,12 +1,12 @@
-// services/spriteService.js - Updated
+// services/spribeService.js - Updated
 import axios from 'axios';
-import { spriteConfig } from '../config/spriteConfig.js';
+import { spribeConfig } from '../config/spribeConfig.js';
 import { 
   generateGameLaunchUrl, 
   generateSecurityHeaders, 
   formatAmount, 
   parseAmount 
-} from '../utils/spriteUtils.js';
+} from '../utils/spribeUtils.js';
 import User from '../models/User.js';
 import { 
   createGameSession, 
@@ -28,7 +28,7 @@ import {
 export const getGameLaunchUrl = async (gameId, userId, req) => {
   try {
     // Validate game ID
-    if (!spriteConfig.providers[gameId]) {
+    if (!spribeConfig.providers[gameId]) {
       return {
         success: false,
         message: 'Invalid game ID'
@@ -55,7 +55,7 @@ export const getGameLaunchUrl = async (gameId, userId, req) => {
     await createGameSession(
       userId, 
       gameId, 
-      spriteConfig.providers[gameId], 
+      spribeConfig.providers[gameId], 
       token, 
       'INR', // Use user's preferred currency in production
       req.headers['x-forwarded-for'] || req.connection.remoteAddress
@@ -463,8 +463,8 @@ export const handleRollback = async (rollbackData) => {
  */
 export const listGames = async () => {
   try {
-    // Convert the spriteConfig.providers object to an array of game objects
-    const games = Object.entries(spriteConfig.providers).map(([id, provider]) => ({
+    // Convert the spribeConfig.providers object to an array of game objects
+    const games = Object.entries(spribeConfig.providers).map(([id, provider]) => ({
       id,
       provider,
       name: id
