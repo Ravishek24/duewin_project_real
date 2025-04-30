@@ -1,4 +1,5 @@
-// routes/index.js
+// routes/index.js - Add mxPayRoutes
+
 import express from 'express';
 import userRoutes from './userRoutes.js';
 import bankRoutes from './bankRoutes.js';
@@ -12,6 +13,7 @@ import seamlessWalletRoutes from './seamlessWalletRoutes.js';
 import referralRoutes from './referralRoutes.js';
 import otpRoutes from './otpRoutes.js';
 import adminRoutes from './adminRoutes.js';
+import mxPayRoutes from './mxPayRoutes.js'; // Add MxPay routes
 
 const router = express.Router();
 
@@ -28,5 +30,6 @@ router.use('/seamless', seamlessWalletRoutes);
 router.use('/referrals', referralRoutes);
 router.use('/otp', otpRoutes);
 router.use('/admin', adminRoutes);
+router.use('/payments/mxpay', mxPayRoutes); // Mount MxPay routes
 
 export default router;
