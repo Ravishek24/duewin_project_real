@@ -9,6 +9,7 @@ import BankAccount from '../models/BankAccount.js';
 import WithdrawalAdmin from '../models/WithdrawalAdmin.js';
 import referralService from './referralService.js';
 import otpService from './otpService.js';
+import { processWePayTransfer } from './wePayService.js';
 import { Op } from 'sequelize';
 
 /**
@@ -213,9 +214,10 @@ export const initiateWithdrawal = async (userId, bankAccountId, amount, withdraw
  * Verify OTP and create withdrawal request for admin approval
  * @param {number} userId - User ID
  * @param {string} otpSessionId - OTP session ID
+ * @param {string} gateway - Payment gateway to use (OKPAY or WEPAY)
  * @returns {Object} - Response with withdrawal details
  */
-export const verifyWithdrawalOtp = async (userId, otpSessionId) => {
+export const verifyWithdrawalOtp = async (userId, otpSessionId, gateway = 'OKPAY') => {
   const t = await sequelize.transaction();
   
   try {
@@ -292,8 +294,9 @@ export const verifyWithdrawalOtp = async (userId, otpSessionId) => {
       };
     }
     
-    // Create actual order ID
-    const orderId = `PO${Date.now()}${userId}`;
+    // Create actual order ID with gateway prefix
+    const gatewayPrefix = gateway === 'WEPAY' ? 'WP' : 'OP';
+    const orderId = `PO${gatewayPrefix}${Date.now()}${userId}`;
     
     // Create withdrawal record
     const withdrawal = await WalletWithdrawal.create({
@@ -301,7 +304,7 @@ export const verifyWithdrawalOtp = async (userId, otpSessionId) => {
       phone_no: user.phone_no,
       withdrawal_amount: amount,
       payment_status: false,
-      payment_gateway: 'OKPAY',
+      payment_gateway: gateway,
       withdrawal_type: withdrawalType,
       order_id: orderId,
       remark: 'Withdrawal initiated and verified by OTP. Awaiting admin approval.',
@@ -315,7 +318,7 @@ export const verifyWithdrawalOtp = async (userId, otpSessionId) => {
     await WithdrawalAdmin.create({
       withdrawal_id: withdrawal.withdrawal_id,
       status: 'pending',
-      notes: `Withdrawal request initiated by user and verified by OTP. Amount: ${amount} INR.`
+      notes: `Withdrawal request initiated by user and verified by OTP. Amount: ${amount} INR. Gateway: ${gateway}`
     }, { transaction: t });
     
     // Deduct amount from wallet
@@ -340,7 +343,8 @@ export const verifyWithdrawalOtp = async (userId, otpSessionId) => {
         id: withdrawal.withdrawal_id,
         amount,
         status: 'pending',
-        created_at: withdrawal.time_of_request
+        created_at: withdrawal.time_of_request,
+        gateway
       }
     };
   } catch (error) {
@@ -419,87 +423,35 @@ export const processWithdrawalAdminAction = async (adminId, withdrawalId, action
       updated_at: new Date()
     }, { transaction: t });
     
-    // Update withdrawal record
+    // Update withdrawal record based on admin action
     if (action === 'approve') {
-      // Process the approved withdrawal - call the payment gateway
-      // Get host for callback URL (this is just a placeholder - you'd implement this in the actual controller)
-      const notifyUrl = `${process.env.API_BASE_URL}/api/payments/payout-callback`;
+      // Determine which gateway to use
+      const gateway = withdrawal.payment_gateway;
       
-      // Get bank account details
-      const bankAccount = await BankAccount.findOne({
-        where: {
-          user_id: withdrawal.user_id,
-          is_primary: true
-        },
-        transaction: t
-      });
+      // Update withdrawal status to approved
+      await withdrawal.update({
+        admin_status: 'approved',
+        remark: `Admin approved. Processing via ${gateway}.`
+      }, { transaction: t });
       
-      if (!bankAccount) {
-        await t.rollback();
-        return {
-          success: false,
-          message: "Bank account not found for withdrawal"
-        };
+      await t.commit();
+      
+      // After committing the DB transaction, process the actual transfer
+      // based on the selected gateway
+      let transferResult;
+      
+      // Get host for callback URL
+      const notifyUrl = `${process.env.API_BASE_URL || 'http://localhost:8000'}/api/payments/${gateway.toLowerCase()}/payout-callback`;
+      
+      if (gateway === 'WEPAY') {
+        // Process via WePay
+        transferResult = await processWePayTransfer(withdrawalId, notifyUrl);
+      } else {
+        // Process via OKPAY (default)
+        transferResult = await processOkPayTransfer(withdrawalId, notifyUrl);
       }
       
-      // Prepare request data for payment gateway
-      const requestData = {
-        mchId: paymentConfig.mchId,
-        currency: "INR",
-        out_trade_no: withdrawal.order_id,
-        pay_type: withdrawal.withdrawal_type, // BANK or UPI
-        account: withdrawal.withdrawal_type === 'BANK' ? bankAccount.account_number : withdrawal.phone_no,
-        userName: bankAccount.account_holder_name,
-        money: parseInt(withdrawal.withdrawal_amount), // Must be integer
-        attach: `Withdrawal for user ${withdrawal.user_id}`,
-        notify_url: notifyUrl,
-        reserve1: withdrawal.withdrawal_type === 'BANK' ? bankAccount.ifsc_code : '' // IFSC for BANK type
-      };
-      
-      // Generate signature
-      requestData.sign = generateSignature(requestData);
-      
-      // Call the payment gateway API (or you can mock this for testing)
-      try {
-        const response = await axios.post(`${paymentConfig.host}/v1/Payout`, requestData, {
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        });
-        
-        // Check API response
-        if (response.data.code === 0) {
-          // Update withdrawal with transaction ID
-          await withdrawal.update({
-            transaction_id: response.data.data.transaction_Id,
-            admin_status: 'approved',
-            remark: `Admin approved. Payment processing initiated.`
-          }, { transaction: t });
-          
-          await t.commit();
-          
-          return {
-            success: true,
-            message: "Withdrawal approved and payment processing initiated",
-            transactionId: response.data.data.transaction_Id
-          };
-        } else {
-          // Payment gateway error
-          await t.rollback();
-          
-          return {
-            success: false,
-            message: `Payment gateway error: ${response.data.msg}`,
-            errorCode: response.data.code
-          };
-        }
-      } catch (apiError) {
-        await t.rollback();
-        console.error("Payment gateway API error:", apiError);
-        
-        return {
-          success: false,
-          message: "Error calling payment gateway"
-        };
-      }
+      return transferResult;
     } else {
       // Rejection - refund the user's wallet
       const user = await User.findByPk(withdrawal.user_id, {
@@ -545,6 +497,113 @@ export const processWithdrawalAdminAction = async (adminId, withdrawalId, action
     return {
       success: false,
       message: "Failed to process admin action"
+    };
+  }
+};
+
+/**
+ * Process a transfer via OKPAY after admin approval
+ * @param {number} withdrawalId - Withdrawal ID
+ * @param {string} notifyUrl - Notification URL for callbacks
+ * @returns {Object} - Processing result
+ */
+export const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
+  const t = await sequelize.transaction();
+  
+  try {
+    // Get withdrawal
+    const withdrawal = await WalletWithdrawal.findByPk(withdrawalId, {
+      transaction: t
+    });
+    
+    if (!withdrawal) {
+      await t.rollback();
+      return {
+        success: false,
+        message: "Withdrawal not found"
+      };
+    }
+    
+    // Check if withdrawal is already processed
+    if (withdrawal.payment_status === true || withdrawal.time_of_failed) {
+      await t.rollback();
+      return {
+        success: false,
+        message: "Withdrawal already processed"
+      };
+    }
+    
+    // Get bank account details
+    const bankAccount = await BankAccount.findOne({
+      where: {
+        user_id: withdrawal.user_id,
+        is_primary: true
+      },
+      transaction: t
+    });
+    
+    if (!bankAccount) {
+      await t.rollback();
+      return {
+        success: false,
+        message: "Bank account not found for withdrawal"
+      };
+    }
+    
+    // Prepare request data for payment gateway
+    const requestData = {
+      mchId: paymentConfig.mchId,
+      currency: "INR",
+      out_trade_no: withdrawal.order_id,
+      pay_type: withdrawal.withdrawal_type, // BANK or UPI
+      account: withdrawal.withdrawal_type === 'BANK' ? bankAccount.account_number : withdrawal.phone_no,
+      userName: bankAccount.account_holder_name,
+      money: parseInt(withdrawal.withdrawal_amount), // Must be integer
+      attach: `Withdrawal for user ${withdrawal.user_id}`,
+      notify_url: notifyUrl,
+      reserve1: withdrawal.withdrawal_type === 'BANK' ? bankAccount.ifsc_code : '' // IFSC for BANK type
+    };
+    
+    // Generate signature
+    requestData.sign = generateSignature(requestData);
+    
+    // Call the payment gateway API
+    const response = await axios.post(`${paymentConfig.host}/v1/Payout`, requestData, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    });
+    
+    // Check API response
+    if (response.data.code === 0) {
+      // Update withdrawal with transaction ID
+      await withdrawal.update({
+        transaction_id: response.data.data.transaction_Id,
+        remark: `Admin approved. Payment processing initiated.`
+      }, { transaction: t });
+      
+      await t.commit();
+      
+      return {
+        success: true,
+        message: "Withdrawal approved and payment processing initiated",
+        transactionId: response.data.data.transaction_Id
+      };
+    } else {
+      // Payment gateway error
+      await t.rollback();
+      
+      return {
+        success: false,
+        message: `Payment gateway error: ${response.data.msg}`,
+        errorCode: response.data.code
+      };
+    }
+  } catch (error) {
+    await t.rollback();
+    console.error("Payment gateway API error:", error);
+    
+    return {
+      success: false,
+      message: "Error calling payment gateway"
     };
   }
 };
@@ -855,7 +914,8 @@ export const getPaymentStatus = async (orderId) => {
         status: rechargeRecord.payment_status ? 'success' : 'pending',
         amount: rechargeRecord.added_amount,
         transactionId: rechargeRecord.transaction_id,
-        timestamp: rechargeRecord.time_of_success || rechargeRecord.created_at
+        timestamp: rechargeRecord.time_of_success || rechargeRecord.created_at,
+        gateway: rechargeRecord.payment_gateway
       };
     } else if (isPayOut) {
       // Check PayOut status
@@ -890,7 +950,8 @@ export const getPaymentStatus = async (orderId) => {
         amount: withdrawalRecord.withdrawal_amount,
         transactionId: withdrawalRecord.transaction_id,
         timestamp: withdrawalRecord.time_of_success || withdrawalRecord.time_of_failed || withdrawalRecord.time_of_request,
-        adminStatus: withdrawalRecord.admin_status
+        adminStatus: withdrawalRecord.admin_status,
+        gateway: withdrawalRecord.payment_gateway
       };
     } else {
       return {
@@ -913,8 +974,7 @@ export default {
   initiateWithdrawal,
   verifyWithdrawalOtp,
   processWithdrawalAdminAction,
-  getPendingWithdrawals,
-  getWithdrawalsAdmin,
+  processOkPayTransfer,
   processPayInCallback,
   processPayOutCallback,
   getPaymentStatus
