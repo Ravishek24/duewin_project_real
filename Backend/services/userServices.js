@@ -510,6 +510,143 @@ export const verifyPhoneUpdateOtp = async (userId, otpSessionId, newPhone) => {
     }
 };
 
+
+/**
+ * Request password reset via SMS (no email)
+ * @param {string} email - User's email to identify account
+ * @returns {Object} - Result of password reset request
+ */
+export const requestPasswordReset = async (email) => {
+    try {
+        // Find user by email
+        const user = await User.findOne({ where: { email } });
+        
+        if (!user) {
+            // Don't reveal if user exists for security reasons
+            return {
+                success: false,
+                message: "If your email is registered, you will receive password reset instructions."
+            };
+        }
+        
+        // Generate reset token
+        const resetToken = crypto.randomBytes(16).toString('hex');
+        const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+        
+        // Set token expiry (1 hour)
+        const resetTokenExpiry = new Date(Date.now() + 3600000);
+        
+        // Store hashed token in database
+        await User.update(
+            { 
+                reset_token: resetTokenHash,
+                reset_token_expiry: resetTokenExpiry 
+            },
+            { where: { user_id: user.user_id } }
+        );
+        
+        // In a real implementation, you would send an SMS with OTP
+        // For now, we'll just console log the reset token for testing
+        console.log('Reset token for user:', resetToken);
+        
+        return {
+            success: true,
+            message: "Password reset instructions sent.",
+            // We can include the token directly for development 
+            // Remove this in production!
+            token: resetToken
+        };
+    } catch (error) {
+        console.error('Error requesting password reset:', error);
+        return {
+            success: false,
+            message: "Failed to process password reset request."
+        };
+    }
+};
+
+/**
+ * Validate a reset token
+ * @param {string} token - Reset token
+ * @returns {Object} - Validation result
+ */
+export const validateResetToken = async (token) => {
+    try {
+        // Hash the provided token
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        
+        // Find user with matching token that hasn't expired
+        const user = await User.findOne({
+            where: {
+                reset_token: tokenHash,
+                reset_token_expiry: { [Op.gt]: new Date() }
+            }
+        });
+        
+        if (!user) {
+            return {
+                success: false,
+                message: "Invalid or expired token."
+            };
+        }
+        
+        return {
+            success: true,
+            message: "Token validated successfully.",
+            userId: user.user_id
+        };
+    } catch (error) {
+        console.error('Error validating reset token:', error);
+        return {
+            success: false,
+            message: "Failed to validate token."
+        };
+    }
+};
+
+/**
+ * Reset user password using token
+ * @param {string} token - Reset token
+ * @param {string} newPassword - New password
+ * @returns {Object} - Password reset result
+ */
+export const resetPassword = async (token, newPassword) => {
+    try {
+        // Validate token first
+        const validation = await validateResetToken(token);
+        
+        if (!validation.success) {
+            return validation; // Return validation error
+        }
+        
+        // Hash the new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        
+        // Update the user's password and clear reset token
+        await User.update(
+            {
+                password: hashedPassword,
+                reset_token: null,
+                reset_token_expiry: null
+            },
+            { where: { user_id: validation.userId } }
+        );
+        
+        return {
+            success: true,
+            message: "Password has been reset successfully."
+        };
+    } catch (error) {
+        console.error('Error resetting password:', error);
+        return {
+            success: false,
+            message: "Failed to reset password."
+        };
+    }
+};
+
+// Add these to your exports in userServices.js
+
 export default {
     createUser,
     loginUser,
@@ -517,5 +654,8 @@ export default {
     resendPhoneOtp,
     getUserProfile,
     updateUserProfile,
-    verifyPhoneUpdateOtp
+    verifyPhoneUpdateOtp,
+    requestPasswordReset,
+    validateResetToken,
+    resetPassword
 };

@@ -87,6 +87,19 @@ const User = sequelize.define('User', {
             isIP: true
         }
     },
+
+    // Add these fields to your User model in models/User.js
+    // Inside the User.define() call, add these to your fields object:
+
+    reset_token: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    reset_token_expiry: {
+        type: DataTypes.DATE,
+        allowNull: true
+    },
+
     created_at: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW

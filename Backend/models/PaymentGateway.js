@@ -1,5 +1,6 @@
-import { sequelize } from '../config/db.js';
+// models/PaymentGateway.js
 import { DataTypes } from 'sequelize';
+import { sequelize } from '../config/db.js';
 
 const PaymentGateway = sequelize.define('PaymentGateway', {
     gateway_id: {

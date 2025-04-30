@@ -10,18 +10,18 @@ import {
   addFreeRoundsController,
   removeFreeRoundsController
 } from '../controllers/seamlessController.js';
-import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
+import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
 import { validateSeamlessRequest } from '../middlewares/seamlessMiddleware.js';
 
 const router = express.Router();
 
 // Protected routes (require authentication)
 router.get('/games', auth, getGamesController);
-router.get('/launch/:gameId', auth, requireEmailVerification, launchGameController);
+router.get('/launch/:gameId', auth, requirePhoneVerification, launchGameController);
 
 // Admin-only routes
-router.post('/freerounds/add', auth, requireEmailVerification, addFreeRoundsController);
-router.post('/freerounds/remove', auth, requireEmailVerification, removeFreeRoundsController);
+router.post('/freerounds/add', auth, requirePhoneVerification, addFreeRoundsController);
+router.post('/freerounds/remove', auth, requirePhoneVerification, removeFreeRoundsController);
 
 // Callback routes for game providers (validate signatures)
 router.get('/callback/balance', validateSeamlessRequest, balanceCallbackController);

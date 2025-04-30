@@ -1,4 +1,4 @@
-import { verifyEmail, resendVerificationEmail } from '../../services/userServices.js';
+//import { verifyEmail, resendVerificationEmail } from '../../services/userServices.js';
 
 // Controller to verify email
 export const verifyEmailController = async (req, res) => {

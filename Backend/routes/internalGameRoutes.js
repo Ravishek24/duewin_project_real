@@ -1,6 +1,6 @@
 // Backend/routes/internalGameRoutes.js
 import express from 'express';
-import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
+import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
 import { isAdmin } from '../middlewares/adminMiddleware.js';
 import gameLogicService from '../services/gameLogicService.js';
 
@@ -72,7 +72,7 @@ router.get('/:gameType/history', auth, async (req, res) => {
 /**
  * Place a bet
  */
-router.post('/:gameType/bet', auth, requireEmailVerification, async (req, res) => {
+router.post('/:gameType/bet', auth, requirePhoneVerification, async (req, res) => {
   try {
     const { gameType } = req.params;
     const { 

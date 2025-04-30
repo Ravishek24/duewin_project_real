@@ -11,7 +11,7 @@ import {
     getDirectReferralAnalyticsController,
     getTeamReferralAnalyticsController
 } from '../controllers/referralController.js';
-import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
+import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 

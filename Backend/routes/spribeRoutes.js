@@ -9,13 +9,13 @@ import {
   depositCallbackController,
   rollbackCallbackController
 } from '../controllers/spribeController.js';
-import { auth, requireEmailVerification } from '../middlewares/authMiddleware.js';
+import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
 
 // Frontend routes (require authentication)
 router.get('/games', auth, getGamesController);
-router.get('/launch/:gameId', auth, requireEmailVerification, getLaunchUrlController);
+router.get('/launch/:gameId', auth, requirePhoneVerification, getLaunchUrlController);
 
 // SPRIBE callback routes (don't require auth - they use their own signature validation)
 router.post('/callback/auth', authCallbackController);

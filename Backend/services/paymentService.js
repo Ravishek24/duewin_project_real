@@ -969,6 +969,142 @@ export const getPaymentStatus = async (orderId) => {
   }
 };
 
+
+// Add these functions to your services/paymentService.js file
+
+
+
+/**
+ * Get pending withdrawals for admin approval
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - List of pending withdrawals with pagination
+ */
+export const getPendingWithdrawals = async (page = 1, limit = 10) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Get total count of pending withdrawals
+    const total = await WalletWithdrawal.count({
+      where: { admin_status: 'pending' }
+    });
+    
+    // Get pending withdrawals with pagination
+    const pendingWithdrawals = await WalletWithdrawal.findAll({
+      where: { admin_status: 'pending' },
+      include: [
+        {
+          model: User,
+          attributes: ['user_id', 'user_name', 'email', 'phone_no']
+        }
+      ],
+      order: [['time_of_request', 'DESC']],
+      limit,
+      offset
+    });
+    
+    return {
+      success: true,
+      withdrawals: pendingWithdrawals,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting pending withdrawals:', error);
+    return {
+      success: false,
+      message: 'Error fetching pending withdrawals'
+    };
+  }
+};
+
+/**
+ * Get withdrawals with admin filters
+ * @param {Object} filters - Filter criteria
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - List of filtered withdrawals with pagination
+ */
+export const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Build where clause based on filters
+    const whereClause = {};
+    
+    if (filters.admin_status) {
+      whereClause.admin_status = filters.admin_status;
+    }
+    
+    if (filters.user_id) {
+      whereClause.user_id = filters.user_id;
+    }
+    
+    // Date filters
+    if (filters.start_date && filters.end_date) {
+      whereClause.time_of_request = {
+        [Op.between]: [new Date(filters.start_date), new Date(filters.end_date)]
+      };
+    } else if (filters.start_date) {
+      whereClause.time_of_request = {
+        [Op.gte]: new Date(filters.start_date)
+      };
+    } else if (filters.end_date) {
+      whereClause.time_of_request = {
+        [Op.lte]: new Date(filters.end_date)
+      };
+    }
+    
+    // Get total count
+    const total = await WalletWithdrawal.count({ where: whereClause });
+    
+    // Get withdrawals with pagination
+    const withdrawals = await WalletWithdrawal.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          attributes: ['user_id', 'user_name', 'email', 'phone_no']
+        },
+        {
+          model: WithdrawalAdmin,
+          required: false
+        }
+      ],
+      order: [['time_of_request', 'DESC']],
+      limit,
+      offset
+    });
+    
+    return {
+      success: true,
+      withdrawals,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting admin withdrawals:', error);
+    return {
+      success: false,
+      message: 'Error fetching withdrawals'
+    };
+  }
+};
+
+// Make sure to export these new functions in your export block
+// Add this to your existing exports in paymentService.js
+
+
+// Update your export statement in paymentService.js to include the new functions
+
 export default {
   createPayInOrder,
   initiateWithdrawal,
@@ -977,5 +1113,7 @@ export default {
   processOkPayTransfer,
   processPayInCallback,
   processPayOutCallback,
-  getPaymentStatus
+  getPaymentStatus,
+  getPendingWithdrawals,
+  getWithdrawalsAdmin
 };
