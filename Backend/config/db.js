@@ -26,9 +26,7 @@ export const connectDB = async () => {
         await sequelize.authenticate();
         console.log('✅ Database connected successfully.');
         
-        // Don't sync models here - we'll do it after all models are loaded
         console.log('✅ Database configuration loaded.');
-        
         return true;
     } catch (error) {
         console.error('❌ Error connecting to the database:', error.message);
@@ -39,14 +37,15 @@ export const connectDB = async () => {
 // Function to sync all models after they are loaded
 export const syncModels = async () => {
     try {
-        await sequelize.sync();
-        console.log('✅ All models were synchronized successfully.');
-        
-        // Initialize any default data here if needed
+
+        // 👇 Import models before sync
+        await import('../models/index.js');
+        await sequelize.sync({ alter: true }); // IMPORTANT CHANGE
+        console.log('✅ All models synchronized successfully with database (altered).');
         
         return true;
     } catch (error) {
-        console.error('❌ Error syncing models:', error.message);
+        console.error('❌ Error syncing models with database:', error.message);
         process.exit(1);
     }
 };
