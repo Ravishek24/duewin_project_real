@@ -608,6 +608,8 @@ export const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
   }
 };
 
+// File: Backend/services/paymentService.js
+
 /**
  * Process PayIn callback from payment gateway
  * @param {Object} callbackData - Callback data from payment gateway
@@ -616,135 +618,144 @@ export const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
 export const processPayInCallback = async (callbackData) => {
   // Extract callback data
   const {
-    mchId,
-    out_trade_no,
-    transaction_Id,
-    status,
-    money,
-    pay_money,
-    sign,
-    ...otherParams
+      mchId,
+      out_trade_no,
+      transaction_Id,
+      status,
+      money,
+      pay_money,
+      sign,
+      ...otherParams
   } = callbackData;
   
   // 1. Verify merchant ID
   if (mchId !== paymentConfig.mchId) {
-    return {
-      success: false,
-      message: "Invalid merchant ID"
-    };
+      return {
+          success: false,
+          message: "Invalid merchant ID"
+      };
   }
   
-  // 2. Verify signature (remove sign from verification)
+  // 2. Verify signature
   const dataToVerify = { ...callbackData };
   delete dataToVerify.sign;
   
   const calculatedSign = generateSignature(dataToVerify);
   if (sign !== calculatedSign) {
-    return {
-      success: false,
-      message: "Invalid signature"
-    };
+      return {
+          success: false,
+          message: "Invalid signature"
+      };
   }
   
   // Start a transaction
   const t = await sequelize.transaction();
   
   try {
-    // 3. Find the recharge record
-    const rechargeRecord = await WalletRecharge.findOne({
-      where: { order_id: out_trade_no },
-      transaction: t
-    });
-    
-    if (!rechargeRecord) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "Order not found"
-      };
-    }
-    
-    // 4. Check if already processed
-    if (rechargeRecord.payment_status === true) {
-      await t.rollback();
-      return {
-        success: true,
-        message: "Payment already processed"
-      };
-    }
-    
-    // 5. Process payment based on status
-    if (status === "1") { // Payment successful
-      // Update recharge record
-      await WalletRecharge.update({
-        payment_status: true,
-        time_of_success: new Date(),
-        transaction_id: transaction_Id
-      }, {
-        where: { order_id: out_trade_no },
-        transaction: t
+      // 3. Find the recharge record
+      const rechargeRecord = await WalletRecharge.findOne({
+          where: { order_id: out_trade_no },
+          transaction: t
       });
       
-      // Get user
-      const user = await User.findByPk(rechargeRecord.user_id, {
-        transaction: t
-      });
-      
-      if (!user) {
-        await t.rollback();
-        return {
-          success: false,
-          message: "User not found"
-        };
+      if (!rechargeRecord) {
+          await t.rollback();
+          return {
+              success: false,
+              message: "Order not found"
+          };
       }
       
-      // Update wallet balance
-      // Use pay_money (actual amount paid) if available, otherwise use money (order amount)
-      const addAmount = parseFloat(pay_money || money);
-      const newBalance = parseFloat(user.wallet_balance) + addAmount;
-      
-      await User.update({
-        wallet_balance: newBalance
-      }, {
-        where: { user_id: rechargeRecord.user_id },
-        transaction: t
-      });
-
-
-      if (status === "1" && rechargeRecord.payment_status === false) {
-        await referralService.processFirstRechargeBonus(rechargeRecord.user_id, parseFloat(pay_money || money));
+      // 4. Check if already processed
+      if (rechargeRecord.payment_status === true) {
+          await t.rollback();
+          return {
+              success: true,
+              message: "Payment already processed"
+          };
       }
-
-      await t.commit();
       
-      return {
-        success: true,
-        message: "Payment processed successfully"
-      };
-    } else { // Payment failed
-      await WalletRecharge.update({
-        payment_status: false,
-        remark: `Payment failed with status: ${status}`
-      }, {
-        where: { order_id: out_trade_no },
-        transaction: t
-      });
-      
-      await t.commit();
-      
-      return {
-        success: true,
-        message: "Payment failure recorded"
-      };
-    }
+      // 5. Process payment based on status
+      if (status === "1") { // Payment successful
+          // Update recharge record
+          await WalletRecharge.update({
+              payment_status: true,
+              time_of_success: new Date(),
+              transaction_id: transaction_Id
+          }, {
+              where: { order_id: out_trade_no },
+              transaction: t
+          });
+          
+          // Get user
+          const user = await User.findByPk(rechargeRecord.user_id, {
+              transaction: t
+          });
+          
+          if (!user) {
+              await t.rollback();
+              return {
+                  success: false,
+                  message: "User not found"
+              };
+          }
+          
+          // Update wallet balance
+          // Use pay_money (actual amount paid) if available, otherwise use money (order amount)
+          const addAmount = parseFloat(pay_money || money);
+          const newBalance = parseFloat(user.wallet_balance) + addAmount;
+          
+          await User.update({
+              wallet_balance: newBalance
+          }, {
+              where: { user_id: rechargeRecord.user_id },
+              transaction: t
+          });
+          
+          // Process first recharge bonus if applicable
+          if (rechargeRecord.payment_status === false) {
+              await referralService.processFirstRechargeBonus(rechargeRecord.user_id, addAmount);
+          }
+          
+          await t.commit();
+          
+          // IMPORTANT: These additional operations are performed AFTER the transaction is committed
+          // to avoid prolonging the transaction and risking deadlocks
+          
+          // NEW: Update attendance record with recharge info
+          await processRechargeForAttendance(rechargeRecord.user_id, addAmount);
+          
+          // NEW: Update referral status for this user's referrer
+          await updateReferralOnRecharge(rechargeRecord.user_id, addAmount);
+          
+          return {
+              success: true,
+              message: "Payment processed successfully"
+          };
+      } else { // Payment failed
+          await WalletRecharge.update({
+              payment_status: false,
+              remark: `Payment failed with status: ${status}`
+          }, {
+              where: { order_id: out_trade_no },
+              transaction: t
+          });
+          
+          await t.commit();
+          
+          return {
+              success: true,
+              message: "Payment failure recorded"
+          };
+      }
   } catch (error) {
-    await t.rollback();
-    console.error("Error processing payment callback:", error);
-    
-    return {
-      success: false,
-      message: "Error processing payment callback"
-    };
+      await t.rollback();
+      console.error("Error processing payment callback:", error);
+      
+      return {
+          success: false,
+          message: "Error processing payment callback"
+      };
   }
 };
 

@@ -1,4 +1,5 @@
-// models/AttendanceRecord.js
+// File: Backend/models/AttendanceRecord.js
+
 import { sequelize } from '../config/db.js';
 import { DataTypes } from 'sequelize';
 import User from './User.js';
@@ -27,14 +28,41 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
         defaultValue: 1,
         comment: 'Current consecutive days streak'
     },
-    bonus_claimed: {
+    // New fields start here
+    has_recharged: {
         type: DataTypes.BOOLEAN,
         allowNull: false,
-        defaultValue: false
+        defaultValue: false,
+        comment: 'Whether user has recharged on this day'
+    },
+    recharge_amount: {
+        type: DataTypes.DECIMAL(15, 2),
+        allowNull: false,
+        defaultValue: 0.00,
+        comment: 'Amount recharged on this day'
+    },
+    additional_bonus: {
+        type: DataTypes.DECIMAL(15, 2),
+        allowNull: false, 
+        defaultValue: 0.00,
+        comment: 'Additional bonus based on recharge amount'
     },
     bonus_amount: {
         type: DataTypes.DECIMAL(15, 2),
-        allowNull: true
+        allowNull: true,
+        comment: 'Total bonus amount (streak + additional)'
+    },
+    bonus_claimed: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+        comment: 'Whether bonus has been claimed'
+    },
+    claim_eligible: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+        comment: 'Whether user is eligible to claim bonus'
     },
     created_at: {
         type: DataTypes.DATE,

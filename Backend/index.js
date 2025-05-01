@@ -8,6 +8,7 @@ import allRoutes from './routes/index.js';
 import internalGameRoutes from './routes/internalGameRoutes.js';
 import { initializeWebSocket } from './services/websocketService.js';
 import './config/redisConfig.js'; // Import to initialize Redis connection
+import './scripts/dailyReferralJobs.js';
 
 // Load environment variables early
 dotenv.config();
@@ -35,6 +36,10 @@ const startServer = async () => {
         
         // Import any services that need database initialization
         const paymentGatewayService = (await import('./services/paymentGatewayService.js')).default;
+        
+        const { updateValidReferrals } = await import('./scripts/updateReferralStatus.js');
+        await updateValidReferrals();
+        console.log('✅ Initial valid referral update complete');
         
         // Initialize default payment gateways if they don't exist
         try {

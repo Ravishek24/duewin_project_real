@@ -1,6 +1,6 @@
 // routes/referralRoutes.js
 import express from 'express';
-import { 
+import {
     getDirectReferralsController,
     getTeamReferralsController,
     getDirectReferralDepositsController,
@@ -11,6 +11,17 @@ import {
     getDirectReferralAnalyticsController,
     getTeamReferralAnalyticsController
 } from '../controllers/referralController.js';
+
+// Import the new functions
+import {
+    recordAttendance,
+    getUnclaimedAttendanceBonuses,
+    claimAttendanceBonus,
+    getInvitationBonusStatus,
+    claimInvitationBonus
+    // ...other imports
+} from '../services/referralService.js';
+
 import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
 
 const router = express.Router();
@@ -42,5 +53,66 @@ router.post('/attendance', recordAttendanceController);
 // Analytics
 router.get('/analytics/direct', getDirectReferralAnalyticsController);
 router.get('/analytics/team', getTeamReferralAnalyticsController);
+
+// Attendance bonus endpoints
+router.post('/attendance', auth, async (req, res) => {
+    const userId = req.user.user_id;
+    const result = await recordAttendance(userId);
+
+    if (result.success) {
+        return res.status(200).json(result);
+    } else {
+        return res.status(400).json(result);
+    }
+});
+
+router.get('/attendance/unclaimed', auth, async (req, res) => {
+    const userId = req.user.user_id;
+    const result = await getUnclaimedAttendanceBonuses(userId);
+
+    if (result.success) {
+        return res.status(200).json(result);
+    } else {
+        return res.status(400).json(result);
+    }
+});
+
+router.post('/attendance/claim', auth, async (req, res) => {
+    const userId = req.user.user_id;
+    const { attendanceDate } = req.body;
+
+    const result = await claimAttendanceBonus(userId, attendanceDate);
+
+    if (result.success) {
+        return res.status(200).json(result);
+    } else {
+        return res.status(400).json(result);
+    }
+});
+
+
+// Invitation bonus endpoints
+router.get('/invitation/status', auth, async (req, res) => {
+    const userId = req.user.user_id;
+    const result = await getInvitationBonusStatus(userId);
+    
+    if (result.success) {
+        return res.status(200).json(result);
+    } else {
+        return res.status(400).json(result);
+    }
+});
+
+router.post('/invitation/claim', auth, async (req, res) => {
+    const userId = req.user.user_id;
+    const result = await claimInvitationBonus(userId);
+    
+    if (result.success) {
+        return res.status(200).json(result);
+    } else {
+        return res.status(400).json(result);
+    }
+});
+
 
 export default router;

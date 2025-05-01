@@ -292,6 +292,8 @@ const processLotteryRebate = async () => {
       process.exit(1);
     }
    };
+
+   
    
    // Run the jobs
    runJobs();
