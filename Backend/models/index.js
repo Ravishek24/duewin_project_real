@@ -29,125 +29,144 @@ import BetResult5D from './BetResult5D.js';
 import BetRecordK3 from './BetRecordK3.js';
 import BetResultK3 from './BetResultK3.js';
 
-// Define model associations here (instead of in individual model files)
-// Examples:
-User.hasMany(BankAccount, { foreignKey: 'user_id' });
-BankAccount.belongsTo(User, { foreignKey: 'user_id' });
+// Function to set up all model associations
+const setupAssociations = () => {
+    // Basic user relationships
+    User.hasMany(BankAccount, { foreignKey: 'user_id' });
+    BankAccount.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(UsdtAccount, { foreignKey: 'user_id' });
-UsdtAccount.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(UsdtAccount, { foreignKey: 'user_id' });
+    UsdtAccount.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(WalletRecharge, { foreignKey: 'user_id' });
-WalletRecharge.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(WalletRecharge, { foreignKey: 'user_id' });
+    WalletRecharge.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(WalletWithdrawal, { foreignKey: 'user_id' });
-WalletWithdrawal.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(WalletWithdrawal, { foreignKey: 'user_id' });
+    WalletWithdrawal.belongsTo(User, { foreignKey: 'user_id' });
 
-// Referrals
-User.hasOne(ReferralTree, { foreignKey: 'user_id' });
-ReferralTree.belongsTo(User, { foreignKey: 'user_id' });
+    // Referrals
+    User.hasOne(ReferralTree, { foreignKey: 'user_id' });
+    ReferralTree.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(ReferralCommission, { foreignKey: 'user_id', as: 'EarnedCommissions' });
-ReferralCommission.belongsTo(User, { foreignKey: 'user_id', as: 'Earner' });
+    // Referral Commissions - using unique aliases
+    User.hasMany(ReferralCommission, { 
+        foreignKey: 'user_id', 
+        as: 'EarnedCommissions',
+        scope: { type: 'earned' }
+    });
+    ReferralCommission.belongsTo(User, { 
+        foreignKey: 'user_id', 
+        as: 'Earner'
+    });
 
-User.hasMany(ReferralCommission, { foreignKey: 'referred_user_id', as: 'GeneratedCommissions' });
-ReferralCommission.belongsTo(User, { foreignKey: 'referred_user_id', as: 'Generator' });
+    User.hasMany(ReferralCommission, { 
+        foreignKey: 'referred_user_id', 
+        as: 'GeneratedCommissions',
+        scope: { type: 'generated' }
+    });
+    ReferralCommission.belongsTo(User, { 
+        foreignKey: 'referred_user_id', 
+        as: 'Generator'
+    });
 
-// VIP and Rebate relationships
-User.hasOne(UserRebateLevel, { foreignKey: 'user_id' });
-UserRebateLevel.belongsTo(User, { foreignKey: 'user_id' });
+    // VIP and Rebate relationships
+    User.hasOne(UserRebateLevel, { foreignKey: 'user_id' });
+    UserRebateLevel.belongsTo(User, { foreignKey: 'user_id' });
 
-RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level' });
-UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level', targetKey: 'level' });
+    RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level' });
+    UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level', targetKey: 'level' });
 
-// Game relationships
-User.hasMany(GameSession, { foreignKey: 'user_id' });
-GameSession.belongsTo(User, { foreignKey: 'user_id' });
+    // Game relationships
+    User.hasMany(GameSession, { foreignKey: 'user_id' });
+    GameSession.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(GameTransaction, { foreignKey: 'user_id' });
-GameTransaction.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(GameTransaction, { foreignKey: 'user_id' });
+    GameTransaction.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(SeamlessGameSession, { foreignKey: 'user_id' });
-SeamlessGameSession.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(SeamlessGameSession, { foreignKey: 'user_id' });
+    SeamlessGameSession.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(SeamlessTransaction, { foreignKey: 'user_id' });
-SeamlessTransaction.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(SeamlessTransaction, { foreignKey: 'user_id' });
+    SeamlessTransaction.belongsTo(User, { foreignKey: 'user_id' });
 
-// Betting relationships
-User.hasMany(BetRecordWingo, { foreignKey: 'user_id' });
-BetRecordWingo.belongsTo(User, { foreignKey: 'user_id' });
+    // Betting relationships
+    User.hasMany(BetRecordWingo, { foreignKey: 'user_id' });
+    BetRecordWingo.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(BetRecord5D, { foreignKey: 'user_id' });
-BetRecord5D.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(BetRecord5D, { foreignKey: 'user_id' });
+    BetRecord5D.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasMany(BetRecordK3, { foreignKey: 'user_id' });
-BetRecordK3.belongsTo(User, { foreignKey: 'user_id' });
+    User.hasMany(BetRecordK3, { foreignKey: 'user_id' });
+    BetRecordK3.belongsTo(User, { foreignKey: 'user_id' });
+};
+
+// Set up associations
+setupAssociations();
 
 // Function to initialize all models
 const initializeModels = async () => {
-  // You could add any model initialization logic here
-  console.log('✅ All models initialized');
+    console.log('✅ All models initialized');
 };
 
 // Export all models and the initialization function
 export {
-  sequelize,
-  User,
-  BankAccount,
-  UsdtAccount,
-  WalletRecharge,
-  WalletWithdrawal,
-  WithdrawalAdmin,
-  ReferralTree,
-  ReferralCommission,
-  ValidReferral,
-  UserRebateLevel,
-  RebateLevel,
-  VipLevel,
-  AttendanceRecord,
-  GameSession,
-  GameTransaction,
-  SeamlessTransaction,
-  SeamlessGameSession,
-  PaymentGateway,
-  GameConfig,
-  GamePeriod,
-  BetRecordWingo,
-  BetResultWingo,
-  BetRecord5D,
-  BetResult5D,
-  BetRecordK3,
-  BetResultK3,
-  initializeModels
+    sequelize,
+    User,
+    BankAccount,
+    UsdtAccount,
+    WalletRecharge,
+    WalletWithdrawal,
+    WithdrawalAdmin,
+    ReferralTree,
+    ReferralCommission,
+    ValidReferral,
+    UserRebateLevel,
+    RebateLevel,
+    VipLevel,
+    AttendanceRecord,
+    GameSession,
+    GameTransaction,
+    SeamlessTransaction,
+    SeamlessGameSession,
+    PaymentGateway,
+    GameConfig,
+    GamePeriod,
+    BetRecordWingo,
+    BetResultWingo,
+    BetRecord5D,
+    BetResult5D,
+    BetRecordK3,
+    BetResultK3,
+    initializeModels
 };
 
 export default {
-  sequelize,
-  User,
-  BankAccount,
-  UsdtAccount,
-  WalletRecharge,
-  WalletWithdrawal,
-  WithdrawalAdmin,
-  ReferralTree,
-  ReferralCommission,
-  ValidReferral,
-  UserRebateLevel,
-  RebateLevel,
-  VipLevel,
-  AttendanceRecord,
-  GameSession,
-  GameTransaction,
-  SeamlessTransaction,
-  SeamlessGameSession,
-  PaymentGateway,
-  GameConfig,
-  GamePeriod,
-  BetRecordWingo,
-  BetResultWingo,
-  BetRecord5D,
-  BetResult5D,
-  BetRecordK3,
-  BetResultK3,
-  initializeModels
+    sequelize,
+    User,
+    BankAccount,
+    UsdtAccount,
+    WalletRecharge,
+    WalletWithdrawal,
+    WithdrawalAdmin,
+    ReferralTree,
+    ReferralCommission,
+    ValidReferral,
+    UserRebateLevel,
+    RebateLevel,
+    VipLevel,
+    AttendanceRecord,
+    GameSession,
+    GameTransaction,
+    SeamlessTransaction,
+    SeamlessGameSession,
+    PaymentGateway,
+    GameConfig,
+    GamePeriod,
+    BetRecordWingo,
+    BetResultWingo,
+    BetRecord5D,
+    BetResult5D,
+    BetRecordK3,
+    BetResultK3,
+    initializeModels
 };

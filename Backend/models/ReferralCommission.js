@@ -38,7 +38,7 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
         comment: 'Commission amount earned'
     },
     type: {
-        type: DataTypes.ENUM('bet', 'deposit', 'direct_bonus'),
+        type: DataTypes.ENUM('bet', 'deposit', 'direct_bonus', 'earned', 'generated'),
         allowNull: false,
         comment: 'Commission type'
     },
@@ -71,15 +71,11 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
         },
         {
             fields: ['created_at']
+        },
+        {
+            fields: ['type']
         }
     ]
 });
-
-// Establish relationships
-User.hasMany(ReferralCommission, { foreignKey: 'user_id', as: 'EarnedCommissions' });
-ReferralCommission.belongsTo(User, { foreignKey: 'user_id', as: 'Earner' });
-
-User.hasMany(ReferralCommission, { foreignKey: 'referred_user_id', as: 'GeneratedCommissions' });
-ReferralCommission.belongsTo(User, { foreignKey: 'referred_user_id', as: 'Generator' });
 
 export default ReferralCommission;

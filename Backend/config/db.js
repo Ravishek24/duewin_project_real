@@ -37,10 +37,14 @@ export const connectDB = async () => {
 // Function to sync all models after they are loaded
 export const syncModels = async () => {
     try {
-
-        // 👇 Import models before sync
-        await import('../models/index.js');
-        await sequelize.sync({ alter: true }); // IMPORTANT CHANGE
+        // Import models and initialize associations
+        const models = await import('../models/index.js');
+        
+        // Wait a bit to ensure all associations are properly set up
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Sync with alter option
+        await sequelize.sync({ alter: true });
         console.log('✅ All models synchronized successfully with database (altered).');
         
         return true;

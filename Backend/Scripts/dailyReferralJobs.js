@@ -8,7 +8,7 @@ import { updateInvitationTier } from '../services/referralService.js';
 /**
  * Update valid referral status for all users
  */
-const updateValidReferrals = async () => {
+export const updateValidReferrals = async () => {
     console.log('Starting valid referral status update...');
     
     try {
@@ -49,16 +49,20 @@ const updateValidReferrals = async () => {
         }
         
         console.log(`Updated valid referral count for ${updatedCount} users`);
+        return { success: true, updatedCount };
     } catch (error) {
         console.error('Error updating valid referrals:', error);
+        return { success: false, error };
     }
 };
 
-// Run the update
-updateValidReferrals().then(() => {
-    console.log('Valid referral update complete');
-    process.exit(0);
-}).catch(error => {
-    console.error('Error in referral update script:', error);
-    process.exit(1);
-});
+// Only run directly if this file is being executed directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+    updateValidReferrals().then(() => {
+        console.log('Valid referral update complete');
+        process.exit(0);
+    }).catch(error => {
+        console.error('Error in referral update script:', error);
+        process.exit(1);
+    });
+}
