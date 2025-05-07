@@ -3,12 +3,14 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import http from 'http';
-import { connectDB, syncModels } from './config/db.js';
+import { connectDB } from './config/db.js';
 import allRoutes from './routes/index.js';
 import internalGameRoutes from './routes/internalGameRoutes.js';
 import { initializeWebSocket } from './services/websocketService.js';
 import './config/redisConfig.js'; // Import to initialize Redis connection
 import { updateValidReferrals } from './scripts/dailyReferralJobs.js';
+import { initializeModels } from './models/index.js';
+import cron from 'node-cron';
 
 // Load environment variables early
 dotenv.config();
@@ -29,30 +31,32 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Define a startup function to ensure proper initialization order
-// This got updated to run the referral update directly
 const startServer = async () => {
     try {
         // Connect to the database first
         await connectDB();
+        console.log('✅ Database connected successfully');
+        
+        // Initialize models
+        try {
+            await initializeModels();
+            console.log('✅ Models initialized successfully');
+        } catch (error) {
+            console.error('❌ Error initializing models:', error);
+            // Don't exit on model initialization error
+        }
         
         // Import any services that need database initialization
         const paymentGatewayService = (await import('./services/paymentGatewayService.js')).default;
         
-        // Run the referral update directly
-        await updateValidReferrals();
-        console.log('✅ Initial valid referral update complete');
-        
         // Initialize default payment gateways if they don't exist
         try {
             await paymentGatewayService.initializeDefaultGateways();
-            console.log('✅ Payment gateways initialized.');
+            console.log('✅ Payment gateways initialized');
         } catch (error) {
             console.error('⚠️ Error initializing payment gateways:', error.message);
             // Don't exit on this error, it's not critical
         }
-        
-        // Sync all models after they've been loaded
-        await syncModels();
         
         // Set up routes
         app.get('/', (req, res) => {
@@ -82,12 +86,33 @@ const startServer = async () => {
         server.listen(PORT, "0.0.0.0", () => {
             console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
         });
+
+        // Schedule daily referral update job
+        cron.schedule('0 0 * * *', async () => {
+            console.log('Running daily referral update job...');
+            try {
+                await updateValidReferrals();
+                console.log('✅ Daily referral update job completed successfully');
+            } catch (error) {
+                console.error('❌ Error in daily referral update job:', error);
+            }
+        });
+
+        // Run initial referral update
+        try {
+            await updateValidReferrals();
+            console.log('✅ Initial referral update completed successfully');
+        } catch (error) {
+            console.error('❌ Error in initial referral update:', error);
+            // Don't exit on this error, it's not critical
+        }
+
     } catch (error) {
         console.error('❌ Failed to start server:', error);
         process.exit(1);
     }
 };
-// This got updated to run the referral update directly
+
 // Start the server
 startServer();
 

@@ -48,25 +48,23 @@ const setupAssociations = () => {
     User.hasOne(ReferralTree, { foreignKey: 'user_id' });
     ReferralTree.belongsTo(User, { foreignKey: 'user_id' });
 
-    // Referral Commissions - using unique aliases
+    // Referral Commissions - using unique aliases and scopes
     User.hasMany(ReferralCommission, { 
-        foreignKey: 'user_id', 
+        foreignKey: 'user_id',
         as: 'EarnedCommissions',
         scope: { type: 'earned' }
     });
-    ReferralCommission.belongsTo(User, { 
-        foreignKey: 'user_id', 
-        as: 'Earner'
-    });
 
     User.hasMany(ReferralCommission, { 
-        foreignKey: 'referred_user_id', 
+        foreignKey: 'referred_user_id',
         as: 'GeneratedCommissions',
         scope: { type: 'generated' }
     });
+
+    // Single belongsTo association for ReferralCommission
     ReferralCommission.belongsTo(User, { 
-        foreignKey: 'referred_user_id', 
-        as: 'Generator'
+        foreignKey: 'user_id',
+        as: 'Earner'
     });
 
     // VIP and Rebate relationships
@@ -105,7 +103,17 @@ setupAssociations();
 
 // Function to initialize all models
 const initializeModels = async () => {
-    console.log('✅ All models initialized');
+    try {
+        // Instead of sync, we'll just verify the connection
+        await sequelize.authenticate();
+        console.log('✅ Database connection established successfully');
+        
+        // Log that models are loaded
+        console.log('✅ All models loaded successfully');
+    } catch (error) {
+        console.error('❌ Error initializing models:', error);
+        throw error;
+    }
 };
 
 // Export all models and the initialization function
@@ -170,3 +178,5 @@ export default {
     BetResultK3,
     initializeModels
 };
+
+// Add this function to sync the models in Backend/index.js  222.222

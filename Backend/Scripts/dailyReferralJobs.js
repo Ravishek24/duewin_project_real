@@ -1,60 +1,112 @@
 // File: Backend/scripts/updateReferralStatus.js
 
 import { sequelize } from '../config/db.js';
-import User from '../models/User.js';
-import ValidReferral from '../models/ValidReferral.js';
-import { updateInvitationTier } from '../services/referralService.js';
+import { User, ReferralTree, ReferralCommission } from '../models/index.js';
+import { Op } from 'sequelize';
 
 /**
  * Update valid referral status for all users
  */
-export const updateValidReferrals = async () => {
-    console.log('Starting valid referral status update...');
-    
+export async function updateValidReferrals() {
     try {
-        // Connect to database
-        await sequelize.authenticate();
-        
-        // Get all users
+        console.log('Starting daily referral update job...');
+
+        // Get all users with referral trees
         const users = await User.findAll({
-            attributes: ['user_id']
+            include: [{
+                model: ReferralTree,
+                required: true
+            }]
         });
-        
-        console.log(`Processing ${users.length} users for referral status updates...`);
-        
-        let updatedCount = 0;
-        
-        // Process each user
+
+        console.log(`Found ${users.length} users with referral trees`);
+
         for (const user of users) {
-            // Count valid referrals
-            const validReferralsCount = await ValidReferral.count({
+            const referralTree = user.ReferralTree;
+            if (!referralTree) continue;
+
+            // Get all referred users up to 6 levels deep
+            const referredUsers = await User.findAll({
                 where: {
-                    referrer_id: user.user_id,
-                    is_valid: true
+                    user_id: {
+                        [Op.in]: [
+                            referralTree.level1,
+                            referralTree.level2,
+                            referralTree.level3,
+                            referralTree.level4,
+                            referralTree.level5,
+                            referralTree.level6
+                        ].filter(id => id !== null)
+                    }
                 }
             });
-            
-            // Update user if count doesn't match
-            if (validReferralsCount !== user.valid_referral_count) {
-                await User.update(
-                    { valid_referral_count: validReferralsCount },
-                    { where: { user_id: user.user_id } }
-                );
-                
-                // Check if this change makes them eligible for a new tier
-                await updateInvitationTier(user.user_id, validReferralsCount);
-                
-                updatedCount++;
+
+            console.log(`Processing referrals for user ${user.user_id} with ${referredUsers.length} referred users`);
+
+            // Process each referred user
+            for (const referredUser of referredUsers) {
+                const level = [
+                    referralTree.level1,
+                    referralTree.level2,
+                    referralTree.level3,
+                    referralTree.level4,
+                    referralTree.level5,
+                    referralTree.level6
+                ].indexOf(referredUser.user_id) + 1;
+
+                // Calculate commission based on level
+                const commissionRate = getCommissionRate(level);
+                const commissionAmount = calculateCommission(referredUser, commissionRate);
+
+                if (commissionAmount > 0) {
+                    // Create commission record with earned type
+                    await ReferralCommission.create({
+                        user_id: user.user_id,
+                        referred_user_id: referredUser.user_id,
+                        amount: commissionAmount,
+                        type: 'earned',
+                        status: 'pending'
+                    });
+
+                    // Create commission record with generated type
+                    await ReferralCommission.create({
+                        user_id: user.user_id,
+                        referred_user_id: referredUser.user_id,
+                        amount: commissionAmount,
+                        type: 'generated',
+                        status: 'pending'
+                    });
+                }
             }
         }
-        
-        console.log(`Updated valid referral count for ${updatedCount} users`);
-        return { success: true, updatedCount };
+
+        console.log('Daily referral update job completed successfully');
     } catch (error) {
-        console.error('Error updating valid referrals:', error);
-        return { success: false, error };
+        console.error('Error in daily referral update job:', error);
+        throw error;
     }
-};
+}
+
+function getCommissionRate(level) {
+    const rates = {
+        1: 0.10, // 10% for level 1
+        2: 0.05, // 5% for level 2
+        3: 0.03, // 3% for level 3
+        4: 0.02, // 2% for level 4
+        5: 0.01, // 1% for level 5
+        6: 0.005 // 0.5% for level 6
+    };
+    return rates[level] || 0;
+}
+
+function calculateCommission(referredUser, rate) {
+    // Get user's total bets for the day
+    const totalBets = referredUser.total_bets || 0;
+    return totalBets * rate;
+}
+
+// Export the function
+export default updateValidReferrals;
 
 // Only run directly if this file is being executed directly
 if (import.meta.url === `file://${process.argv[1]}`) {
