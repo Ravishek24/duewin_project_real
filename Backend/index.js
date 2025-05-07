@@ -9,6 +9,8 @@ import internalGameRoutes from './routes/internalGameRoutes.js';
 import { initializeWebSocket } from './services/websocketService.js';
 import './config/redisConfig.js'; // Import to initialize Redis connection
 import './scripts/dailyReferralJobs.js';
+import { updateValidReferrals } from './scripts/updateReferralStatus.js';
+
 
 // Load environment variables early
 dotenv.config();
