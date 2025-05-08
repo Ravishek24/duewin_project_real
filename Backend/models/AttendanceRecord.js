@@ -1,8 +1,8 @@
 // File: Backend/models/AttendanceRecord.js
 
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User');
 
 const AttendanceRecord = sequelize.define('AttendanceRecord', {
     id: {
@@ -83,4 +83,4 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
 User.hasMany(AttendanceRecord, { foreignKey: 'user_id' });
 AttendanceRecord.belongsTo(User, { foreignKey: 'user_id' });
 
-export default AttendanceRecord;
+module.exports = AttendanceRecord;

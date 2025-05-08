@@ -1,13 +1,13 @@
 // controllers/otpController.js
-import { verifyPhoneOtp, resendPhoneOtp, verifyPhoneUpdateOtp } from '../services/userServices.js';
-import otpService from '../services/otpService.js';
+const { verifyPhoneOtp, resendPhoneOtp, verifyPhoneUpdateOtp } = require('../services/userServices');
+const otpService = require('../services/otpService');
 
 /**
  * Controller to verify OTP after registration
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const verifyOtpController = async (req, res) => {
+const verifyOtpController = async (req, res) => {
     try {
         const { otp_session_id } = req.body;
         const userId = req.user.user_id;
@@ -40,7 +40,7 @@ export const verifyOtpController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const resendOtpController = async (req, res) => {
+const resendOtpController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const result = await resendPhoneOtp(userId);
@@ -64,7 +64,7 @@ export const resendOtpController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const verifyPhoneUpdateOtpController = async (req, res) => {
+const verifyPhoneUpdateOtpController = async (req, res) => {
     try {
         const { otp_session_id, new_phone } = req.body;
         const userId = req.user.user_id;
@@ -97,7 +97,7 @@ export const verifyPhoneUpdateOtpController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const otpWebhookController = async (req, res) => {
+const otpWebhookController = async (req, res) => {
     try {
         const webhookData = req.body;
         
@@ -125,7 +125,7 @@ export const otpWebhookController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const checkOtpStatusController = async (req, res) => {
+const checkOtpStatusController = async (req, res) => {
     try {
         const { otp_session_id } = req.params;
         
@@ -152,7 +152,7 @@ export const checkOtpStatusController = async (req, res) => {
     }
 };
 
-export default {
+module.exports = {
     verifyOtpController,
     resendOtpController,
     verifyPhoneUpdateOtpController,

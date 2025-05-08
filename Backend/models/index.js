@@ -1,33 +1,33 @@
 // Backend/models/index.js
-import { sequelize } from '../config/db.js';
+const { sequelize } = require('../config/db');
 
 // Import all models
-import User from './User.js';
-import BankAccount from './BankAccount.js';
-import UsdtAccount from './UsdtAccount.js';
-import WalletRecharge from './WalletRecharge.js';
-import WalletWithdrawal from './WalletWithdrawal.js';
-import WithdrawalAdmin from './WithdrawalAdmin.js';
-import ReferralTree from './ReferralTree.js';
-import ReferralCommission from './ReferralCommission.js';
-import ValidReferral from './ValidReferral.js';
-import UserRebateLevel from './UserRebateLevel.js';
-import RebateLevel from './RebateLevel.js';
-import VipLevel from './VipLevel.js';
-import AttendanceRecord from './AttendanceRecord.js';
-import GameSession from './GameSession.js';
-import GameTransaction from './GameTransaction.js';
-import SeamlessTransaction from './SeamlessTransaction.js';
-import SeamlessGameSession from './seamlessGameSession.js';
-import PaymentGateway from './PaymentGateway.js';
-import GameConfig from './GameConfig.js';
-import GamePeriod from './GamePeriod.js';
-import BetRecordWingo from './BetRecordWingo.js';
-import BetResultWingo from './BetResultWingo.js';
-import BetRecord5D from './BetRecord5D.js';
-import BetResult5D from './BetResult5D.js';
-import BetRecordK3 from './BetRecordK3.js';
-import BetResultK3 from './BetResultK3.js';
+const User = require('./User');
+const BankAccount = require('./BankAccount');
+const UsdtAccount = require('./UsdtAccount');
+const WalletRecharge = require('./WalletRecharge');
+const WalletWithdrawal = require('./WalletWithdrawal');
+const WithdrawalAdmin = require('./WithdrawalAdmin');
+const ReferralTree = require('./ReferralTree');
+const ReferralCommission = require('./ReferralCommission');
+const ValidReferral = require('./ValidReferral');
+const UserRebateLevel = require('./UserRebateLevel');
+const RebateLevel = require('./RebateLevel');
+const VipLevel = require('./VipLevel');
+const AttendanceRecord = require('./AttendanceRecord');
+const GameSession = require('./GameSession');
+const GameTransaction = require('./GameTransaction');
+const SeamlessTransaction = require('./SeamlessTransaction');
+const SeamlessGameSession = require('./seamlessGameSession');
+const PaymentGateway = require('./PaymentGateway');
+const GameConfig = require('./GameConfig');
+const GamePeriod = require('./GamePeriod');
+const BetRecordWingo = require('./BetRecordWingo');
+const BetResultWingo = require('./BetResultWingo');
+const BetRecord5D = require('./BetRecord5D');
+const BetResult5D = require('./BetResult5D');
+const BetRecordK3 = require('./BetRecordK3');
+const BetResultK3 = require('./BetResultK3');
 
 // Function to set up all model associations
 const setupAssociations = () => {
@@ -117,38 +117,7 @@ const initializeModels = async () => {
 };
 
 // Export all models and the initialization function
-export {
-    sequelize,
-    User,
-    BankAccount,
-    UsdtAccount,
-    WalletRecharge,
-    WalletWithdrawal,
-    WithdrawalAdmin,
-    ReferralTree,
-    ReferralCommission,
-    ValidReferral,
-    UserRebateLevel,
-    RebateLevel,
-    VipLevel,
-    AttendanceRecord,
-    GameSession,
-    GameTransaction,
-    SeamlessTransaction,
-    SeamlessGameSession,
-    PaymentGateway,
-    GameConfig,
-    GamePeriod,
-    BetRecordWingo,
-    BetResultWingo,
-    BetRecord5D,
-    BetResult5D,
-    BetRecordK3,
-    BetResultK3,
-    initializeModels
-};
-
-export default {
+module.exports = {
     sequelize,
     User,
     BankAccount,

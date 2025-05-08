@@ -1,19 +1,19 @@
 // routes/index.js - Add mxPayRoutes
 
-import express from 'express';
-import userRoutes from './userRoutes.js';
-import bankRoutes from './bankRoutes.js';
-import usdtRoutes from './usdtRoutes.js';
-import walletRoutes from './walletRoutes.js';
-import gameRoutes from './gameRoutes.js';
-import paymentRoutes from './paymentRoutes.js';
-import paymentGatewayRoutes from './paymentGatewayRoutes.js';
-import spribeRoutes from './spribeRoutes.js';
-import seamlessWalletRoutes from './seamlessWalletRoutes.js';
-import referralRoutes from './referralRoutes.js';
-import otpRoutes from './otpRoutes.js';
-import adminRoutes from './adminRoutes.js';
-import mxPayRoutes from './mxPayRoutes.js'; // Add MxPay routes
+const express = require('express');
+const userRoutes = require('./userRoutes');
+const bankRoutes = require('./bankRoutes');
+const usdtRoutes = require('./usdtRoutes');
+const walletRoutes = require('./walletRoutes');
+const gameRoutes = require('./gameRoutes');
+const paymentRoutes = require('./paymentRoutes');
+const paymentGatewayRoutes = require('./paymentGatewayRoutes');
+const spribeRoutes = require('./spribeRoutes');
+const seamlessWalletRoutes = require('./seamlessWalletRoutes');
+const referralRoutes = require('./referralRoutes');
+const otpRoutes = require('./otpRoutes');
+const adminRoutes = require('./adminRoutes');
+const mxPayRoutes = require('./mxPayRoutes'); // Add MxPay routes
 
 const router = express.Router();
 
@@ -32,4 +32,4 @@ router.use('/otp', otpRoutes);
 router.use('/admin', adminRoutes);
 router.use('/payments/mxpay', mxPayRoutes); // Mount MxPay routes
 
-export default router;
+module.exports = router;

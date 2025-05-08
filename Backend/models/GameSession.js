@@ -1,7 +1,7 @@
 // models/GameSession.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User');
 
 const GameSession = sequelize.define('GameSession', {
     session_id: {
@@ -95,4 +95,4 @@ const GameSession = sequelize.define('GameSession', {
 User.hasMany(GameSession, { foreignKey: 'user_id' });
 GameSession.belongsTo(User, { foreignKey: 'user_id' });
 
-export default GameSession;
+module.exports = GameSession;

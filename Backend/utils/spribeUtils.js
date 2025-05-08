@@ -1,13 +1,13 @@
 // utils/spriteUtils.js
-import crypto from 'crypto';
+const crypto = require('crypto');
 // utils/spribeUtils.js (renamed from spriteUtils.js)
-import { spribeConfig } from '../config/spribeConfig.js';  // Updated import
+const { spribeConfig } = require('../config/spribeConfig');
 
 /**
  * Generate a unique one-time token for game launch
  * @returns {string} Generated token
  */
-export const generateOneTimeToken = () => {
+const generateOneTimeToken = () => {
   return crypto.randomBytes(32).toString('hex');
 };
 
@@ -18,7 +18,7 @@ export const generateOneTimeToken = () => {
  * @param {Object} options - Additional options
  * @returns {string} Complete game launch URL
  */
-export const generateGameLaunchUrl = (gameId, user, options = {}) => {
+const generateGameLaunchUrl = (gameId, user, options = {}) => {
   // Generate a one-time token for this launch
   const token = generateOneTimeToken();
   
@@ -57,7 +57,7 @@ export const generateGameLaunchUrl = (gameId, user, options = {}) => {
  * @param {string|Object} body - Request body (can be JSON string or object)
  * @returns {string} The HMAC-SHA256 signature in hex format
  */
-export const generateSignature = (timestamp, path, body = '') => {
+const generateSignature = (timestamp, path, body = '') => {
   const hmac = crypto.createHmac('sha256', spribeConfig.clientSecret);
   
   // Add timestamp and path
@@ -82,7 +82,7 @@ export const generateSignature = (timestamp, path, body = '') => {
  * @param {string|Object} body - Request body
  * @returns {Object} Headers object with all required security headers
  */
-export const generateSecurityHeaders = (path, body = '') => {
+const generateSecurityHeaders = (path, body = '') => {
   const timestamp = Math.floor(Date.now() / 1000); // Current time in seconds
   const signature = generateSignature(timestamp, path, body);
   
@@ -103,7 +103,7 @@ export const generateSecurityHeaders = (path, body = '') => {
  * @param {Object|string} body - Request body
  * @returns {boolean} True if signature is valid, false otherwise
  */
-export const validateSignature = (clientId, timestamp, signature, path, body = '') => {
+const validateSignature = (clientId, timestamp, signature, path, body = '') => {
   // Check if client ID matches our expected ID
   if (clientId !== spribeConfig.clientId) {
     return false;
@@ -128,7 +128,7 @@ export const validateSignature = (clientId, timestamp, signature, path, body = '
  * @param {string} currency - Currency code
  * @returns {number} Amount in SPRIBE format (integer)
  */
-export const formatAmount = (amount, currency) => {
+const formatAmount = (amount, currency) => {
   // Crypto currencies use 8 decimal places (10^8)
   const cryptoCurrencies = ['BTC', 'ETH', 'USDT', 'XRP', 'LTC'];
   
@@ -144,7 +144,7 @@ export const formatAmount = (amount, currency) => {
  * @param {string} currency - Currency code
  * @returns {number} Amount in standard unit (e.g., 5.32 USD)
  */
-export const parseAmount = (amount, currency) => {
+const parseAmount = (amount, currency) => {
   // Crypto currencies use 8 decimal places (10^8)
   const cryptoCurrencies = ['BTC', 'ETH', 'USDT', 'XRP', 'LTC'];
   
@@ -154,7 +154,7 @@ export const parseAmount = (amount, currency) => {
   return parseFloat(amount) / divisor;
 };
 
-export default {
+module.exports = {
   generateOneTimeToken,
   generateGameLaunchUrl,
   generateSignature,

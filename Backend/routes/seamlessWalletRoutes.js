@@ -1,6 +1,6 @@
 // routes/seamlessWalletRoutes.js
-import express from 'express';
-import {
+const express = require('express');
+const {
   getGamesController,
   launchGameController,
   balanceCallbackController,
@@ -9,9 +9,9 @@ import {
   rollbackCallbackController,
   addFreeRoundsController,
   removeFreeRoundsController
-} from '../controllers/seamlessController.js';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
-import { validateSeamlessRequest } from '../middlewares/seamlessMiddleware.js';
+} = require('../controllers/seamlessController.js');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware.js');
+const { validateSeamlessRequest } = require('../middlewares/seamlessMiddleware.js');
 
 const router = express.Router();
 
@@ -29,4 +29,4 @@ router.get('/callback/debit', validateSeamlessRequest, debitCallbackController);
 router.get('/callback/credit', validateSeamlessRequest, creditCallbackController);
 router.get('/callback/rollback', validateSeamlessRequest, rollbackCallbackController);
 
-export default router;
+module.exports = router;

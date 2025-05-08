@@ -1,8 +1,8 @@
 // models/UserRebateLevel.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
-import RebateLevel from './RebateLevel.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User');
+const RebateLevel = require('./RebateLevel');
 
 const UserRebateLevel = sequelize.define('UserRebateLevel', {
     id: {
@@ -70,4 +70,4 @@ UserRebateLevel.belongsTo(User, { foreignKey: 'user_id' });
 RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level' });
 UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level', targetKey: 'level' });
 
-export default UserRebateLevel;
+module.exports = UserRebateLevel;

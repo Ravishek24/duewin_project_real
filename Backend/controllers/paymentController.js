@@ -1,26 +1,26 @@
-import {
+const {
   createPayInOrder,
   initiateWithdrawal,
   verifyWithdrawalOtp,
   processPayInCallback,
   processPayOutCallback,
   getPaymentStatus,
-} from '../services/paymentService.js';
+} = require('../services/paymentService');
 
-import {
+const {
   createWePayCollectionOrder,
   processWePayCollectionCallback,
   processWePayTransferCallback
-} from '../services/wePayService.js';
+} = require('../services/wePayService');
 
 // Controller to handle payment creation (adding money to wallet) with gateway selection
 // Updated section for paymentController.js to include MxPay
 
 // Import the new MxPay service
-import { createMxPayCollectionOrder } from '../services/mxPayService.js';
+const { createMxPayCollectionOrder } = require('../services/mxPayService');
 
 // Update the payInController to support MxPay
-export const payInController = async (req, res) => {
+const payInController = async (req, res) => {
   try {
     const { amount, pay_type = 'UPI', gateway = 'OKPAY' } = req.body;
     const userId = req.user.user_id;
@@ -86,7 +86,7 @@ export const payInController = async (req, res) => {
 };
 
 // Update the processWithdrawalAdminAction function to support MxPay
-export const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes = '') => {
+const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes = '') => {
   const t = await sequelize.transaction();
 
   try {
@@ -231,7 +231,7 @@ export const processWithdrawalAdminAction = async (adminId, withdrawalId, action
 };
 
 // Controller to initiate a withdrawal request with OTP verification
-export const initiateWithdrawalController = async (req, res) => {
+const initiateWithdrawalController = async (req, res) => {
   try {
     const { amount, bank_account_id, withdrawal_type = 'BANK', gateway = 'OKPAY' } = req.body;
     const userId = req.user.user_id;
@@ -250,16 +250,7 @@ export const initiateWithdrawalController = async (req, res) => {
       });
     }
 
-    // Store gateway choice in the OTP data for later use
-    const userData = {
-      bank_account_id,
-      amount,
-      withdrawal_type,
-      gateway
-    };
-
-    // Initiate withdrawal and send OTP
-    const result = await initiateWithdrawal(userId, bank_account_id, amount, withdrawal_type);
+    const result = await initiateWithdrawal(userId, bank_account_id, amount, withdrawal_type, gateway);
 
     if (result.success) {
       return res.status(200).json(result);
@@ -275,8 +266,7 @@ export const initiateWithdrawalController = async (req, res) => {
   }
 };
 
-// Controller to verify OTP and complete withdrawal submission for admin approval
-export const verifyWithdrawalOtpController = async (req, res) => {
+const verifyWithdrawalOtpController = async (req, res) => {
   try {
     const { otp_session_id, gateway = 'OKPAY' } = req.body;
     const userId = req.user.user_id;
@@ -288,8 +278,6 @@ export const verifyWithdrawalOtpController = async (req, res) => {
       });
     }
 
-    // Verify OTP and create withdrawal for admin approval
-    // The gateway will be stored in the withdrawal record for later processing
     const result = await verifyWithdrawalOtp(userId, otp_session_id, gateway);
 
     if (result.success) {
@@ -306,111 +294,75 @@ export const verifyWithdrawalOtpController = async (req, res) => {
   }
 };
 
-// Controller to handle OKPAY payment callbacks
-export const payInCallbackController = async (req, res) => {
+const payInCallbackController = async (req, res) => {
   try {
-    const callbackData = req.body;
-    const result = await processPayInCallback(callbackData);
-
-    if (result.success) {
-      // Return "success" (must be exactly this string for payment gateway)
-      return res.send('success');
-    } else {
-      // Still return success to stop further callbacks, but log error
-      console.error('Error processing payment callback:', result.message);
-      return res.send('success');
-    }
+    const result = await processPayInCallback(req.body);
+    return res.status(200).json(result);
   } catch (error) {
-    console.error('Payment callback error:', error);
-    return res.send('success'); // Still return success to prevent retries
-  }
-};
-
-// Controller to handle OKPAY payout callbacks
-export const payOutCallbackController = async (req, res) => {
-  try {
-    const callbackData = req.body;
-    const result = await processPayOutCallback(callbackData);
-
-    if (result.success) {
-      // Return "success" (must be exactly this string for payment gateway)
-      return res.send('success');
-    } else {
-      // Still return success to stop further callbacks, but log error
-      console.error('Error processing payout callback:', result.message);
-      return res.send('success');
-    }
-  } catch (error) {
-    console.error('Payout callback error:', error);
-    return res.send('success'); // Still return success to prevent retries
-  }
-};
-
-// Controller to handle WePay collection callbacks
-export const wePayCollectionCallbackController = async (req, res) => {
-  try {
-    const callbackData = req.body;
-    const result = await processWePayCollectionCallback(callbackData);
-
-    if (result.success) {
-      // Return "success" (must be exactly this string for payment gateway)
-      return res.send('success');
-    } else {
-      // Still return success to stop further callbacks, but log error
-      console.error('Error processing WePay collection callback:', result.message);
-      return res.send('success');
-    }
-  } catch (error) {
-    console.error('WePay collection callback error:', error);
-    return res.send('success'); // Still return success to prevent retries
-  }
-};
-
-// Controller to handle WePay transfer callbacks
-export const wePayTransferCallbackController = async (req, res) => {
-  try {
-    const callbackData = req.body;
-    const result = await processWePayTransferCallback(callbackData);
-
-    if (result.success) {
-      // Return "success" (must be exactly this string for payment gateway)
-      return res.send('success');
-    } else {
-      // Still return success to stop further callbacks, but log error
-      console.error('Error processing WePay transfer callback:', result.message);
-      return res.send('success');
-    }
-  } catch (error) {
-    console.error('WePay transfer callback error:', error);
-    return res.send('success'); // Still return success to prevent retries
-  }
-};
-
-// Controller to check payment status
-export const getPaymentStatusController = async (req, res) => {
-  try {
-    const { order_id } = req.params;
-
-    if (!order_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Order ID is required'
-      });
-    }
-
-    const result = await getPaymentStatus(order_id);
-    return res.status(result.success ? 200 : 400).json(result);
-  } catch (error) {
-    console.error('Error checking payment status:', error);
+    console.error('Error processing pay-in callback:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error checking payment status'
+      message: 'Server error processing pay-in callback'
     });
   }
 };
 
-export default {
+const payOutCallbackController = async (req, res) => {
+  try {
+    const result = await processPayOutCallback(req.body);
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('Error processing pay-out callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing pay-out callback'
+    });
+  }
+};
+
+const wePayCollectionCallbackController = async (req, res) => {
+  try {
+    const result = await processWePayCollectionCallback(req.body);
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('Error processing WePay collection callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing WePay collection callback'
+    });
+  }
+};
+
+const wePayTransferCallbackController = async (req, res) => {
+  try {
+    const result = await processWePayTransferCallback(req.body);
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('Error processing WePay transfer callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing WePay transfer callback'
+    });
+  }
+};
+
+const getPaymentStatusController = async (req, res) => {
+  try {
+    const { order_id } = req.params;
+    const result = await getPaymentStatus(order_id);
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('Error getting payment status:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error getting payment status'
+    });
+  }
+};
+
+module.exports = {
   payInController,
+  processWithdrawalAdminAction,
   initiateWithdrawalController,
   verifyWithdrawalOtpController,
   payInCallbackController,

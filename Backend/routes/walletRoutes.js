@@ -1,11 +1,11 @@
-import express from 'express';
-import { 
+const express = require('express');
+const { 
   getWalletBalanceController,
   getTransactionHistoryController,
   getRechargeHistoryController,
   getWithdrawalHistoryController
-} from '../controllers/walletController.js';
-import { auth } from '../middlewares/authMiddleware.js';
+} = require('../controllers/walletController.js');
+const { auth } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -18,4 +18,4 @@ router.get('/transactions', getTransactionHistoryController);
 router.get('/recharges', getRechargeHistoryController);
 router.get('/withdrawals', getWithdrawalHistoryController);
 
-export default router;
+module.exports = router;

@@ -1,9 +1,9 @@
 // services/gameTransactionService.js
-import { sequelize } from '../config/db.js';
-import GameTransaction from '../models/GameTransaction.js';
-import GameSession from '../models/GameSession.js';
-import User from '../models/User.js';
-import { v4 as uuidv4 } from 'uuid';
+const { sequelize } = require('../config/db');
+const GameTransaction = require('../models/GameTransaction');
+const GameSession = require('../models/GameSession');
+const User = require('../models/User');
+const { v4: uuidv4 } = require('uuid');
 
 /**
  * Create game session when user launches a game
@@ -15,7 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
  * @param {string} ipAddress - User's IP address
  * @returns {Object} Session information
  */
-export const createGameSession = async (userId, gameId, provider, token, currency, ipAddress) => {
+const createGameSession = async (userId, gameId, provider, token, currency, ipAddress) => {
   try {
     const session = await GameSession.create({
       user_id: userId,
@@ -48,7 +48,7 @@ export const createGameSession = async (userId, gameId, provider, token, currenc
  * @param {string} platform - Platform (mobile/desktop)
  * @returns {Object} Updated session
  */
-export const updateGameSession = async (launchToken, sessionToken, platform) => {
+const updateGameSession = async (launchToken, sessionToken, platform) => {
   try {
     const session = await GameSession.findOne({ 
       where: { launch_token: launchToken }
@@ -85,7 +85,7 @@ export const updateGameSession = async (launchToken, sessionToken, platform) => 
  * @param {string} sessionToken - Session token
  * @returns {Object} Result
  */
-export const endGameSession = async (sessionToken) => {
+const endGameSession = async (sessionToken) => {
   try {
     const session = await GameSession.findOne({ 
       where: { session_token: sessionToken }
@@ -123,7 +123,7 @@ export const endGameSession = async (sessionToken) => {
  * @param {Object} transaction - Database transaction instance
  * @returns {Object} Created transaction
  */
-export const createGameTransaction = async (transactionData, dbTransaction = null) => {
+const createGameTransaction = async (transactionData, dbTransaction = null) => {
   try {
     // Generate operator transaction ID
     const operatorTxId = uuidv4();
@@ -168,7 +168,7 @@ export const createGameTransaction = async (transactionData, dbTransaction = nul
  * @param {string} providerTxId - Provider transaction ID
  * @returns {Object} Transaction if found
  */
-export const findTransactionByProviderTxId = async (providerTxId) => {
+const findTransactionByProviderTxId = async (providerTxId) => {
   try {
     const transaction = await GameTransaction.findOne({
       where: { provider_tx_id: providerTxId }
@@ -201,7 +201,7 @@ export const findTransactionByProviderTxId = async (providerTxId) => {
  * @param {Object} transaction - Database transaction instance
  * @returns {Object} Result
  */
-export const updateTransactionStatus = async (transactionId, status, dbTransaction = null) => {
+const updateTransactionStatus = async (transactionId, status, dbTransaction = null) => {
   try {
     await GameTransaction.update(
       { 
@@ -232,7 +232,7 @@ export const updateTransactionStatus = async (transactionId, status, dbTransacti
  * @param {Object} data - Transaction data
  * @returns {Object} Result with transaction and balance info
  */
-export const processBetTransaction = async (data) => {
+const processBetTransaction = async (data) => {
   const t = await sequelize.transaction();
   
   try {
@@ -321,7 +321,7 @@ export const processBetTransaction = async (data) => {
  * @param {Object} data - Transaction data
  * @returns {Object} Result with transaction and balance info
  */
-export const processWinTransaction = async (data) => {
+const processWinTransaction = async (data) => {
   const t = await sequelize.transaction();
   
   try {
@@ -401,7 +401,7 @@ export const processWinTransaction = async (data) => {
  * @param {Object} data - Transaction data
  * @returns {Object} Result with transaction and balance info
  */
-export const processRollbackTransaction = async (data) => {
+const processRollbackTransaction = async (data) => {
   const t = await sequelize.transaction();
   
   try {
@@ -514,7 +514,7 @@ export const processRollbackTransaction = async (data) => {
   }
 };
 
-export default {
+module.exports = {
   createGameSession,
   updateGameSession,
   endGameSession,

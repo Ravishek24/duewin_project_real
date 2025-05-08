@@ -1,8 +1,8 @@
 // Backend/routes/internalGameRoutes.js
-import express from 'express';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
-import { isAdmin } from '../middlewares/adminMiddleware.js';
-import gameLogicService from '../services/gameLogicService.js';
+const express = require('express');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+const { isAdmin } = require('../middlewares/adminMiddleware');
+const gameLogicService = require('../services/gameLogicService');
 
 const router = express.Router();
 
@@ -267,4 +267,4 @@ router.post('/admin/:gameType/:duration/:periodId/override',
   }
 );
 
-export default router;
+module.exports = router;

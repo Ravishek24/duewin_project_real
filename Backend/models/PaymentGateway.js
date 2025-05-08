@@ -1,6 +1,6 @@
 // models/PaymentGateway.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const PaymentGateway = sequelize.define('PaymentGateway', {
     gateway_id: {
@@ -96,4 +96,4 @@ const PaymentGateway = sequelize.define('PaymentGateway', {
     ]
 });
 
-export default PaymentGateway;
+module.exports = PaymentGateway;

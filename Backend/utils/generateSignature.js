@@ -1,13 +1,13 @@
-import crypto from 'crypto';
-import qs from 'querystring';
-import { paymentConfig } from '../config/paymentConfig.js';
+const crypto = require('crypto');
+const qs = require('querystring');
+const { paymentConfig } = require('../config/paymentConfig');
 
 /**
  * Generate MD5 signature for API request
  * @param {Object} params - The request parameters
  * @returns {string} - The generated signature
  */
-export const generateSignature = (params) => {
+const generateSignature = (params) => {
   // Sort the parameters in lexicographic order
   const sortedParams = Object.keys(params)
     .filter((key) => params[key] !== "" && params[key] !== undefined) // Remove empty values

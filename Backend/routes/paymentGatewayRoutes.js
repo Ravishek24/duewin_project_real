@@ -1,15 +1,15 @@
 // routes/paymentGatewayRoutes.js
-import express from 'express';
-import {
+const express = require('express');
+const {
   getActiveGatewaysController,
   getGatewayByCodeController,
   createGatewayController,
   updateGatewayController,
   toggleGatewayStatusController,
   initializeDefaultGatewaysController
-} from '../controllers/paymentGatewayController.js';
-import { auth } from '../middlewares/authMiddleware.js';
-import { isAdmin } from '../middlewares/adminMiddleware.js';
+} = require('../controllers/paymentGatewayController');
+const { auth } = require('../middlewares/authMiddleware');
+const { isAdmin } = require('../middlewares/adminMiddleware');
 
 const router = express.Router();
 
@@ -23,4 +23,4 @@ router.put('/:id', auth, isAdmin, updateGatewayController);
 router.patch('/:id/toggle', auth, isAdmin, toggleGatewayStatusController);
 router.post('/initialize', auth, isAdmin, initializeDefaultGatewaysController);
 
-export default router;
+module.exports = router;

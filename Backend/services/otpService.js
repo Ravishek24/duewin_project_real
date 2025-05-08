@@ -1,6 +1,6 @@
 // services/otpService.js
-import axios from 'axios';
-import dotenv from 'dotenv';
+const axios = require('axios');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
@@ -17,7 +17,7 @@ const OTP_API_SECRET = process.env.REVERSE_OTP_SECRET;
  * @param {Object} userData - Optional additional user data (udf1, udf2, udf3)
  * @returns {Object} - API response with OTP session details
  */
-export const createOtpSession = async (mobileNo, countryCode, userName, userData = {}) => {
+const createOtpSession = async (mobileNo, countryCode, userName, userData = {}) => {
   try {
     const { udf1 = '', udf2 = '', udf3 = '' } = userData;
     
@@ -68,7 +68,7 @@ export const createOtpSession = async (mobileNo, countryCode, userName, userData
  * @param {number} otpSessionId - OTP session ID
  * @returns {Object} - Session status and details
  */
-export const checkOtpSession = async (otpSessionId) => {
+const checkOtpSession = async (otpSessionId) => {
   try {
     const requestData = {
       api_key: OTP_API_KEY,
@@ -110,7 +110,7 @@ export const checkOtpSession = async (otpSessionId) => {
   }
 };
 
-export default {
+module.exports = {
   createOtpSession,
   checkOtpSession
 };

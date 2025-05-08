@@ -1,6 +1,6 @@
-import { requestPasswordReset } from '../../services/userServices.js';
+const { requestPasswordReset } = require('../../services/userServices');
 
-export const forgotPasswordController = async (req, res) => {
+const forgotPasswordController = async (req, res) => {
     const { email } = req.body;
 
     // Validate email
@@ -30,4 +30,4 @@ export const forgotPasswordController = async (req, res) => {
     }
 };
 
-export default forgotPasswordController;
+module.exports = forgotPasswordController;

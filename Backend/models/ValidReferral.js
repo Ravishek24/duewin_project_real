@@ -1,8 +1,8 @@
 // File: Backend/models/ValidReferral.js
 
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User.js');
 
 const ValidReferral = sequelize.define('ValidReferral', {
     id: {
@@ -14,16 +14,16 @@ const ValidReferral = sequelize.define('ValidReferral', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         }
     },
     referred_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         }
     },
     total_recharge: {
@@ -37,19 +37,25 @@ const ValidReferral = sequelize.define('ValidReferral', {
     },
     created_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'valid_referrals',
-    timestamps: false,
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     indexes: [
-        { fields: ['referrer_id'] },
-        { fields: ['referred_id'] },
-        { unique: true, fields: ['referrer_id', 'referred_id'] }
+        {
+            unique: true,
+            fields: ['referrer_id', 'referred_id'],
+            name: 'valid_referrals_unique_pair'
+        }
     ]
 });
 
@@ -60,4 +66,4 @@ ValidReferral.belongsTo(User, { foreignKey: 'referrer_id', as: 'Referrer' });
 User.hasOne(ValidReferral, { foreignKey: 'referred_id', as: 'ReferredBy' });
 ValidReferral.belongsTo(User, { foreignKey: 'referred_id', as: 'Referred' });
 
-export default ValidReferral;
+module.exports = ValidReferral;

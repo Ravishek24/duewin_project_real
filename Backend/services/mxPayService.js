@@ -1,13 +1,13 @@
 // services/mxPayService.js
-import axios from 'axios';
-import { sequelize } from '../config/db.js';
-import { mxPayConfig } from '../config/mxPayConfig.js';
-import { generateMxPaySignature, verifyMxPaySignature } from '../utils/mxPaySignature.js';
-import User from '../models/User.js';
-import WalletRecharge from '../models/WalletRecharge.js';
-import WalletWithdrawal from '../models/WalletWithdrawal.js';
-import BankAccount from '../models/BankAccount.js';
-import { Op } from 'sequelize';
+const axios = require('axios');
+const { sequelize } = require('../config/db');
+const { mxPayConfig } = require('../config/mxPayConfig');
+const { generateMxPaySignature, verifyMxPaySignature } = require('../utils/mxPaySignature');
+const User = require('../models/User');
+const WalletRecharge = require('../models/WalletRecharge');
+const WalletWithdrawal = require('../models/WalletWithdrawal');
+const BankAccount = require('../models/BankAccount');
+const { Op } = require('sequelize');
 
 /**
  * Create a collection (deposit) order with MxPay
@@ -18,7 +18,7 @@ import { Op } from 'sequelize';
  * @param {string} returnUrl - Return URL after payment
  * @returns {Object} - Response with payment URL
  */
-export const createMxPayCollectionOrder = async (userId, orderId, amount, notifyUrl, returnUrl) => {
+const createMxPayCollectionOrder = async (userId, orderId, amount, notifyUrl, returnUrl) => {
   const t = await sequelize.transaction();
   
   try {
@@ -119,7 +119,7 @@ export const createMxPayCollectionOrder = async (userId, orderId, amount, notify
  * @param {Object} callbackData - Callback data from MxPay
  * @returns {Object} - Processing result
  */
-export const processMxPayCollectionCallback = async (callbackData) => {
+const processMxPayCollectionCallback = async (callbackData) => {
   // Verify signature
   if (!verifyMxPaySignature(callbackData, callbackData.sign, mxPayConfig.secretKey)) {
     console.error('Invalid signature in MxPay callback');
@@ -231,7 +231,7 @@ export const processMxPayCollectionCallback = async (callbackData) => {
  * @param {string} orderId - Order ID to check
  * @returns {Object} - Order status
  */
-export const checkMxPayCollectionStatus = async (orderId) => {
+const checkMxPayCollectionStatus = async (orderId) => {
   try {
     // Generate signature for the request
     const params = {
@@ -298,7 +298,7 @@ export const checkMxPayCollectionStatus = async (orderId) => {
  * @param {string} notifyUrl - Notification URL for callbacks
  * @returns {Object} - Processing result
  */
-export const processMxPayTransfer = async (withdrawalId, notifyUrl) => {
+const processMxPayTransfer = async (withdrawalId, notifyUrl) => {
   const t = await sequelize.transaction();
   
   try {
@@ -432,7 +432,7 @@ export const processMxPayTransfer = async (withdrawalId, notifyUrl) => {
  * @param {Object} callbackData - Callback data from MxPay
  * @returns {Object} - Processing result
  */
-export const processMxPayTransferCallback = async (callbackData) => {
+const processMxPayTransferCallback = async (callbackData) => {
   // Verify signature
   if (!verifyMxPaySignature(callbackData, callbackData.sign, mxPayConfig.secretKey)) {
     return {
@@ -558,7 +558,7 @@ export const processMxPayTransferCallback = async (callbackData) => {
  * Get available bank list for transfers
  * @returns {Object} - List of available banks
  */
-export const getMxPayBankList = async () => {
+const getMxPayBankList = async () => {
   try {
     // Generate signature for the request
     const params = {
@@ -604,7 +604,7 @@ export const getMxPayBankList = async () => {
  * Check merchant balance
  * @returns {Object} - Merchant balance information
  */
-export const checkMxPayMerchantBalance = async () => {
+const checkMxPayMerchantBalance = async () => {
   try {
     // Generate signature for the request
     const params = {
@@ -660,7 +660,7 @@ export const checkMxPayMerchantBalance = async () => {
   }
 };
 
-export default {
+module.exports = {
   createMxPayCollectionOrder,
   processMxPayCollectionCallback,
   checkMxPayCollectionStatus,

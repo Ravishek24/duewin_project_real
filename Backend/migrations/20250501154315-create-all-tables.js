@@ -466,9 +466,7 @@ module.exports = {
         references: {
           model: 'users',
           key: 'user_id'
-        },
-        onUpdate: 'CASCADE',
-        onDelete: 'CASCADE'
+        }
       },
       referred_id: {
         type: Sequelize.INTEGER,
@@ -476,9 +474,7 @@ module.exports = {
         references: {
           model: 'users',
           key: 'user_id'
-        },
-        onUpdate: 'CASCADE',
-        onDelete: 'CASCADE'
+        }
       },
       total_recharge: {
         type: Sequelize.DECIMAL(15, 2),
@@ -498,8 +494,9 @@ module.exports = {
       }
     });
 
-    // Add unique index to valid_referrals
+    // Add the unique index with the correct name
     await queryInterface.addIndex('valid_referrals', ['referrer_id', 'referred_id'], {
+      name: 'valid_referrals_unique_pair',
       unique: true
     });
 
@@ -1711,32 +1708,40 @@ module.exports = {
   },
 
   async down(queryInterface, Sequelize) {
-    // Drop tables in reverse order (respecting foreign key constraints)
-    await queryInterface.dropTable('bet_result_k3');
-    await queryInterface.dropTable('bet_record_k3');
-    await queryInterface.dropTable('bet_result_5d');
-    await queryInterface.dropTable('bet_record_5d');
-    await queryInterface.dropTable('bet_result_wingo');
-    await queryInterface.dropTable('bet_record_wingo');
-    await queryInterface.dropTable('game_periods');
-    await queryInterface.dropTable('game_configs');
-    await queryInterface.dropTable('game_transactions');
-    await queryInterface.dropTable('game_sessions');
-    await queryInterface.dropTable('seamless_transactions');
-    await queryInterface.dropTable('seamless_game_sessions');
-    await queryInterface.dropTable('payment_gateways');
-    await queryInterface.dropTable('attendance_records');
-    await queryInterface.dropTable('referral_commissions');
-    await queryInterface.dropTable('vip_levels');
-    await queryInterface.dropTable('user_rebate_levels');
-    await queryInterface.dropTable('rebate_levels');
-    await queryInterface.dropTable('valid_referrals');
-    await queryInterface.dropTable('referral_trees');
-    await queryInterface.dropTable('withdrawal_admin');
-    await queryInterface.dropTable('wallet_withdrawals');
-    await queryInterface.dropTable('wallet_recharges');
-    await queryInterface.dropTable('usdt_accounts');
-    await queryInterface.dropTable('bank_accounts');
-    await queryInterface.dropTable('users');
+    // First, disable foreign key checks
+    await queryInterface.sequelize.query('SET FOREIGN_KEY_CHECKS = 0;');
+
+    try {
+      // Drop all tables in any order since foreign key checks are disabled
+      await queryInterface.dropTable('bet_record_k3');
+      await queryInterface.dropTable('bet_record_5d');
+      await queryInterface.dropTable('bet_record_wingo');
+      await queryInterface.dropTable('bet_result_k3');
+      await queryInterface.dropTable('bet_result_5d');
+      await queryInterface.dropTable('bet_result_wingo');
+      await queryInterface.dropTable('game_transactions');
+      await queryInterface.dropTable('game_sessions');
+      await queryInterface.dropTable('seamless_transactions');
+      await queryInterface.dropTable('seamless_game_sessions');
+      await queryInterface.dropTable('wallet_withdrawals');
+      await queryInterface.dropTable('wallet_recharges');
+      await queryInterface.dropTable('user_rebate_levels');
+      await queryInterface.dropTable('withdrawal_admin');
+      await queryInterface.dropTable('referral_commissions');
+      await queryInterface.dropTable('valid_referrals');
+      await queryInterface.dropTable('attendance_records');
+      await queryInterface.dropTable('usdt_accounts');
+      await queryInterface.dropTable('bank_accounts');
+      await queryInterface.dropTable('game_periods');
+      await queryInterface.dropTable('game_configs');
+      await queryInterface.dropTable('payment_gateways');
+      await queryInterface.dropTable('rebate_levels');
+      await queryInterface.dropTable('vip_levels');
+      await queryInterface.dropTable('referral_trees');
+      await queryInterface.dropTable('users');
+    } finally {
+      // Re-enable foreign key checks
+      await queryInterface.sequelize.query('SET FOREIGN_KEY_CHECKS = 1;');
+    }
   }
 };

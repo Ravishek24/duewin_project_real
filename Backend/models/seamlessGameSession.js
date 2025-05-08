@@ -1,7 +1,7 @@
 // models/SeamlessGameSession.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User');
 
 const SeamlessGameSession = sequelize.define('SeamlessGameSession', {
   session_id: {
@@ -77,4 +77,4 @@ const SeamlessGameSession = sequelize.define('SeamlessGameSession', {
 User.hasMany(SeamlessGameSession, { foreignKey: 'user_id' });
 SeamlessGameSession.belongsTo(User, { foreignKey: 'user_id' });
 
-export default SeamlessGameSession;
+module.exports = SeamlessGameSession;

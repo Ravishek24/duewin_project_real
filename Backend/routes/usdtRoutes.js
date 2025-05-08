@@ -1,11 +1,11 @@
-import express from 'express';
-import { 
+const express = require('express');
+const { 
     getUsdtAccounts, 
     addUsdtAccount, 
     updateUsdtAccount, 
     deleteUsdtAccount 
-} from '../controllers/usdtAccountController.js';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js'; // Fix this import
+} = require('../controllers/usdtAccountController');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -18,4 +18,4 @@ router.post('/', addUsdtAccount);
 router.put('/:id', updateUsdtAccount);
 router.delete('/:id', deleteUsdtAccount);
 
-export default router;
+module.exports = router;

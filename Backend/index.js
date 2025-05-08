@@ -1,16 +1,16 @@
 // Backend/index.js
-import express from 'express';
-import dotenv from 'dotenv';
-import cors from 'cors';
-import http from 'http';
-import { connectDB } from './config/db.js';
-import allRoutes from './routes/index.js';
-import internalGameRoutes from './routes/internalGameRoutes.js';
-import { initializeWebSocket } from './services/websocketService.js';
-import './config/redisConfig.js'; // Import to initialize Redis connection
-import { updateValidReferrals } from './scripts/dailyReferralJobs.js';
-import { initializeModels } from './models/index.js';
-import cron from 'node-cron';
+const express = require('express');
+const dotenv = require('dotenv');
+const cors = require('cors');
+const http = require('http');
+const { connectDB } = require('./config/db');
+const allRoutes = require('./routes/index');
+const internalGameRoutes = require('./routes/internalGameRoutes');
+const { initializeWebSocket } = require('./services/websocketService');
+require('./config/redisConfig'); // Import to initialize Redis connection
+const { updateValidReferrals } = require('./scripts/dailyReferralJobs');
+const { initializeModels } = require('./models/index');
+const cron = require('node-cron');
 
 // Load environment variables early
 dotenv.config();
@@ -47,7 +47,7 @@ const startServer = async () => {
         }
         
         // Import any services that need database initialization
-        const paymentGatewayService = (await import('./services/paymentGatewayService.js')).default;
+        const paymentGatewayService = require('./services/paymentGatewayService');
         
         // Initialize default payment gateways if they don't exist
         try {
@@ -116,4 +116,4 @@ const startServer = async () => {
 // Start the server
 startServer();
 
-export default app;
+module.exports = app;

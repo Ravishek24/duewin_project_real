@@ -1,7 +1,7 @@
-import { getUserProfile, updateUserProfile } from '../../services/userServices.js';
+const { getUserProfile, updateUserProfile } = require('../../services/userServices');
 
 // Controller to get user profile
-export const getProfileController = async (req, res) => {
+const getProfileController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const result = await getUserProfile(userId);
@@ -21,7 +21,7 @@ export const getProfileController = async (req, res) => {
 };
 
 // Controller to update user profile
-export const updateProfileController = async (req, res) => {
+const updateProfileController = async (req, res) => {
     const { user_name, phone_no } = req.body;
     const userId = req.user.user_id;
 
@@ -42,7 +42,7 @@ export const updateProfileController = async (req, res) => {
     }
 };
 
-export default {
+module.exports = {
     getProfileController,
     updateProfileController
 };

@@ -1,7 +1,7 @@
-import { validateResetToken, resetPassword } from '../../services/userServices.js';
+const { validateResetToken, resetPassword } = require('../../services/userServices');
 
 // Controller to validate reset token
-export const validateTokenController = async (req, res) => {
+const validateTokenController = async (req, res) => {
     const { token } = req.params;
 
     if (!token) {
@@ -29,7 +29,7 @@ export const validateTokenController = async (req, res) => {
 };
 
 // Controller to reset password
-export const resetPasswordController = async (req, res) => {
+const resetPasswordController = async (req, res) => {
     const { token, password } = req.body;
 
     // Validate input
@@ -65,7 +65,7 @@ export const resetPasswordController = async (req, res) => {
     }
 };
 
-export default {
+module.exports = {
     validateTokenController,
     resetPasswordController
 };

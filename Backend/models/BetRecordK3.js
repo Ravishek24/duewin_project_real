@@ -1,7 +1,7 @@
 // Backend/models/BetRecordK3.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
-import User from './User.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const User = require('./User');
 
 const BetRecordK3 = sequelize.define('BetRecordK3', {
     bet_id: {
@@ -91,4 +91,4 @@ const BetRecordK3 = sequelize.define('BetRecordK3', {
 User.hasMany(BetRecordK3, { foreignKey: 'user_id' });
 BetRecordK3.belongsTo(User, { foreignKey: 'user_id' });
 
-export default BetRecordK3;
+module.exports = BetRecordK3;

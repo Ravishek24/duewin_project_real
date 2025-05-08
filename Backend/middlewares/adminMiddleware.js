@@ -1,5 +1,5 @@
 // Backend/middlewares/adminMiddleware.js
-import User from '../models/User.js';
+const User = require('../models/User');
 
 /**
  * Middleware to check if user is an admin
@@ -7,7 +7,7 @@ import User from '../models/User.js';
  * @param {Object} res - Express response object
  * @param {Function} next - Express next function
  */
-export const isAdmin = async (req, res, next) => {
+const isAdmin = async (req, res, next) => {
   try {
     // Check if user exists in request (added by auth middleware)
     if (!req.user) {
@@ -42,4 +42,4 @@ export const isAdmin = async (req, res, next) => {
   }
 };
 
-export default { isAdmin };
+module.exports = { isAdmin };

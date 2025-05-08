@@ -1,12 +1,13 @@
 // controllers/referralController.js
-import referralService from '../services/referralService.js';
+const referralService = require('../services/referralService');
+const { Op } = require('sequelize');
 
 /**
  * Get direct referrals
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const getDirectReferralsController = async (req, res) => {
+const getDirectReferralsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const { start_date, end_date } = req.query;
@@ -47,7 +48,7 @@ export const getDirectReferralsController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const getTeamReferralsController = async (req, res) => {
+const getTeamReferralsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const { start_date, end_date } = req.query;
@@ -88,7 +89,7 @@ export const getTeamReferralsController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const getDirectReferralDepositsController = async (req, res) => {
+const getDirectReferralDepositsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const { start_date, end_date } = req.query;
@@ -129,7 +130,7 @@ export const getDirectReferralDepositsController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const getTeamReferralDepositsController = async (req, res) => {
+const getTeamReferralDepositsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const { start_date, end_date } = req.query;
@@ -165,15 +166,12 @@ export const getTeamReferralDepositsController = async (req, res) => {
     }
 };
 
-
-// controllers/referralController.js (continued)
-
 /**
-* Get commission earnings
-* @param {Object} req - Express request object
-* @param {Object} res - Express response object
-*/
-export const getCommissionEarningsController = async (req, res) => {
+ * Get commission earnings
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getCommissionEarningsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const { start_date, end_date } = req.query;
@@ -207,14 +205,14 @@ export const getCommissionEarningsController = async (req, res) => {
             message: 'Server error fetching commission earnings'
         });
     }
- };
- 
- /**
+};
+
+/**
  * Get referral tree details
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
- export const getReferralTreeDetailsController = async (req, res) => {
+const getReferralTreeDetailsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const { level } = req.query;
@@ -235,14 +233,14 @@ export const getCommissionEarningsController = async (req, res) => {
             message: 'Server error fetching referral tree details'
         });
     }
- };
- 
- /**
+};
+
+/**
  * Record attendance
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
- export const recordAttendanceController = async (req, res) => {
+const recordAttendanceController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         
@@ -260,14 +258,14 @@ export const getCommissionEarningsController = async (req, res) => {
             message: 'Server error recording attendance'
         });
     }
- };
- 
- /**
+};
+
+/**
  * Get direct referral analytics
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
- export const getDirectReferralAnalyticsController = async (req, res) => {
+const getDirectReferralAnalyticsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         
@@ -328,14 +326,14 @@ export const getCommissionEarningsController = async (req, res) => {
             message: 'Server error fetching direct referral analytics'
         });
     }
- };
- 
- /**
+};
+
+/**
  * Get team referral analytics
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
- export const getTeamReferralAnalyticsController = async (req, res) => {
+const getTeamReferralAnalyticsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         
@@ -406,9 +404,9 @@ export const getCommissionEarningsController = async (req, res) => {
             message: 'Server error fetching team referral analytics'
         });
     }
- };
- 
- export default {
+};
+
+module.exports = {
     getDirectReferralsController,
     getTeamReferralsController,
     getDirectReferralDepositsController,
@@ -418,4 +416,4 @@ export const getCommissionEarningsController = async (req, res) => {
     recordAttendanceController,
     getDirectReferralAnalyticsController,
     getTeamReferralAnalyticsController
- };
+};

@@ -1,13 +1,13 @@
-import { 
+const { 
     getBankAccounts, 
     initBankAccountAddition,
     completeBankAccountAddition,
     updateBankAccount, 
     deleteBankAccount 
-} from '../services/bankAccountServices.js';
+} = require('../services/bankAccountServices');
 
 // Controller to get user's bank accounts
-export const getBankAccountsController = async (req, res) => {
+const getBankAccountsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         const result = await getBankAccounts(userId);
@@ -27,7 +27,7 @@ export const getBankAccountsController = async (req, res) => {
 };
 
 // Controller to initialize bank account addition (sent OTP)
-export const initBankAccountController = async (req, res) => {
+const initBankAccountController = async (req, res) => {
     const { 
         account_holder_name, 
         account_number, 
@@ -71,7 +71,7 @@ export const initBankAccountController = async (req, res) => {
 };
 
 // Controller to complete bank account addition after OTP verification
-export const completeBankAccountController = async (req, res) => {
+const completeBankAccountController = async (req, res) => {
     const { otp_session_id } = req.body;
 
     if (!otp_session_id) {
@@ -100,7 +100,7 @@ export const completeBankAccountController = async (req, res) => {
 };
 
 // Controller to update a bank account
-export const updateBankAccountController = async (req, res) => {
+const updateBankAccountController = async (req, res) => {
     const accountId = req.params.id;
     const { 
         account_holder_name, 
@@ -135,7 +135,7 @@ export const updateBankAccountController = async (req, res) => {
 };
 
 // Controller to delete a bank account
-export const deleteBankAccountController = async (req, res) => {
+const deleteBankAccountController = async (req, res) => {
     const accountId = req.params.id;
 
     try {
@@ -156,7 +156,7 @@ export const deleteBankAccountController = async (req, res) => {
     }
 };
 
-export default {
+module.exports = {
     getBankAccountsController,
     initBankAccountController,
     completeBankAccountController,

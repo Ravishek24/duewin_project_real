@@ -1,9 +1,9 @@
 // config/seamlessConfig.js
-import dotenv from 'dotenv';
+const dotenv = require('dotenv');
 
 dotenv.config();
 
-export const seamlessConfig = {
+const seamlessConfig = {
   // API Credentials (should be stored in environment variables)
   api_login: process.env.SEAMLESS_API_LOGIN || 'your_api_login',
   api_password: process.env.SEAMLESS_API_PASSWORD || 'your_api_password',
@@ -39,4 +39,4 @@ export const seamlessConfig = {
   callback_timeout: 10000
 };
 
-export default seamlessConfig;
+module.exports = seamlessConfig;

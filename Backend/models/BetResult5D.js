@@ -1,6 +1,6 @@
 // Backend/models/BetResult5D.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const BetResult5D = sequelize.define('BetResult5D', {
     bet_id: {
@@ -59,4 +59,4 @@ const BetResult5D = sequelize.define('BetResult5D', {
     ]
 });
 
-export default BetResult5D;
+module.exports = BetResult5D;

@@ -1,6 +1,6 @@
 // Backend/models/BetResultK3.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const BetResultK3 = sequelize.define('BetResultK3', {
     bet_id: {
@@ -73,4 +73,4 @@ const BetResultK3 = sequelize.define('BetResultK3', {
     ]
 });
 
-export default BetResultK3;
+module.exports = BetResultK3;

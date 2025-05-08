@@ -1,13 +1,13 @@
 // File: Backend/scripts/updateReferralStatus.js
 
-import { sequelize } from '../config/db.js';
-import { User, ReferralTree, ReferralCommission } from '../models/index.js';
-import { Op } from 'sequelize';
+const { sequelize } = require('../config/db');
+const { User, ReferralTree, ReferralCommission } = require('../models/index');
+const { Op } = require('sequelize');
 
 /**
  * Update valid referral status for all users
  */
-export async function updateValidReferrals() {
+async function updateValidReferrals() {
     try {
         console.log('Starting daily referral update job...');
 
@@ -105,8 +105,9 @@ function calculateCommission(referredUser, rate) {
     return totalBets * rate;
 }
 
-// Export the function
-export default updateValidReferrals;
+module.exports = {
+    processDailyReferrals: updateValidReferrals
+};
 
 // Only run directly if this file is being executed directly
 if (import.meta.url === `file://${process.argv[1]}`) {

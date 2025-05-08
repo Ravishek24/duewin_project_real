@@ -1,11 +1,11 @@
 // config/db.js
-import { Sequelize } from 'sequelize';
-import dotenv from 'dotenv';
+const { Sequelize } = require('sequelize');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
 // Create the Sequelize instance
-export const sequelize = new Sequelize(
+const sequelize = new Sequelize(
     process.env.DB_NAME || 'diuwin',
     process.env.DB_USER || 'root',
     process.env.DB_PASS || '',
@@ -21,7 +21,7 @@ export const sequelize = new Sequelize(
 );
 
 // Connect to the database
-export const connectDB = async () => {
+const connectDB = async () => {
     try {
         await sequelize.authenticate();
         console.log('✅ Database connected successfully.');
@@ -35,10 +35,10 @@ export const connectDB = async () => {
 };
 
 // Function to sync all models after they are loaded
-export const syncModels = async () => {
+const syncModels = async () => {
     try {
         // Import models and initialize associations
-        const models = await import('../models/index.js');
+        const models = require('../models/index');
         
         // Wait a bit to ensure all associations are properly set up
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -54,4 +54,4 @@ export const syncModels = async () => {
     }
 };
 
-export default { sequelize, connectDB, syncModels };
+module.exports = { sequelize, connectDB, syncModels };

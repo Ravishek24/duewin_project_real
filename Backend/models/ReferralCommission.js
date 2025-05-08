@@ -1,7 +1,7 @@
 // models/ReferralCommission.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User');
 
 // Base ReferralCommission model
 const ReferralCommission = sequelize.define('ReferralCommission', {
@@ -14,8 +14,8 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         },
         comment: 'User who earned the commission'
     },
@@ -23,8 +23,8 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         },
         comment: 'User who generated the commission'
     },
@@ -36,7 +36,7 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
     type: {
         type: DataTypes.ENUM('bet', 'deposit', 'direct_bonus', 'earned', 'generated'),
         allowNull: false,
-        comment: 'Commission type'
+        comment: 'The type of commission'
     },
     status: {
         type: DataTypes.ENUM('pending', 'paid', 'cancelled'),
@@ -61,19 +61,15 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
     updatedAt: 'updated_at',
     indexes: [
         {
-            name: 'idx_user_id',
             fields: ['user_id']
         },
         {
-            name: 'idx_referred_user_id',
             fields: ['referred_user_id']
         },
         {
-            name: 'idx_type',
             fields: ['type']
         },
         {
-            name: 'idx_status',
             fields: ['status']
         }
     ],
@@ -100,4 +96,4 @@ ReferralCommission.associate = (models) => {
     });
 };
 
-export default ReferralCommission;
+module.exports = ReferralCommission;

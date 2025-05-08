@@ -1,10 +1,10 @@
 // config/spriteConfig.js
-import dotenv from 'dotenv';
+const dotenv = require('dotenv');
 
 dotenv.config();
 
 // config/spribeConfig.js (renamed from spriteConfig.js)
-export const spribeConfig = {  // Changed from spriteConfig
+const spribeConfig = {  // Changed from spriteConfig
   // API endpoints
   apiBaseUrl: process.env.SPRIBE_API_URL || 'https://api.spribe.io',  // Changed from SPRITE_API_URL
   launchUrl: process.env.SPRIBE_LAUNCH_URL || 'https://play.spribe.io',  // Changed from SPRITE_LAUNCH_URL
@@ -44,4 +44,4 @@ export const spribeConfig = {  // Changed from spriteConfig
   signatureExpirationTime: 300 // 5 minutes
 };
 
-export default spribeConfig;
+module.exports = spribeConfig;

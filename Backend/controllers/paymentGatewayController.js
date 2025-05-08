@@ -1,19 +1,19 @@
 // controllers/paymentGatewayController.js
-import { 
+const { 
     getActivePaymentGateways,
     getPaymentGatewayByCode,
     createPaymentGateway,
     updatePaymentGateway,
     togglePaymentGatewayStatus,
     initializeDefaultGateways
-  } from '../services/paymentGatewayService.js';
+  } = require('../services/paymentGatewayService');
   
   /**
    * Get all active payment gateways
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const getActiveGatewaysController = async (req, res) => {
+  const getActiveGatewaysController = async (req, res) => {
     try {
       const { type = 'deposit' } = req.query;
       const forDeposit = type !== 'withdrawal';
@@ -39,7 +39,7 @@ import {
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const getGatewayByCodeController = async (req, res) => {
+  const getGatewayByCodeController = async (req, res) => {
     try {
       const { code } = req.params;
       
@@ -71,7 +71,7 @@ import {
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const createGatewayController = async (req, res) => {
+  const createGatewayController = async (req, res) => {
     try {
       const { 
         name, 
@@ -131,7 +131,7 @@ import {
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const updateGatewayController = async (req, res) => {
+  const updateGatewayController = async (req, res) => {
     try {
       const { id } = req.params;
       const {
@@ -192,7 +192,7 @@ import {
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const toggleGatewayStatusController = async (req, res) => {
+  const toggleGatewayStatusController = async (req, res) => {
     try {
       const { id } = req.params;
       
@@ -226,7 +226,7 @@ import {
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const initializeDefaultGatewaysController = async (req, res) => {
+  const initializeDefaultGatewaysController = async (req, res) => {
     try {
       const result = await initializeDefaultGateways();
       
@@ -244,7 +244,7 @@ import {
     }
   };
   
-  export default {
+  module.exports = {
     getActiveGatewaysController,
     getGatewayByCodeController,
     createGatewayController,

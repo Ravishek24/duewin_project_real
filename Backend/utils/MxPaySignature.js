@@ -1,5 +1,5 @@
 // utils/mxPaySignature.js
-import crypto from 'crypto';
+const crypto = require('crypto');
 
 /**
  * Generate signature for MxPay gateway
@@ -7,7 +7,7 @@ import crypto from 'crypto';
  * @param {string} secretKey - Merchant's secret key
  * @returns {string} - Uppercase MD5 signature
  */
-export const generateMxPaySignature = (params, secretKey) => {
+const generateMxPaySignature = (params, secretKey) => {
   try {
     // 1. Create a sorted map by keys (according to ASCII code)
     const sortedParams = {};
@@ -59,7 +59,7 @@ export const generateMxPaySignature = (params, secretKey) => {
  * @param {string} secretKey - Merchant's secret key
  * @returns {boolean} - Whether the signature is valid
  */
-export const verifyMxPaySignature = (callbackData, receivedSign, secretKey) => {
+const verifyMxPaySignature = (callbackData, receivedSign, secretKey) => {
   try {
     // Clone data and remove sign itself
     const dataToVerify = { ...callbackData };
@@ -77,7 +77,7 @@ export const verifyMxPaySignature = (callbackData, receivedSign, secretKey) => {
   }
 };
 
-export default {
+module.exports = {
   generateMxPaySignature,
   verifyMxPaySignature
 };

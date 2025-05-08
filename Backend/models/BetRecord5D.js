@@ -1,7 +1,7 @@
 // Backend/models/BetRecord5D.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
-import User from './User.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const User = require('./User');
 
 const BetRecord5D = sequelize.define('BetRecord5D', {
     bet_id: {
@@ -97,4 +97,4 @@ const BetRecord5D = sequelize.define('BetRecord5D', {
 User.hasMany(BetRecord5D, { foreignKey: 'user_id' });
 BetRecord5D.belongsTo(User, { foreignKey: 'user_id' });
 
-export default BetRecord5D;
+module.exports = BetRecord5D;

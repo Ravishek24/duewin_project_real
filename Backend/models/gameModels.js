@@ -1,15 +1,15 @@
 // Backend/models/gameModels.js
-import BetRecordWingo from './BetRecordWingo.js';
-import BetResultWingo from './BetResultWingo.js';
-import BetRecord5D from './BetRecord5D.js';
-import BetResult5D from './BetResult5D.js';
-import BetRecordK3 from './BetRecordK3.js';
-import BetResultK3 from './BetResultK3.js';
-import GamePeriod from './GamePeriod.js';
-import GameConfig from './GameConfig.js';
+const BetRecordWingo = require('./BetRecordWingo');
+const BetResultWingo = require('./BetResultWingo');
+const BetRecord5D = require('./BetRecord5D');
+const BetResult5D = require('./BetResult5D');
+const BetRecordK3 = require('./BetRecordK3');
+const BetResultK3 = require('./BetResultK3');
+const GamePeriod = require('./GamePeriod');
+const GameConfig = require('./GameConfig');
 
 // Initialize default game configurations if they don't exist
-export const initializeGameConfigs = async () => {
+const initializeGameConfigs = async () => {
     try {
         // Wingo game configs
         await createDefaultConfigIfNotExists('wingo', 30);
@@ -59,7 +59,7 @@ const createDefaultConfigIfNotExists = async (gameType, duration) => {
     }
 };
 
-export {
+module.exports = {
     BetRecordWingo,
     BetResultWingo,
     BetRecord5D,
@@ -67,5 +67,6 @@ export {
     BetRecordK3,
     BetResultK3,
     GamePeriod,
-    GameConfig
+    GameConfig,
+    initializeGameConfigs
 };

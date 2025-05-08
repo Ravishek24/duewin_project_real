@@ -1,7 +1,7 @@
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
-import WalletWithdrawal from './WalletWithdrawal.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User');
+const WalletWithdrawal = require('./WalletWithdrawal');
 
 const WithdrawalAdmin = sequelize.define('WithdrawalAdmin', {
     id: {
@@ -68,4 +68,4 @@ WithdrawalAdmin.belongsTo(WalletWithdrawal, { foreignKey: 'withdrawal_id' });
 User.hasMany(WithdrawalAdmin, { foreignKey: 'admin_id', as: 'ProcessedWithdrawals' });
 WithdrawalAdmin.belongsTo(User, { foreignKey: 'admin_id', as: 'ProcessedBy' });
 
-export default WithdrawalAdmin;
+module.exports = WithdrawalAdmin;

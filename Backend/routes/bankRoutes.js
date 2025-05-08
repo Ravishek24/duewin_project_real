@@ -1,12 +1,12 @@
-import express from 'express';
-import { 
+const express = require('express');
+const { 
     getBankAccountsController, 
     initBankAccountController, 
     completeBankAccountController,
     updateBankAccountController, 
     deleteBankAccountController 
-} from '../controllers/bankAccountController.js';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
+} = require('../controllers/bankAccountController');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -23,4 +23,4 @@ router.post('/complete', completeBankAccountController);
 router.put('/:id', updateBankAccountController);
 router.delete('/:id', deleteBankAccountController);
 
-export default router;
+module.exports = router;

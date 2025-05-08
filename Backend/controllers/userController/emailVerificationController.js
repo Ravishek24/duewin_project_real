@@ -1,7 +1,7 @@
-//import { verifyEmail, resendVerificationEmail } from '../../services/userServices.js';
+const { verifyEmail, resendVerificationEmail } = require('../../services/userServices');
 
 // Controller to verify email
-export const verifyEmailController = async (req, res) => {
+const verifyEmailController = async (req, res) => {
     const { token } = req.params;
 
     if (!token) {
@@ -29,7 +29,7 @@ export const verifyEmailController = async (req, res) => {
 };
 
 // Controller to resend verification email
-export const resendVerificationController = async (req, res) => {
+const resendVerificationController = async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
@@ -56,7 +56,7 @@ export const resendVerificationController = async (req, res) => {
     }
 };
 
-export default {
+module.exports = {
     verifyEmailController,
     resendVerificationController
 };

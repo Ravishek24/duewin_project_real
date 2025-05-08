@@ -1,5 +1,5 @@
 // controllers/mxPayController.js
-import {
+const {
     createMxPayCollectionOrder,
     processMxPayCollectionCallback,
     checkMxPayCollectionStatus,
@@ -7,14 +7,14 @@ import {
     processMxPayTransferCallback,
     getMxPayBankList,
     checkMxPayMerchantBalance
-} from '../services/mxPayService.js';
+} = require('../services/mxPayService');
 
 /**
  * Controller to handle MxPay deposit (collection) creation
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const mxPayDepositController = async (req, res) => {
+const mxPayDepositController = async (req, res) => {
     try {
         const { amount } = req.body;
         const userId = req.user.user_id;
@@ -56,7 +56,7 @@ export const mxPayDepositController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const mxPayCollectionCallbackController = async (req, res) => {
+const mxPayCollectionCallbackController = async (req, res) => {
     try {
         const callbackData = req.body;
         console.log('MxPay collection callback received:', callbackData);
@@ -81,7 +81,7 @@ export const mxPayCollectionCallbackController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const checkMxPayOrderStatusController = async (req, res) => {
+const checkMxPayOrderStatusController = async (req, res) => {
     try {
         const { order_id } = req.params;
 
@@ -108,14 +108,12 @@ export const checkMxPayOrderStatusController = async (req, res) => {
     }
 };
 
-// controllers/mxPayController.js (continuation)
-
 /**
  * Controller to handle MxPay transfer callbacks
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const mxPayTransferCallbackController = async (req, res) => {
+const mxPayTransferCallbackController = async (req, res) => {
     try {
         const callbackData = req.body;
         console.log('MxPay transfer callback received:', callbackData);
@@ -140,7 +138,7 @@ export const mxPayTransferCallbackController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const getMxPayBankListController = async (req, res) => {
+const getMxPayBankListController = async (req, res) => {
     try {
         const result = await getMxPayBankList();
 
@@ -163,7 +161,7 @@ export const getMxPayBankListController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const checkMxPayMerchantBalanceController = async (req, res) => {
+const checkMxPayMerchantBalanceController = async (req, res) => {
     try {
         const result = await checkMxPayMerchantBalance();
 
@@ -186,7 +184,7 @@ export const checkMxPayMerchantBalanceController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const processMxPayPayoutController = async (req, res) => {
+const processMxPayPayoutController = async (req, res) => {
     try {
         const { withdrawal_id } = req.params;
 
@@ -218,7 +216,7 @@ export const processMxPayPayoutController = async (req, res) => {
     }
 };
 
-export default {
+module.exports = {
     mxPayDepositController,
     mxPayCollectionCallbackController,
     checkMxPayOrderStatusController,

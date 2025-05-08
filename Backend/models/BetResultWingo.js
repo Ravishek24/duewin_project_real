@@ -1,6 +1,6 @@
 // Backend/models/BetResultWingo.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const BetResultWingo = sequelize.define('BetResultWingo', {
     bet_id: {
@@ -47,4 +47,4 @@ const BetResultWingo = sequelize.define('BetResultWingo', {
     ]
 });
 
-export default BetResultWingo;
+module.exports = BetResultWingo;

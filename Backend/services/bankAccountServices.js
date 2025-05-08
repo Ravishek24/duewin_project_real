@@ -1,10 +1,10 @@
-import BankAccount from '../models/BankAccount.js';
-import User from '../models/User.js';
-import { sequelize } from '../config/db.js';
-import otpService from './otpService.js';
+const BankAccount = require('../models/BankAccount');
+const User = require('../models/User');
+const { sequelize } = require('../config/db');
+const otpService = require('./otpService');
 
 // Service to get user's bank accounts
-export const getBankAccounts = async (userId) => {
+const getBankAccounts = async (userId) => {
     try {
         const bankAccounts = await BankAccount.findAll({
             where: { user_id: userId },
@@ -25,7 +25,7 @@ export const getBankAccounts = async (userId) => {
 };
 
 // Service to initialize bank account addition with OTP verification
-export const initBankAccountAddition = async (userId, accountData) => {
+const initBankAccountAddition = async (userId, accountData) => {
     try {
         // Validate required fields
         const { account_holder_name, account_number, bank_name, ifsc_code } = accountData;
@@ -86,7 +86,7 @@ export const initBankAccountAddition = async (userId, accountData) => {
 };
 
 // Service to complete bank account addition after OTP verification
-export const completeBankAccountAddition = async (userId, otpSessionId) => {
+const completeBankAccountAddition = async (userId, otpSessionId) => {
     const t = await sequelize.transaction();
 
     try {
@@ -188,7 +188,7 @@ export const completeBankAccountAddition = async (userId, otpSessionId) => {
 };
 
 // Service to update a bank account
-export const updateBankAccount = async (userId, accountId, accountData) => {
+const updateBankAccount = async (userId, accountId, accountData) => {
     const t = await sequelize.transaction();
 
     try {
@@ -267,7 +267,7 @@ export const updateBankAccount = async (userId, accountId, accountData) => {
 };
 
 // Service to delete a bank account
-export const deleteBankAccount = async (userId, accountId) => {
+const deleteBankAccount = async (userId, accountId) => {
     const t = await sequelize.transaction();
 
     try {
@@ -334,7 +334,7 @@ export const deleteBankAccount = async (userId, accountId) => {
     }
 };
 
-export default {
+module.exports = {
     getBankAccounts,
     initBankAccountAddition,
     completeBankAccountAddition,

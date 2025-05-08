@@ -1,8 +1,8 @@
-import UsdtAccount from '../models/UsdtAccount.js';
-import { sequelize } from '../config/db.js';
+const UsdtAccount = require('../models/UsdtAccount');
+const { sequelize } = require('../config/db');
 
 // Service to get user's USDT accounts
-export const getUsdtAccounts = async (userId) => {
+const getUsdtAccounts = async (userId) => {
     try {
         const usdtAccounts = await UsdtAccount.findAll({
             where: { user_id: userId },
@@ -23,7 +23,7 @@ export const getUsdtAccounts = async (userId) => {
 };
 
 // Service to add a USDT account
-export const addUsdtAccount = async (userId, accountData) => {
+const addUsdtAccount = async (userId, accountData) => {
     const t = await sequelize.transaction();
 
     try {
@@ -78,7 +78,7 @@ export const addUsdtAccount = async (userId, accountData) => {
 };
 
 // Service to update a USDT account
-export const updateUsdtAccount = async (userId, accountId, accountData) => {
+const updateUsdtAccount = async (userId, accountId, accountData) => {
     const t = await sequelize.transaction();
 
     try {
@@ -153,7 +153,7 @@ export const updateUsdtAccount = async (userId, accountId, accountData) => {
 };
 
 // Service to delete a USDT account
-export const deleteUsdtAccount = async (userId, accountId) => {
+const deleteUsdtAccount = async (userId, accountId) => {
     const t = await sequelize.transaction();
 
     try {
@@ -220,7 +220,7 @@ export const deleteUsdtAccount = async (userId, accountId) => {
     }
 };
 
-export default {
+module.exports = {
     getUsdtAccounts,
     addUsdtAccount,
     updateUsdtAccount,

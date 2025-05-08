@@ -1,11 +1,11 @@
 // Backend/config/redisConfig.js
-import { createClient } from 'redis';
-import dotenv from 'dotenv';
+const { createClient } = require('redis');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
 // Redis client configuration
-export const redis = createClient({
+const redis = createClient({
   url: process.env.REDIS_URL || 'redis://localhost:6379',
   password: process.env.REDIS_PASSWORD || undefined,
   socket: {
@@ -38,4 +38,7 @@ export const redis = createClient({
   }
 })();
 
-export default redis;
+module.exports = {
+  redis,
+  redisClient
+};

@@ -1,6 +1,6 @@
 // routes/referralRoutes.js
-import express from 'express';
-import {
+const express = require('express');
+const {
     getDirectReferralsController,
     getTeamReferralsController,
     getDirectReferralDepositsController,
@@ -10,19 +10,19 @@ import {
     recordAttendanceController,
     getDirectReferralAnalyticsController,
     getTeamReferralAnalyticsController
-} from '../controllers/referralController.js';
+} = require('../controllers/referralController');
 
 // Import the new functions
-import {
+const {
     recordAttendance,
     getUnclaimedAttendanceBonuses,
     claimAttendanceBonus,
     getInvitationBonusStatus,
     claimInvitationBonus
     // ...other imports
-} from '../services/referralService.js';
+} = require('../services/referralService');
 
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -115,4 +115,4 @@ router.post('/invitation/claim', auth, async (req, res) => {
 });
 
 
-export default router;
+module.exports = router;

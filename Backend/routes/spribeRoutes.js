@@ -1,6 +1,6 @@
 // routes/spriteRoutes.js
-import express from 'express';
-import {
+const express = require('express');
+const {
   getGamesController,
   getLaunchUrlController,
   authCallbackController,
@@ -8,8 +8,8 @@ import {
   withdrawCallbackController,
   depositCallbackController,
   rollbackCallbackController
-} from '../controllers/spribeController.js';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
+} = require('../controllers/spribeController');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -24,4 +24,4 @@ router.post('/callback/withdraw', withdrawCallbackController);
 router.post('/callback/deposit', depositCallbackController);
 router.post('/callback/rollback', rollbackCallbackController);
 
-export default router;
+module.exports = router;

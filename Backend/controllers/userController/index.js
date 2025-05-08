@@ -1,11 +1,11 @@
-import loginController from './loginController.js';
-import signupController from './signupController.js';
-import { validateTokenController, resetPasswordController } from './resetPasswordController.js';
-import { verifyEmailController, resendVerificationController } from './emailVerificationController.js';
-import { getProfileController, updateProfileController } from './profileController.js';
-import forgotPasswordController from './forgotPasswordController.js';
+const loginController = require('./loginController');
+const signupController = require('./signupController');
+const { validateTokenController, resetPasswordController } = require('./resetPasswordController');
+const { verifyEmailController, resendVerificationController } = require('./emailVerificationController');
+const { getProfileController, updateProfileController } = require('./profileController');
+const forgotPasswordController = require('./forgotPasswordController');
 
-export {
+module.exports = {
     loginController,
     signupController,
     validateTokenController,

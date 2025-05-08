@@ -1,14 +1,14 @@
 // File: Backend/scripts/updateReferralStatus.js
 
-import { sequelize } from '../config/db.js';
-import User from '../models/User.js';
-import ValidReferral from '../models/ValidReferral.js';
-import { updateInvitationTier } from '../services/referralService.js';
+const { sequelize } = require('../config/db');
+const User = require('../models/User');
+const ValidReferral = require('../models/ValidReferral');
+const { updateInvitationTier } = require('../services/referralService');
 
 /**
  * Update valid referral status for all users
  */
-export const updateValidReferrals = async () => {
+const updateReferralStatus = async () => {
     console.log('Starting valid referral status update...');
 
     try {
@@ -55,10 +55,14 @@ export const updateValidReferrals = async () => {
 };
 
 // Run the update
-updateValidReferrals().then(() => {
+updateReferralStatus().then(() => {
     console.log('Valid referral update complete');
     process.exit(0);
 }).catch(error => {
     console.error('Error in referral update script:', error);
     process.exit(1);
 });
+
+module.exports = {
+  updateReferralStatus
+};

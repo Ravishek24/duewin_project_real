@@ -1,6 +1,6 @@
 // utils/wePaySignature.js
-import crypto from 'crypto';
-import { wePayConfig } from '../config/wePayConfig.js';
+const crypto = require('crypto');
+const { wePayConfig } = require('../config/wePayConfig');
 
 /**
  * Generates a signature for WePayGlobal payment gateway
@@ -8,7 +8,7 @@ import { wePayConfig } from '../config/wePayConfig.js';
  * @param {boolean} isTransfer - Whether this is for a transfer (true) or collection (false)
  * @returns {string} - MD5 signature
  */
-export const generateWePaySignature = (params, isTransfer = false) => {
+const generateWePaySignature = (params, isTransfer = false) => {
   try {
     // Sort parameters by key alphabetically
     const sortedKeys = Object.keys(params).sort();
@@ -44,7 +44,7 @@ export const generateWePaySignature = (params, isTransfer = false) => {
  * @param {boolean} isTransfer - Whether this is for a transfer (true) or collection (false)
  * @returns {boolean} - Whether the signature is valid
  */
-export const verifyWePaySignature = (params, receivedSign, isTransfer = false) => {
+const verifyWePaySignature = (params, receivedSign, isTransfer = false) => {
   try {
     // Create a copy of params without the signature
     const paramsToVerify = { ...params };
@@ -69,7 +69,7 @@ export const verifyWePaySignature = (params, receivedSign, isTransfer = false) =
   }
 };
 
-export default {
+module.exports = {
   generateWePaySignature,
   verifyWePaySignature
 };

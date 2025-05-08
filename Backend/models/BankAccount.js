@@ -1,9 +1,9 @@
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User.js');
 
 const BankAccount = sequelize.define('BankAccount', {
-    bank_account_id: {
+    id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
@@ -12,11 +12,11 @@ const BankAccount = sequelize.define('BankAccount', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         }
     },
-    account_holder_name: {
+    bank_name: {
         type: DataTypes.STRING,
         allowNull: false
     },
@@ -24,7 +24,7 @@ const BankAccount = sequelize.define('BankAccount', {
         type: DataTypes.STRING,
         allowNull: false
     },
-    bank_name: {
+    account_holder: {
         type: DataTypes.STRING,
         allowNull: false
     },
@@ -32,33 +32,34 @@ const BankAccount = sequelize.define('BankAccount', {
         type: DataTypes.STRING,
         allowNull: false
     },
-    branch_name: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    is_primary: {
-        type: DataTypes.BOOLEAN,
-        defaultValue: false
-    },
-    is_verified: {
-        type: DataTypes.BOOLEAN,
-        defaultValue: false
-    },
     created_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'bank_accounts',
-    timestamps: false
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    indexes: [
+        {
+            fields: ['user_id']
+        },
+        {
+            unique: true,
+            fields: ['user_id', 'account_number']
+        }
+    ]
 });
 
 // Establish relationship
 User.hasMany(BankAccount, { foreignKey: 'user_id' });
 BankAccount.belongsTo(User, { foreignKey: 'user_id' });
 
-export default BankAccount;
+module.exports = BankAccount;

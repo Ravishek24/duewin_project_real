@@ -1,9 +1,9 @@
 // config/mxPayConfig.js
-import dotenv from 'dotenv';
+const dotenv = require('dotenv');
 
 dotenv.config();
 
-export const mxPayConfig = {
+const mxPayConfig = {
   // API base URLs
   baseUrl: process.env.MXPAY_BASE_URL || 'https://admin.mx-pay.com',
   
@@ -38,4 +38,4 @@ export const mxPayConfig = {
   callbackUrl: process.env.MXPAY_CALLBACK_URL || ''
 };
 
-export default mxPayConfig;
+module.exports = mxPayConfig;

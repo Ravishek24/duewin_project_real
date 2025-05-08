@@ -1,5 +1,5 @@
-import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
+const nodemailer = require('nodemailer');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
@@ -84,7 +84,7 @@ const emailTemplates = {
 };
 
 // Send email function
-export const sendEmail = async (to, template, data) => {
+const sendEmail = async (to, template, data) => {
     try {
         const emailContent = emailTemplates[template](data.token, data.userName);
         
@@ -104,4 +104,16 @@ export const sendEmail = async (to, template, data) => {
     }
 };
 
-export default sendEmail;
+const sendVerificationEmail = async (to, token, userName) => {
+    return sendEmail(to, 'verification', { token, userName });
+};
+
+const sendPasswordResetEmail = async (to, token, userName) => {
+    return sendEmail(to, 'passwordReset', { token, userName });
+};
+
+module.exports = {
+  sendEmail,
+  sendVerificationEmail,
+  sendPasswordResetEmail
+};

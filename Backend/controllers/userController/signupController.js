@@ -1,6 +1,6 @@
-import { createUser } from '../../services/userServices.js';
+const { createUser } = require('../../services/userServices');
 
-export const signupController = async (req, res) => {
+const signupController = async (req, res) => {
     const { user_name, email, phone_no, password, referral_code, country_code } = req.body;
 
     // Validate required fields
@@ -68,4 +68,4 @@ export const signupController = async (req, res) => {
     }
 };
 
-export default signupController;
+module.exports = signupController;

@@ -1,10 +1,10 @@
 // middlewares/seamlessMiddleware.js
-import { validateSeamlessSignature } from '../utils/seamlessUtils.js';
+const { validateSeamlessSignature } = require('../utils/seamlessUtils');
 
 /**
  * Middleware to validate Seamless API request signatures
  */
-export const validateSeamlessRequest = (req, res, next) => {
+const validateSeamlessRequest = (req, res, next) => {
   try {
     const isValid = validateSeamlessSignature(req.query);
     
@@ -25,4 +25,4 @@ export const validateSeamlessRequest = (req, res, next) => {
   }
 };
 
-export default validateSeamlessRequest;
+module.exports = validateSeamlessRequest;

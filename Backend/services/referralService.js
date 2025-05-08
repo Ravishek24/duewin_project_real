@@ -1,15 +1,16 @@
 // services/referralService.js
-import { sequelize } from '../config/db.js';
-import User from '../models/User.js';
-import ReferralTree from '../models/ReferralTree.js';
-import ReferralCommission from '../models/ReferralCommission.js';
-import VipLevel from '../models/VipLevel.js';
-import RebateLevel from '../models/RebateLevel.js';
-import UserRebateLevel from '../models/UserRebateLevel.js';
-import AttendanceRecord from '../models/AttendanceRecord.js';
-import WalletRecharge from '../models/WalletRecharge.js';
-import { Op } from 'sequelize';
-import { updateWalletBalance } from './walletServices.js';
+const { sequelize } = require('../config/db');
+const User = require('../models/User');
+const ReferralTree = require('../models/ReferralTree');
+const ReferralCommission = require('../models/ReferralCommission');
+const VipLevel = require('../models/VipLevel');
+const RebateLevel = require('../models/RebateLevel');
+const UserRebateLevel = require('../models/UserRebateLevel');
+const AttendanceRecord = require('../models/AttendanceRecord');
+const WalletRecharge = require('../models/WalletRecharge');
+const { Op } = require('sequelize');
+const { updateWalletBalance } = require('./walletServices');
+const ValidReferral = require('../models/ValidReferral');
 
 /**
  * Create or update a user's referral tree when a new user is registered
@@ -17,7 +18,7 @@ import { updateWalletBalance } from './walletServices.js';
  * @param {string} referralCode - Referral code used during registration
  * @returns {Object} - Operation result
  */
-export const createReferralTree = async (userId, referralCode) => {
+const createReferralTree = async (userId, referralCode) => {
     const t = await sequelize.transaction();
 
     try {
@@ -131,7 +132,7 @@ export const createReferralTree = async (userId, referralCode) => {
  * @param {string} gameType - 'lottery' or 'casino'
  * @returns {Object} - Processing result
  */
-export const processRebateCommission = async (gameType) => {
+const processRebateCommission = async (gameType) => {
     const t = await sequelize.transaction();
 
     try {
@@ -248,23 +249,20 @@ export const processRebateCommission = async (gameType) => {
             }
 
             // Continue process for levels 2-6 (using recursive referral lookup)
-            // This would be similar to the level 1 process but with the appropriate rate for each level
-            // ...
+            // This is simplified - actual implementation would handle all levels
         }
 
         await t.commit();
-
         return {
             success: true,
-            message: `Processed ${betRecords.length} rebate commissions for ${gameType}`,
-            batchId
+            message: 'Rebate commission processed successfully'
         };
     } catch (error) {
         await t.rollback();
-        console.error(`Error processing ${gameType} rebate commission:`, error);
+        console.error('Error processing rebate commission:', error);
         return {
             success: false,
-            message: `Error processing ${gameType} rebate commission`
+            message: 'Error processing rebate commission'
         };
     }
 };
@@ -275,7 +273,7 @@ export const processRebateCommission = async (gameType) => {
  * @param {Object} dateFilter - Optional date filter
  * @returns {Array} - Array of direct referrals
  */
-export const getDirectReferrals = async (userId, dateFilter = null) => {
+const getDirectReferrals = async (userId, dateFilter = null) => {
     try {
         // Get the user's referral tree
         const referralTree = await ReferralTree.findOne({
@@ -330,7 +328,7 @@ export const getDirectReferrals = async (userId, dateFilter = null) => {
  * @param {Object} dateFilter - Optional date filter
  * @returns {Object} - Team referral data by level
  */
-export const getTeamReferrals = async (userId, dateFilter = null) => {
+const getTeamReferrals = async (userId, dateFilter = null) => {
     try {
         // Get the user's referral tree
         const referralTree = await ReferralTree.findOne({
@@ -415,7 +413,7 @@ export const getTeamReferrals = async (userId, dateFilter = null) => {
 * @param {Object} dateFilter - Optional date filter
 * @returns {Object} - Deposit statistics
 */
-export const getDirectReferralDeposits = async (userId, dateFilter = null) => {
+const getDirectReferralDeposits = async (userId, dateFilter = null) => {
     try {
         // Get direct referrals first
         const directReferralsResult = await getDirectReferrals(userId);
@@ -530,7 +528,7 @@ export const getDirectReferralDeposits = async (userId, dateFilter = null) => {
 * @param {Object} dateFilter - Optional date filter
 * @returns {Object} - Deposit statistics
 */
-export const getTeamReferralDeposits = async (userId, dateFilter = null) => {
+const getTeamReferralDeposits = async (userId, dateFilter = null) => {
     try {
         // Get team referrals first
         const teamReferralsResult = await getTeamReferrals(userId);
@@ -651,7 +649,7 @@ export const getTeamReferralDeposits = async (userId, dateFilter = null) => {
 * @param {Object} dateFilter - Optional date filter
 * @returns {Object} - Commission earnings statistics
 */
-export const getCommissionEarnings = async (userId, dateFilter = null) => {
+const getCommissionEarnings = async (userId, dateFilter = null) => {
     try {
         // Build where clause
         const whereClause = { user_id: userId };
@@ -734,7 +732,7 @@ export const getCommissionEarnings = async (userId, dateFilter = null) => {
 * @param {number} maxLevel - Maximum level to return (default: 6)
 * @returns {Object} - Referral tree details
 */
-export const getReferralTreeDetails = async (userId, maxLevel = 6) => {
+const getReferralTreeDetails = async (userId, maxLevel = 6) => {
     try {
         // Get the referral tree
         const referralTree = await ReferralTree.findOne({
@@ -827,7 +825,7 @@ export const getReferralTreeDetails = async (userId, maxLevel = 6) => {
 * @param {number} betAmount - Bet amount
 * @returns {Object} - Operation result
 */
-export const recordBetExperience = async (userId, betAmount) => {
+const recordBetExperience = async (userId, betAmount) => {
     const t = await sequelize.transaction();
 
     try {
@@ -910,7 +908,7 @@ export const recordBetExperience = async (userId, betAmount) => {
 * @param {number} userId - User ID
 * @returns {Object} - Operation result
 */
-export const processDirectInvitationBonus = async (userId) => {
+const processDirectInvitationBonus = async (userId) => {
     const t = await sequelize.transaction();
 
     try {
@@ -1036,7 +1034,7 @@ export const processDirectInvitationBonus = async (userId) => {
  * @param {number} userId - User ID
  * @returns {Object} - Operation result
  */
-export const recordAttendance = async (userId) => {
+const recordAttendance = async (userId) => {
     const t = await sequelize.transaction();
 
     try {
@@ -1138,7 +1136,7 @@ export const recordAttendance = async (userId) => {
 * @param {number} rechargeAmount - Recharge amount
 * @returns {Object} - Operation result
 */
-export const processFirstRechargeBonus = async (userId, rechargeAmount) => {
+const processFirstRechargeBonus = async (userId, rechargeAmount) => {
     const t = await sequelize.transaction();
 
     try {
@@ -1217,7 +1215,7 @@ export const processFirstRechargeBonus = async (userId, rechargeAmount) => {
  * @param {number} rechargeAmount - Amount of recharge
  * @returns {Object} - Processing result
  */
-export const processRechargeForAttendance = async (userId, rechargeAmount) => {
+const processRechargeForAttendance = async (userId, rechargeAmount) => {
     const t = await sequelize.transaction();
 
     try {
@@ -1338,7 +1336,7 @@ export const processRechargeForAttendance = async (userId, rechargeAmount) => {
  * @param {string} attendanceDate - Date to claim bonus for (optional, defaults to today)
  * @returns {Object} - Result of claim operation
  */
-export const claimAttendanceBonus = async (userId, attendanceDate) => {
+const claimAttendanceBonus = async (userId, attendanceDate) => {
     const t = await sequelize.transaction();
 
     try {
@@ -1407,7 +1405,7 @@ export const claimAttendanceBonus = async (userId, attendanceDate) => {
  * @param {number} userId - User ID
  * @returns {Object} - List of unclaimed bonuses
  */
-export const getUnclaimedAttendanceBonuses = async (userId) => {
+const getUnclaimedAttendanceBonuses = async (userId) => {
     try {
         const unclaimed = await AttendanceRecord.findAll({
             where: {
@@ -1446,7 +1444,7 @@ export const getUnclaimedAttendanceBonuses = async (userId) => {
  * @param {number} rechargeAmount - Amount of recharge
  * @returns {Object} - Operation result
  */
-export const updateReferralOnRecharge = async (userId, rechargeAmount) => {
+const updateReferralOnRecharge = async (userId, rechargeAmount) => {
     const t = await sequelize.transaction();
 
     try {
@@ -1553,7 +1551,7 @@ export const updateReferralOnRecharge = async (userId, rechargeAmount) => {
  * @param {Object} transaction - Database transaction (optional)
  * @returns {Object} - Operation result
  */
-export const updateInvitationTier = async (userId, validReferralCount = null, transaction = null) => {
+const updateInvitationTier = async (userId, validReferralCount = null, transaction = null) => {
     const t = transaction || await sequelize.transaction();
 
     try {
@@ -1670,7 +1668,7 @@ export const updateInvitationTier = async (userId, validReferralCount = null, tr
  * @param {number} userId - User ID
  * @returns {Object} - Result of claim operation
  */
-export const claimInvitationBonus = async (userId) => {
+const claimInvitationBonus = async (userId) => {
     const t = await sequelize.transaction();
 
     try {
@@ -1771,7 +1769,7 @@ export const claimInvitationBonus = async (userId) => {
  * @param {number} userId - User ID
  * @returns {Object} - Detailed invitation bonus status
  */
-export const getInvitationBonusStatus = async (userId) => {
+const getInvitationBonusStatus = async (userId) => {
     try {
         // Get user data
         const user = await User.findByPk(userId, {
@@ -1864,7 +1862,7 @@ export const getInvitationBonusStatus = async (userId) => {
 };
 
 
-export default {
+module.exports = {
     createReferralTree,
     processRebateCommission,
     getDirectReferrals,
@@ -1876,5 +1874,8 @@ export default {
     recordBetExperience,
     processDirectInvitationBonus,
     recordAttendance,
-    processFirstRechargeBonus
+    processFirstRechargeBonus,
+    updateInvitationTier,
+    claimInvitationBonus,
+    getInvitationBonusStatus
 };

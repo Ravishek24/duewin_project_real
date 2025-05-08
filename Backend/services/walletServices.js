@@ -1,11 +1,16 @@
-import User from '../models/User.js';
-import WalletRecharge from '../models/WalletRecharge.js';
-import WalletWithdrawal from '../models/WalletWithdrawal.js';
-import { sequelize } from '../config/db.js';
-import { Op } from 'sequelize';
+const { sequelize } = require('../config/db');
+const { Op } = require('sequelize');
+const User = require('../models/User');
+const WalletRecharge = require('../models/WalletRecharge');
+const WalletWithdrawal = require('../models/WalletWithdrawal');
+const BankAccount = require('../models/BankAccount');
+const UsdtAccount = require('../models/UsdtAccount');
+const ReferralCommission = require('../models/ReferralCommission');
+const GameTransaction = require('../models/GameTransaction');
+const SeamlessTransaction = require('../models/SeamlessTransaction');
 
 // Service to get user wallet balance
-export const getWalletBalance = async (userId) => {
+const getWalletBalance = async (userId) => {
   try {
     const user = await User.findByPk(userId, {
       attributes: ['user_id', 'wallet_balance']
@@ -80,7 +85,7 @@ export const getWalletBalance = async (userId) => {
 };
 
 // Service to get transaction history (both recharges and withdrawals)
-export const getTransactionHistory = async (userId, page = 1, limit = 10) => {
+const getTransactionHistory = async (userId, page = 1, limit = 10) => {
   try {
     const offset = (page - 1) * limit;
     
@@ -150,7 +155,7 @@ export const getTransactionHistory = async (userId, page = 1, limit = 10) => {
 };
 
 // Service to get recharge history
-export const getRechargeHistory = async (userId, page = 1, limit = 10) => {
+const getRechargeHistory = async (userId, page = 1, limit = 10) => {
   try {
     const offset = (page - 1) * limit;
     
@@ -187,7 +192,7 @@ export const getRechargeHistory = async (userId, page = 1, limit = 10) => {
 };
 
 // Service to get withdrawal history
-export const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
+const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
   try {
     const offset = (page - 1) * limit;
     
@@ -224,7 +229,7 @@ export const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
 };
 
 // Service to update wallet balance (internal use only)
-export const updateWalletBalance = async (userId, amount, type, transaction = null) => {
+const updateWalletBalance = async (userId, amount, type, transaction = null) => {
   const t = transaction || await sequelize.transaction();
 
   try {
@@ -250,14 +255,16 @@ export const updateWalletBalance = async (userId, amount, type, transaction = nu
       newBalance = parseFloat(user.wallet_balance) + parseFloat(amount);
     } else if (type === 'subtract') {
       // Debit from wallet
-      if (parseFloat(user.wallet_balance) < parseFloat(amount)) {
+      newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
+      
+      // Check for insufficient balance
+      if (newBalance < 0) {
         if (!transaction) await t.rollback();
         return {
           success: false,
-          message: 'Insufficient wallet balance.'
+          message: 'Insufficient balance.'
         };
       }
-      newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
     } else {
       if (!transaction) await t.rollback();
       return {
@@ -266,16 +273,11 @@ export const updateWalletBalance = async (userId, amount, type, transaction = nu
       };
     }
 
-    // Update user wallet balance
-    await User.update(
-      { wallet_balance: newBalance },
-      { 
-        where: { user_id: userId },
-        transaction: t 
-      }
-    );
+    // Update balance
+    await user.update({
+      wallet_balance: newBalance
+    }, { transaction: t });
 
-    // If no external transaction was provided, commit this one
     if (!transaction) await t.commit();
 
     return {
@@ -283,9 +285,7 @@ export const updateWalletBalance = async (userId, amount, type, transaction = nu
       newBalance: newBalance
     };
   } catch (error) {
-    // If no external transaction was provided, rollback this one
     if (!transaction) await t.rollback();
-    
     console.error('Error updating wallet balance:', error);
     return {
       success: false,
@@ -294,10 +294,21 @@ export const updateWalletBalance = async (userId, amount, type, transaction = nu
   }
 };
 
-export default {
+module.exports = {
   getWalletBalance,
   getTransactionHistory,
   getRechargeHistory,
   getWithdrawalHistory,
-  updateWalletBalance
+  updateWalletBalance,
+  processRecharge,
+  processWithdrawal,
+  getBankAccounts,
+  getUsdtAccounts,
+  addBankAccount,
+  addUsdtAccount,
+  deleteBankAccount,
+  deleteUsdtAccount,
+  getCommissionHistory,
+  getGameTransactionHistory,
+  getSeamlessTransactionHistory
 };

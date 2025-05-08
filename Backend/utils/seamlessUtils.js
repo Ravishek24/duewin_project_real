@@ -1,13 +1,13 @@
 // utils/seamlessUtils.js
-import crypto from 'crypto';
-import { seamlessConfig } from '../config/seamlessConfig.js';
+const crypto = require('crypto');
+const { seamlessConfig } = require('../config/seamlessConfig');
 
 /**
  * Validate the signature in a seamless wallet request
  * @param {Object} queryParams - The query parameters from the request
  * @returns {boolean} - Whether the signature is valid
  */
-export const validateSeamlessSignature = (queryParams) => {
+const validateSeamlessSignature = (queryParams) => {
   try {
     // Clone the query parameters
     const params = { ...queryParams };
@@ -48,7 +48,7 @@ export const validateSeamlessSignature = (queryParams) => {
  * @param {Object} params - The parameters to include in the signature
  * @returns {string} - The generated signature
  */
-export const generateSeamlessSignature = (params) => {
+const generateSeamlessSignature = (params) => {
   try {
     // Sort parameters alphabetically
     const sortedParams = {};
@@ -74,7 +74,7 @@ export const generateSeamlessSignature = (params) => {
   }
 };
 
-export default {
+module.exports = {
   validateSeamlessSignature,
   generateSeamlessSignature
 };

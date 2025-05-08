@@ -1,6 +1,6 @@
 // controllers/seamlessController.js
-import { validateSeamlessSignature } from '../utils/seamlessUtils.js';
-import {
+const { validateSeamlessSignature } = require('../utils/seamlessUtils');
+const {
   getGameList,
   getGameUrl,
   createPlayer,
@@ -10,14 +10,14 @@ import {
   processRollbackRequest,
   addFreeRounds,
   removeFreeRounds
-} from '../services/seamlessWalletService.js';
+} = require('../services/seamlessWalletService');
 
 /**
  * Controller to fetch list of available games
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const getGamesController = async (req, res) => {
+const getGamesController = async (req, res) => {
   try {
     const { currency } = req.query;
     const result = await getGameList(currency);
@@ -41,7 +41,7 @@ export const getGamesController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const launchGameController = async (req, res) => {
+const launchGameController = async (req, res) => {
   try {
     const { gameId } = req.params;
     const { language } = req.query;
@@ -68,7 +68,7 @@ export const launchGameController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const balanceCallbackController = async (req, res) => {
+const balanceCallbackController = async (req, res) => {
   try {
     // Process the balance request
     const result = await processBalanceRequest(req.query);
@@ -89,7 +89,7 @@ export const balanceCallbackController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const debitCallbackController = async (req, res) => {
+const debitCallbackController = async (req, res) => {
   try {
     // Process the debit request
     const result = await processDebitRequest(req.query);
@@ -110,7 +110,7 @@ export const debitCallbackController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const creditCallbackController = async (req, res) => {
+const creditCallbackController = async (req, res) => {
   try {
     // Process the credit request
     const result = await processCreditRequest(req.query);
@@ -131,7 +131,7 @@ export const creditCallbackController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const rollbackCallbackController = async (req, res) => {
+const rollbackCallbackController = async (req, res) => {
   try {
     // Process the rollback request
     const result = await processRollbackRequest(req.query);
@@ -152,7 +152,7 @@ export const rollbackCallbackController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const addFreeRoundsController = async (req, res) => {
+const addFreeRoundsController = async (req, res) => {
   try {
     const {
       title,
@@ -201,19 +201,18 @@ export const addFreeRoundsController = async (req, res) => {
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
-export const removeFreeRoundsController = async (req, res) => {
+const removeFreeRoundsController = async (req, res) => {
   try {
-    const { freeRoundId, playerIds } = req.body;
+    const { freeRoundId } = req.params;
     
-    // Validate required fields
     if (!freeRoundId) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required field: freeRoundId'
+        message: 'Free round ID is required'
       });
     }
     
-    const result = await removeFreeRounds(freeRoundId, playerIds || '');
+    const result = await removeFreeRounds(freeRoundId);
     
     if (result.success) {
       return res.status(200).json(result);
@@ -229,7 +228,7 @@ export const removeFreeRoundsController = async (req, res) => {
   }
 };
 
-export default {
+module.exports = {
   getGamesController,
   launchGameController,
   balanceCallbackController,

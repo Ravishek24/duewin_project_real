@@ -1,13 +1,13 @@
 // routes/otpRoutes.js
-import express from 'express';
-import { 
+const express = require('express');
+const { 
     verifyOtpController, 
     resendOtpController, 
     verifyPhoneUpdateOtpController,
     otpWebhookController,
     checkOtpStatusController
-} from '../controllers/otpController.js';
-import { auth } from '../middlewares/authMiddleware.js';
+} = require('../controllers/otpController');
+const { auth } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -20,4 +20,4 @@ router.post('/verify', auth, verifyOtpController);
 router.post('/resend', auth, resendOtpController);
 router.post('/verify-phone-update', auth, verifyPhoneUpdateOtpController);
 
-export default router;
+module.exports = router;

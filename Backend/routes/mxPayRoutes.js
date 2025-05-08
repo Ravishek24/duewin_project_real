@@ -1,6 +1,6 @@
 // routes/mxPayRoutes.js
-import express from 'express';
-import {
+const express = require('express');
+const {
   mxPayDepositController,
   mxPayCollectionCallbackController,
   checkMxPayOrderStatusController,
@@ -8,9 +8,9 @@ import {
   getMxPayBankListController,
   checkMxPayMerchantBalanceController,
   processMxPayPayoutController
-} from '../controllers/mxPayController.js';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
-import { isAdmin } from '../middlewares/adminMiddleware.js';
+} = require('../controllers/mxPayController');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+const { isAdmin } = require('../middlewares/adminMiddleware');
 
 const router = express.Router();
 
@@ -27,4 +27,4 @@ router.post('/payout/:withdrawal_id', auth, isAdmin, processMxPayPayoutControlle
 router.post('/collection-callback', mxPayCollectionCallbackController);
 router.post('/transfer-callback', mxPayTransferCallbackController);
 
-export default router;
+module.exports = router;

@@ -1,7 +1,7 @@
 // controllers/gameController.js
-import { getGameList } from '../services/gameServices.js';
+const { getGameList } = require('../services/gameServices');
 
-export const fetchGameList = async (req, res) => {
+const fetchGameList = async (req, res) => {
   try {
     const { currency } = req.query; // Get currency from query parameters
     const games = await getGameList(currency);
@@ -9,5 +9,9 @@ export const fetchGameList = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch game list' });
   }
+};
+
+module.exports = {
+  fetchGameList
 };
 

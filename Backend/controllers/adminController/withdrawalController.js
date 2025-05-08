@@ -1,16 +1,16 @@
 // controllers/adminController/withdrawalController.js
-import {
+const {
     getPendingWithdrawals,
     getWithdrawalsAdmin,
     processWithdrawalAdminAction
-  } from '../../services/paymentService.js';
+  } = require('../../services/paymentService');
   
   /**
    * Get pending withdrawals for admin approval
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const getPendingWithdrawalsController = async (req, res) => {
+  const getPendingWithdrawalsController = async (req, res) => {
     try {
       const { page = 1, limit = 10 } = req.query;
       const result = await getPendingWithdrawals(parseInt(page), parseInt(limit));
@@ -34,7 +34,7 @@ import {
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const getWithdrawalsController = async (req, res) => {
+  const getWithdrawalsController = async (req, res) => {
     try {
       const { 
         page = 1, 
@@ -73,7 +73,7 @@ import {
    * @param {Object} req - Express request object
    * @param {Object} res - Express response object
    */
-  export const processWithdrawalActionController = async (req, res) => {
+  const processWithdrawalActionController = async (req, res) => {
     try {
       const { withdrawal_id, action, notes } = req.body;
       const adminId = req.user.user_id;
@@ -120,7 +120,7 @@ import {
     }
   };
   
-  export default {
+  module.exports = {
     getPendingWithdrawalsController,
     getWithdrawalsController,
     processWithdrawalActionController

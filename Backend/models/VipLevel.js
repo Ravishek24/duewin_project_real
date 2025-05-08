@@ -1,6 +1,6 @@
 // models/VipLevel.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
 
 const VipLevel = sequelize.define('VipLevel', {
     id: {
@@ -51,4 +51,4 @@ const VipLevel = sequelize.define('VipLevel', {
     timestamps: false
 });
 
-export default VipLevel;
+module.exports = VipLevel;

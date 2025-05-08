@@ -1,8 +1,8 @@
 // Backend/scripts/gameScheduler.js
-import { redis } from '../config/redisConfig.js';
-import { sequelize } from '../config/db.js';
-import gameLogicService from '../services/gameLogicService.js';
-import { broadcastToGame } from '../services/websocketService.js';
+const { redis } = require('../config/redisConfig');
+const { sequelize } = require('../config/db');
+const gameLogicService = require('../services/gameLogicService');
+const { broadcastToGame } = require('../services/websocketService');
 
 /**
  * Game scheduler to handle processing of game results
@@ -114,3 +114,7 @@ process.on('SIGINT', async () => {
   await sequelize.close();
   process.exit(0);
 });
+
+module.exports = {
+  startGameScheduler
+};

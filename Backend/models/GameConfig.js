@@ -1,6 +1,6 @@
 // Backend/models/GameConfig.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const GameConfig = sequelize.define('GameConfig', {
     config_id: {
@@ -145,4 +145,4 @@ GameConfig.getDefaultMultipliers = (gameType) => {
     }
 };
 
-export default GameConfig;
+module.exports = GameConfig;

@@ -1,5 +1,5 @@
 // scripts/cleanupSessions.js
-import { cleanupExpiredSessions } from '../services/seamlessWalletService.js';
+const { cleanupExpiredSessions } = require('../services/seamlessWalletService');
 
 /**
  * Cleanup script for expired sessions
@@ -20,3 +20,7 @@ const runCleanup = async () => {
 
 // Run the cleanup
 runCleanup();
+
+module.exports = {
+  cleanupSessions
+};

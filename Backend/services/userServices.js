@@ -1,9 +1,9 @@
-import bcrypt from 'bcrypt';
-import User from '../models/User.js';
-import { Op } from 'sequelize';
-import { generateJWT } from '../utils/tokenUtils.js';
-import referralService from './referralService.js';
-import otpService from './otpService.js';
+const bcrypt = require('bcrypt');
+const User = require('../models/User');
+const { Op } = require('sequelize');
+const { generateJWT } = require('../utils/tokenUtils');
+const referralService = require('./referralService');
+const otpService = require('./otpService');
 
 // Function to generate a unique referral code
 const generateReferralCode = async () => {
@@ -23,7 +23,7 @@ const generateReferralCode = async () => {
 };
 
 // Service to create a new user
-export const createUser = async (userData, ipAddress) => {
+const createUser = async (userData, ipAddress) => {
     const { user_name, email, phone_no, password, referral_code, country_code = '91' } = userData;
 
     try {
@@ -113,7 +113,7 @@ export const createUser = async (userData, ipAddress) => {
 };
 
 // Service to verify phone OTP after registration
-export const verifyPhoneOtp = async (userId, otpSessionId) => {
+const verifyPhoneOtp = async (userId, otpSessionId) => {
     try {
         // Find user
         const user = await User.findByPk(userId);
@@ -180,7 +180,7 @@ export const verifyPhoneOtp = async (userId, otpSessionId) => {
 };
 
 // Service to resend OTP for phone verification
-export const resendPhoneOtp = async (userId) => {
+const resendPhoneOtp = async (userId) => {
     try {
         // Find user
         const user = await User.findByPk(userId);
@@ -236,7 +236,7 @@ export const resendPhoneOtp = async (userId) => {
 };
 
 // Service to login a user
-export const loginUser = async (credentials, ipAddress) => {
+const loginUser = async (credentials, ipAddress) => {
     const { email, password } = credentials;
 
     try {
@@ -338,7 +338,7 @@ export const loginUser = async (credentials, ipAddress) => {
 };
 
 // Service to get user profile
-export const getUserProfile = async (userId) => {
+const getUserProfile = async (userId) => {
     try {
         const user = await User.findByPk(userId, {
             attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'created_at']
@@ -365,7 +365,7 @@ export const getUserProfile = async (userId) => {
 };
 
 // Service to update user profile
-export const updateUserProfile = async (userId, userData) => {
+const updateUserProfile = async (userId, userData) => {
     try {
         const { user_name, phone_no, country_code } = userData;
 
@@ -447,7 +447,7 @@ export const updateUserProfile = async (userId, userData) => {
 };
 
 // Service to verify OTP for phone update
-export const verifyPhoneUpdateOtp = async (userId, otpSessionId, newPhone) => {
+const verifyPhoneUpdateOtp = async (userId, otpSessionId, newPhone) => {
     try {
         // Find user
         const user = await User.findByPk(userId);
@@ -510,13 +510,12 @@ export const verifyPhoneUpdateOtp = async (userId, otpSessionId, newPhone) => {
     }
 };
 
-
 /**
  * Request password reset via SMS (no email)
  * @param {string} email - User's email to identify account
  * @returns {Object} - Result of password reset request
  */
-export const requestPasswordReset = async (email) => {
+const requestPasswordReset = async (email) => {
     try {
         // Find user by email
         const user = await User.findOne({ where: { email } });
@@ -530,17 +529,13 @@ export const requestPasswordReset = async (email) => {
         }
         
         // Generate reset token
-        const resetToken = crypto.randomBytes(16).toString('hex');
-        const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+        const resetToken = generateJWT(user.user_id, user.email, '1h');
         
-        // Set token expiry (1 hour)
-        const resetTokenExpiry = new Date(Date.now() + 3600000);
-        
-        // Store hashed token in database
+        // Update user with reset token
         await User.update(
-            { 
-                reset_token: resetTokenHash,
-                reset_token_expiry: resetTokenExpiry 
+            {
+                reset_token: resetToken,
+                reset_token_expiry: new Date(Date.now() + 3600000) // 1 hour from now
             },
             { where: { user_id: user.user_id } }
         );
@@ -570,10 +565,10 @@ export const requestPasswordReset = async (email) => {
  * @param {string} token - Reset token
  * @returns {Object} - Validation result
  */
-export const validateResetToken = async (token) => {
+const validateResetToken = async (token) => {
     try {
         // Hash the provided token
-        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const tokenHash = generateJWT(null, null, null, token);
         
         // Find user with matching token that hasn't expired
         const user = await User.findOne({
@@ -610,7 +605,7 @@ export const validateResetToken = async (token) => {
  * @param {string} newPassword - New password
  * @returns {Object} - Password reset result
  */
-export const resetPassword = async (token, newPassword) => {
+const resetPassword = async (token, newPassword) => {
     try {
         // Validate token first
         const validation = await validateResetToken(token);
@@ -645,13 +640,11 @@ export const resetPassword = async (token, newPassword) => {
     }
 };
 
-// Add these to your exports in userServices.js
-
-export default {
+module.exports = {
     createUser,
-    loginUser,
     verifyPhoneOtp,
     resendPhoneOtp,
+    loginUser,
     getUserProfile,
     updateUserProfile,
     verifyPhoneUpdateOtp,

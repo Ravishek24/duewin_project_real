@@ -1,7 +1,7 @@
 // models/RebateLevel.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User');
 
 const RebateLevel = sequelize.define('RebateLevel', {
     id: {
@@ -103,4 +103,4 @@ const RebateLevel = sequelize.define('RebateLevel', {
     timestamps: false
 });
 
-export default RebateLevel;
+module.exports = RebateLevel;

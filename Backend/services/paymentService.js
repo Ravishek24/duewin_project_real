@@ -1,16 +1,16 @@
-import axios from 'axios';
-import { sequelize } from '../config/db.js';
-import { paymentConfig } from '../config/paymentConfig.js';
-import { generateSignature } from '../utils/generateSignature.js';
-import User from '../models/User.js';
-import WalletRecharge from '../models/WalletRecharge.js';
-import WalletWithdrawal from '../models/WalletWithdrawal.js';
-import BankAccount from '../models/BankAccount.js';
-import WithdrawalAdmin from '../models/WithdrawalAdmin.js';
-import referralService from './referralService.js';
-import otpService from './otpService.js';
-import { processWePayTransfer } from './wePayService.js';
-import { Op } from 'sequelize';
+const axios = require('axios');
+const { sequelize } = require('../config/db');
+const { paymentConfig } = require('../config/paymentConfig');
+const { generateSignature } = require('../utils/generateSignature');
+const User = require('../models/User');
+const WalletRecharge = require('../models/WalletRecharge');
+const WalletWithdrawal = require('../models/WalletWithdrawal');
+const BankAccount = require('../models/BankAccount');
+const WithdrawalAdmin = require('../models/WithdrawalAdmin');
+const referralService = require('./referralService');
+const otpService = require('./otpService');
+const { processWePayTransfer } = require('./wePayService');
+const { Op } = require('sequelize');
 
 /**
  * Creates a PayIn order (deposit)
@@ -21,7 +21,7 @@ import { Op } from 'sequelize';
  * @param {string} notifyUrl - Callback URL for notifications
  * @returns {Object} - API response
  */
-export const createPayInOrder = async (userId, orderId, payType, amount, notifyUrl) => {
+const createPayInOrder = async (userId, orderId, payType, amount, notifyUrl) => {
   const t = await sequelize.transaction();
   
   try {
@@ -113,7 +113,7 @@ export const createPayInOrder = async (userId, orderId, payType, amount, notifyU
  * @param {string} withdrawalType - BANK or UPI
  * @returns {Object} - Response with OTP session details
  */
-export const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType = 'BANK') => {
+const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType = 'BANK') => {
   const t = await sequelize.transaction();
   
   try {
@@ -217,7 +217,7 @@ export const initiateWithdrawal = async (userId, bankAccountId, amount, withdraw
  * @param {string} gateway - Payment gateway to use (OKPAY or WEPAY)
  * @returns {Object} - Response with withdrawal details
  */
-export const verifyWithdrawalOtp = async (userId, otpSessionId, gateway = 'OKPAY') => {
+const verifyWithdrawalOtp = async (userId, otpSessionId, gateway = 'OKPAY') => {
   const t = await sequelize.transaction();
   
   try {
@@ -366,7 +366,7 @@ export const verifyWithdrawalOtp = async (userId, otpSessionId, gateway = 'OKPAY
  * @param {string} notes - Admin notes or rejection reason
  * @returns {Object} - Processing result
  */
-export const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes = '') => {
+const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes = '') => {
   const t = await sequelize.transaction();
   
   try {
@@ -507,7 +507,7 @@ export const processWithdrawalAdminAction = async (adminId, withdrawalId, action
  * @param {string} notifyUrl - Notification URL for callbacks
  * @returns {Object} - Processing result
  */
-export const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
+const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
   const t = await sequelize.transaction();
   
   try {
@@ -608,14 +608,12 @@ export const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
   }
 };
 
-// File: Backend/services/paymentService.js
-
 /**
  * Process PayIn callback from payment gateway
  * @param {Object} callbackData - Callback data from payment gateway
  * @returns {Object} - Processing result
  */
-export const processPayInCallback = async (callbackData) => {
+const processPayInCallback = async (callbackData) => {
   // Extract callback data
   const {
       mchId,
@@ -764,7 +762,7 @@ export const processPayInCallback = async (callbackData) => {
  * @param {Object} callbackData - Callback data from payment gateway
  * @returns {Object} - Processing result
  */
-export const processPayOutCallback = async (callbackData) => {
+const processPayOutCallback = async (callbackData) => {
   // Extract callback data
   const {
     mchId,
@@ -900,7 +898,7 @@ export const processPayOutCallback = async (callbackData) => {
  * @param {string} orderId - Order ID to check
  * @returns {Object} - Payment status
  */
-export const getPaymentStatus = async (orderId) => {
+const getPaymentStatus = async (orderId) => {
   try {
     // Determine if this is a PayIn or PayOut order
     const isPayIn = orderId.startsWith('PI');
@@ -980,18 +978,13 @@ export const getPaymentStatus = async (orderId) => {
   }
 };
 
-
-// Add these functions to your services/paymentService.js file
-
-
-
 /**
  * Get pending withdrawals for admin approval
  * @param {number} page - Page number
  * @param {number} limit - Items per page
  * @returns {Object} - List of pending withdrawals with pagination
  */
-export const getPendingWithdrawals = async (page = 1, limit = 10) => {
+const getPendingWithdrawals = async (page = 1, limit = 10) => {
   try {
     const offset = (page - 1) * limit;
     
@@ -1040,7 +1033,7 @@ export const getPendingWithdrawals = async (page = 1, limit = 10) => {
  * @param {number} limit - Items per page
  * @returns {Object} - List of filtered withdrawals with pagination
  */
-export const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
+const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
   try {
     const offset = (page - 1) * limit;
     
@@ -1110,13 +1103,7 @@ export const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) =>
   }
 };
 
-// Make sure to export these new functions in your export block
-// Add this to your existing exports in paymentService.js
-
-
-// Update your export statement in paymentService.js to include the new functions
-
-export default {
+module.exports = {
   createPayInOrder,
   initiateWithdrawal,
   verifyWithdrawalOtp,

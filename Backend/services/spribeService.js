@@ -1,14 +1,14 @@
 // services/spribeService.js - Updated
-import axios from 'axios';
-import { spribeConfig } from '../config/spribeConfig.js';
-import { 
+const axios = require('axios');
+const { spribeConfig } = require('../config/spribeConfig');
+const { 
   generateGameLaunchUrl, 
   generateSecurityHeaders, 
   formatAmount, 
   parseAmount 
-} from '../utils/spribeUtils.js';
-import User from '../models/User.js';
-import { 
+} = require('../utils/spribeUtils');
+const User = require('../models/User');
+const { 
   createGameSession, 
   updateGameSession,
   endGameSession,
@@ -16,7 +16,7 @@ import {
   processWinTransaction,
   processRollbackTransaction,
   findTransactionByProviderTxId
-} from './gameTransactionService.js';
+} = require('./gameTransactionService');
 
 /**
  * Get game launch URL
@@ -25,7 +25,7 @@ import {
  * @param {Object} req - Request object with IP address
  * @returns {Object} Response with URL and status
  */
-export const getGameLaunchUrl = async (gameId, userId, req) => {
+const getGameLaunchUrl = async (gameId, userId, req) => {
   try {
     // Validate game ID
     if (!spribeConfig.providers[gameId]) {
@@ -88,7 +88,7 @@ export const getGameLaunchUrl = async (gameId, userId, req) => {
  * @param {Object} authData - Auth request data
  * @returns {Object} Auth response
  */
-export const handleAuth = async (authData) => {
+const handleAuth = async (authData) => {
   const { user_token, session_token, platform, currency } = authData;
   
   try {
@@ -139,7 +139,7 @@ export const handleAuth = async (authData) => {
  * @param {Object} infoData - Info request data
  * @returns {Object} Player info response
  */
-export const handlePlayerInfo = async (infoData) => {
+const handlePlayerInfo = async (infoData) => {
   const { user_id, session_token, currency } = infoData;
   
   try {
@@ -177,7 +177,7 @@ export const handlePlayerInfo = async (infoData) => {
  * @param {Object} withdrawData - Withdraw request data
  * @returns {Object} Withdraw response
  */
-export const handleWithdraw = async (withdrawData) => {
+const handleWithdraw = async (withdrawData) => {
   const {
     user_id,
     currency,
@@ -273,7 +273,7 @@ export const handleWithdraw = async (withdrawData) => {
  * @param {Object} depositData - Deposit request data
  * @returns {Object} Deposit response
  */
-export const handleDeposit = async (depositData) => {
+const handleDeposit = async (depositData) => {
   const {
     user_id,
     currency,
@@ -362,7 +362,7 @@ export const handleDeposit = async (depositData) => {
  * @param {Object} rollbackData - Rollback request data
  * @returns {Object} Rollback response
  */
-export const handleRollback = async (rollbackData) => {
+const handleRollback = async (rollbackData) => {
   const {
     user_id,
     amount,
@@ -461,7 +461,7 @@ export const handleRollback = async (rollbackData) => {
  * List available games
  * @returns {Array} List of available games
  */
-export const listGames = async () => {
+const listGames = async () => {
   try {
     // Convert the spribeConfig.providers object to an array of game objects
     const games = Object.entries(spribeConfig.providers).map(([id, provider]) => ({
@@ -499,7 +499,7 @@ const generateOneTimeToken = () => {
   return require('crypto').randomBytes(32).toString('hex');
 };
 
-export default {
+module.exports = {
   getGameLaunchUrl,
   handleAuth,
   handlePlayerInfo,

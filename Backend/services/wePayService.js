@@ -1,15 +1,15 @@
 // services/wePayService.js
-import axios from 'axios';
-import { sequelize } from '../config/db.js';
-import { wePayConfig } from '../config/wePayConfig.js';
-import { generateWePaySignature, verifyWePaySignature } from '../utils/wePaySignature.js';
-import User from '../models/User.js';
-import WalletRecharge from '../models/WalletRecharge.js';
-import WalletWithdrawal from '../models/WalletWithdrawal.js';
-import BankAccount from '../models/BankAccount.js';
-import WithdrawalAdmin from '../models/WithdrawalAdmin.js';
-import referralService from './referralService.js';
-import otpService from './otpService.js';
+const axios = require('axios');
+const { sequelize } = require('../config/db');
+const { wePayConfig } = require('../config/wePayConfig');
+const { generateWePaySignature, verifyWePaySignature } = require('../utils/wePaySignature');
+const User = require('../models/User');
+const WalletRecharge = require('../models/WalletRecharge');
+const WalletWithdrawal = require('../models/WalletWithdrawal');
+const BankAccount = require('../models/BankAccount');
+const WithdrawalAdmin = require('../models/WithdrawalAdmin');
+const referralService = require('./referralService');
+const otpService = require('./otpService');
 
 /**
  * Create a collection (deposit) order with WePayGlobal
@@ -20,7 +20,7 @@ import otpService from './otpService.js';
  * @param {string} returnUrl - Return URL after payment
  * @returns {Object} - Response with payment URL
  */
-export const createWePayCollectionOrder = async (userId, orderId, amount, notifyUrl, returnUrl) => {
+const createWePayCollectionOrder = async (userId, orderId, amount, notifyUrl, returnUrl) => {
   const t = await sequelize.transaction();
   
   try {
@@ -115,7 +115,7 @@ export const createWePayCollectionOrder = async (userId, orderId, amount, notify
  * @param {Object} callbackData - Callback data from WePay
  * @returns {Object} - Processing result
  */
-export const processWePayCollectionCallback = async (callbackData) => {
+const processWePayCollectionCallback = async (callbackData) => {
   // Verify signature
   if (!verifyWePaySignature(callbackData, callbackData.sign)) {
     return {
@@ -232,7 +232,7 @@ export const processWePayCollectionCallback = async (callbackData) => {
  * @param {string} notifyUrl - Notification URL for callbacks
  * @returns {Object} - Processing result
  */
-export const processWePayTransfer = async (withdrawalId, notifyUrl) => {
+const processWePayTransfer = async (withdrawalId, notifyUrl) => {
   const t = await sequelize.transaction();
   
   try {
@@ -353,7 +353,7 @@ export const processWePayTransfer = async (withdrawalId, notifyUrl) => {
  * @param {Object} callbackData - Callback data from WePay
  * @returns {Object} - Processing result
  */
-export const processWePayTransferCallback = async (callbackData) => {
+const processWePayTransferCallback = async (callbackData) => {
   // Verify signature
   if (!verifyWePaySignature(callbackData, callbackData.sign, true)) {
     return {
@@ -476,7 +476,7 @@ export const processWePayTransferCallback = async (callbackData) => {
   }
 };
 
-export default {
+module.exports = {
   createWePayCollectionOrder,
   processWePayCollectionCallback,
   processWePayTransfer,

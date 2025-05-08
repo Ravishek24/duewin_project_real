@@ -1,9 +1,9 @@
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User.js');
 
 const WalletRecharge = sequelize.define('WalletRecharge', {
-    recharge_id: {
+    id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
@@ -12,61 +12,74 @@ const WalletRecharge = sequelize.define('WalletRecharge', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         }
     },
-    phone_no: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        validate: {
-            len: [10, 15] // Ensures phone number length is between 10 and 15 characters
-        }
-    },
-    added_amount: {
+    amount: {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false
     },
-    // Order id from our system
-    order_id: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        unique: true
-    },
-    // Transaction id from payment gateway
-    transaction_id: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    time_of_request: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    },
-    time_of_success: {
-        type: DataTypes.DATE,
-        allowNull: true
-    },
-    payment_gateway: {
-        type: DataTypes.STRING,
+    payment_method: {
+        type: DataTypes.ENUM('bank', 'usdt'),
         allowNull: false
     },
-    payment_status: {
-        type: DataTypes.BOOLEAN,
-        defaultValue: false
+    status: {
+        type: DataTypes.ENUM('pending', 'completed', 'failed'),
+        allowNull: false,
+        defaultValue: 'pending'
     },
-    remark: {
+    transaction_id: {
         type: DataTypes.STRING,
-        allowNull: true
+        allowNull: true,
+        unique: true
+    },
+    bank_account_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: 'bank_accounts',
+            key: 'id'
+        }
+    },
+    usdt_account_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: 'usdt_accounts',
+            key: 'id'
+        }
+    },
+    created_at: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW
+    },
+    updated_at: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'wallet_recharges',
     timestamps: true,
     createdAt: 'created_at',
-    updatedAt: 'updated_at'
+    updatedAt: 'updated_at',
+    indexes: [
+        {
+            fields: ['user_id']
+        },
+        {
+            fields: ['status']
+        },
+        {
+            fields: ['payment_method']
+        }
+    ]
 });
 
 // Set up association
 User.hasMany(WalletRecharge, { foreignKey: 'user_id' });
 WalletRecharge.belongsTo(User, { foreignKey: 'user_id' });
 
-export default WalletRecharge;
+module.exports = WalletRecharge;

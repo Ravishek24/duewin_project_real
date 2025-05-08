@@ -1,10 +1,10 @@
 // models/SeamlessTransaction.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User.js');
 
 const SeamlessTransaction = sequelize.define('SeamlessTransaction', {
-  transaction_id: {
+  id: {
     type: DataTypes.INTEGER,
     primaryKey: true,
     autoIncrement: true
@@ -13,111 +13,72 @@ const SeamlessTransaction = sequelize.define('SeamlessTransaction', {
     type: DataTypes.INTEGER,
     allowNull: false,
     references: {
-      model: User,
-      key: 'user_id'
+      model: 'users',
+      key: 'id'
     }
   },
-  remote_id: {
+  game_session_id: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    references: {
+      model: 'seamless_game_sessions',
+      key: 'id'
+    }
+  },
+  provider_tx_id: {
     type: DataTypes.STRING,
     allowNull: false,
-    comment: 'The remote ID from the game provider'
-  },
-  provider_transaction_id: {
-    type: DataTypes.STRING,
-    allowNull: false,
-    unique: true,
-    comment: 'The transaction ID from the game provider'
-  },
-  provider: {
-    type: DataTypes.STRING,
-    allowNull: false,
-    comment: 'The game provider code'
-  },
-  game_id: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    comment: 'The game ID'
-  },
-  game_id_hash: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    comment: 'The game hash ID'
-  },
-  round_id: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    comment: 'The round ID'
-  },
-  type: {
-    type: DataTypes.ENUM('balance', 'debit', 'credit', 'rollback'),
-    allowNull: false
+    unique: true
   },
   amount: {
-    type: DataTypes.DECIMAL(15, 2),
-    allowNull: false,
-    defaultValue: 0.00
-  },
-  session_id: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
-  wallet_balance_before: {
-    type: DataTypes.DECIMAL(15, 2),
+    type: DataTypes.DECIMAL(10, 2),
     allowNull: false
   },
-  wallet_balance_after: {
-    type: DataTypes.DECIMAL(15, 2),
+  type: {
+    type: DataTypes.ENUM('bet', 'win', 'rollback'),
     allowNull: false
-  },
-  is_freeround_bet: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
-  },
-  is_freeround_win: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
-  },
-  is_jackpot_win: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
-  },
-  jackpot_contribution_in_amount: {
-    type: DataTypes.DECIMAL(15, 6),
-    defaultValue: 0.000000
-  },
-  gameplay_final: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
   },
   status: {
-    type: DataTypes.ENUM('success', 'failed', 'rolledback'),
-    defaultValue: 'success'
+    type: DataTypes.ENUM('pending', 'completed', 'failed', 'rolled_back'),
+    allowNull: false,
+    defaultValue: 'pending'
   },
-  related_transaction_id: {
+  related_tx_id: {
     type: DataTypes.STRING,
     allowNull: true,
-    comment: 'Reference to original transaction for rollbacks'
+    comment: 'Related transaction ID for rollbacks'
   },
   created_at: {
     type: DataTypes.DATE,
+    allowNull: false,
+    defaultValue: DataTypes.NOW
+  },
+  updated_at: {
+    type: DataTypes.DATE,
+    allowNull: false,
     defaultValue: DataTypes.NOW
   }
 }, {
   tableName: 'seamless_transactions',
-  timestamps: false,
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
   indexes: [
-    {
-      unique: true,
-      fields: ['provider_transaction_id']
-    },
     {
       fields: ['user_id']
     },
     {
-      fields: ['round_id']
+      fields: ['game_session_id']
+    },
+    {
+      unique: true,
+      fields: ['provider_tx_id']
     },
     {
       fields: ['type']
+    },
+    {
+      fields: ['status']
     }
   ]
 });
@@ -126,4 +87,4 @@ const SeamlessTransaction = sequelize.define('SeamlessTransaction', {
 User.hasMany(SeamlessTransaction, { foreignKey: 'user_id' });
 SeamlessTransaction.belongsTo(User, { foreignKey: 'user_id' });
 
-export default SeamlessTransaction;
+module.exports = SeamlessTransaction;

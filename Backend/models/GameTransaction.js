@@ -1,10 +1,10 @@
 // models/GameTransaction.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User.js');
 
 const GameTransaction = sequelize.define('GameTransaction', {
-    transaction_id: {
+    id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
@@ -13,88 +13,58 @@ const GameTransaction = sequelize.define('GameTransaction', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         }
     },
-    provider: {
-        type: DataTypes.STRING,
-        allowNull: false
-    },
-    game_id: {
-        type: DataTypes.STRING,
-        allowNull: false
-    },
-    provider_tx_id: {
-        type: DataTypes.STRING,
+    game_session_id: {
+        type: DataTypes.INTEGER,
         allowNull: false,
-        unique: true
-    },
-    operator_tx_id: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        unique: true
-    },
-    type: {
-        type: DataTypes.ENUM('bet', 'win', 'rollback', 'freebet'),
-        allowNull: false
+        references: {
+            model: 'game_sessions',
+            key: 'id'
+        }
     },
     amount: {
-        type: DataTypes.DECIMAL(15, 2),
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: false
     },
-    currency: {
-        type: DataTypes.STRING,
+    type: {
+        type: DataTypes.ENUM('bet', 'win'),
         allowNull: false
     },
     status: {
-        type: DataTypes.ENUM('pending', 'completed', 'failed', 'rolled_back'),
+        type: DataTypes.ENUM('pending', 'completed', 'failed'),
+        allowNull: false,
         defaultValue: 'pending'
-    },
-    action_id: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    platform: {
-        type: DataTypes.ENUM('mobile', 'desktop'),
-        allowNull: false
-    },
-    ip_address: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    related_tx_id: {
-        type: DataTypes.STRING,
-        allowNull: true,
-        comment: 'Related transaction ID for rollbacks or wins'
     },
     created_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'game_transactions',
-    timestamps: false,
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     indexes: [
         {
-            unique: true,
-            fields: ['provider_tx_id']
+            fields: ['user_id']
         },
         {
-            fields: ['user_id']
+            fields: ['game_session_id']
         },
         {
             fields: ['type']
         },
         {
             fields: ['status']
-        },
-        {
-            fields: ['created_at']
         }
     ]
 });
@@ -103,4 +73,4 @@ const GameTransaction = sequelize.define('GameTransaction', {
 User.hasMany(GameTransaction, { foreignKey: 'user_id' });
 GameTransaction.belongsTo(User, { foreignKey: 'user_id' });
 
-export default GameTransaction;
+module.exports = GameTransaction;

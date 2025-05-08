@@ -1,10 +1,10 @@
-import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
-import dotenv from 'dotenv';
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
-export const auth = async (req, res, next) => {
+const auth = async (req, res, next) => {
     try {
         // Get token from header
         const authHeader = req.headers.authorization;
@@ -68,7 +68,7 @@ export const auth = async (req, res, next) => {
 };
 
 // Middleware to check if phone is verified
-export const requirePhoneVerification = (req, res, next) => {
+const requirePhoneVerification = (req, res, next) => {
     if (!req.user.is_phone_verified) {
         return res.status(403).json({
             success: false,
@@ -78,4 +78,4 @@ export const requirePhoneVerification = (req, res, next) => {
     next();
 };
 
-export default { auth, requirePhoneVerification };
+module.exports = { auth, requirePhoneVerification };

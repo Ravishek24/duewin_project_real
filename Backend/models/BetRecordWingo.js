@@ -1,7 +1,7 @@
 // Backend/models/BetRecordWingo.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
-import User from './User.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const User = require('./User');
 
 const BetRecordWingo = sequelize.define('BetRecordWingo', {
     bet_id: {
@@ -93,4 +93,4 @@ const BetRecordWingo = sequelize.define('BetRecordWingo', {
 User.hasMany(BetRecordWingo, { foreignKey: 'user_id' });
 BetRecordWingo.belongsTo(User, { foreignKey: 'user_id' });
 
-export default BetRecordWingo;
+module.exports = BetRecordWingo;

@@ -1,12 +1,12 @@
 // Backend/services/websocketService.js
-import { Server } from 'socket.io';
-import { redis } from '../config/redisConfig.js';
-import { 
+const { Server } = require('socket.io');
+const { redis } = require('../config/redisConfig');
+const { 
   getActivePeriods, 
   getPeriodStatus, 
   generatePeriodId, 
   calculatePeriodEndTime 
-} from './gameLogicService.js';
+} = require('./gameLogicService.js');
 
 // Socket.io server instance
 let io;
@@ -15,7 +15,7 @@ let io;
  * Initialize the WebSocket server
  * @param {Object} server - HTTP server instance
  */
-export const initializeWebSocket = (server) => {
+const initializeWebSocket = (server) => {
   // Create Socket.io server
   io = new Server(server, {
     cors: {
@@ -403,7 +403,7 @@ const getNextPeriodId = (currentPeriodId) => {
  * @param {string} event - Event name
  * @param {Object} data - Event data
  */
-export const broadcastToGame = (gameType, duration, event, data) => {
+const broadcastToGame = (gameType, duration, event, data) => {
   const roomId = `${gameType}_${duration}`;
   io.to(roomId).emit(event, data);
 };
@@ -413,11 +413,11 @@ export const broadcastToGame = (gameType, duration, event, data) => {
  * @param {string} event - Event name
  * @param {Object} data - Event data
  */
-export const broadcastToAll = (event, data) => {
+const broadcastToAll = (event, data) => {
   io.emit(event, data);
 };
 
-export default {
+module.exports = {
   initializeWebSocket,
   broadcastToGame,
   broadcastToAll

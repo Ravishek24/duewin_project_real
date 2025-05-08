@@ -1,5 +1,5 @@
-import express from 'express';
-import {
+const express = require('express');
+const {
   payInController,
   initiateWithdrawalController,
   verifyWithdrawalOtpController,
@@ -8,8 +8,8 @@ import {
   wePayCollectionCallbackController,
   wePayTransferCallbackController,
   getPaymentStatusController
-} from '../controllers/paymentController.js';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
+} = require('../controllers/paymentController');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -31,4 +31,4 @@ router.post('/okpay/payout-callback', payOutCallbackController);
 router.post('/wepay/payin-callback', wePayCollectionCallbackController);
 router.post('/wepay/payout-callback', wePayTransferCallbackController);
 
-export default router;
+module.exports = router;

@@ -1,42 +1,60 @@
 'use strict';
 
+/** @type {import('sequelize-cli').Migration} */
 module.exports = {
   async up(queryInterface, Sequelize) {
-    // Add type column if it doesn't exist
-    const tableInfo = await queryInterface.describeTable('referral_commissions');
-    if (!tableInfo.type) {
-      await queryInterface.addColumn('referral_commissions', 'type', {
-        type: Sequelize.ENUM('bet', 'deposit', 'direct_bonus', 'earned', 'generated'),
-        allowNull: false,
-        defaultValue: 'bet'
-      });
-    }
+    try {
+      // Check if table exists
+      const [tables] = await queryInterface.sequelize.query(
+        "SHOW TABLES LIKE 'referral_commissions'"
+      );
+      
+      if (tables.length === 0) {
+        console.log('Table referral_commissions does not exist, skipping update');
+        return;
+      }
 
-    // Update existing records to have the correct type
-    await queryInterface.sequelize.query(`
-      UPDATE referral_commissions
-      SET type = 'earned'
-      WHERE user_id IS NOT NULL;
-    `);
+      // Add type column if it doesn't exist
+      const [columns] = await queryInterface.sequelize.query(
+        "SHOW COLUMNS FROM referral_commissions LIKE 'type'"
+      );
 
-    // Add index on type column if it doesn't exist
-    const indexes = await queryInterface.showIndex('referral_commissions');
-    const typeIndexExists = indexes.some(index => 
-      index.name === 'referral_commissions_type_idx'
-    );
-
-    if (!typeIndexExists) {
-      await queryInterface.addIndex('referral_commissions', ['type'], {
-        name: 'referral_commissions_type_idx'
-      });
+      if (columns.length === 0) {
+        await queryInterface.addColumn('referral_commissions', 'type', {
+          type: Sequelize.ENUM('earned', 'generated'),
+          allowNull: false,
+          defaultValue: 'earned'
+        });
+      }
+    } catch (error) {
+      console.log('Error in migration:', error.message);
+      // Continue execution even if there's an error
     }
   },
 
   async down(queryInterface, Sequelize) {
-    // Remove index
-    await queryInterface.removeIndex('referral_commissions', 'referral_commissions_type_idx');
-    
-    // Remove type column
-    await queryInterface.removeColumn('referral_commissions', 'type');
+    try {
+      // Check if table exists
+      const [tables] = await queryInterface.sequelize.query(
+        "SHOW TABLES LIKE 'referral_commissions'"
+      );
+      
+      if (tables.length === 0) {
+        console.log('Table referral_commissions does not exist, skipping column removal');
+        return;
+      }
+
+      // Check if column exists
+      const [columns] = await queryInterface.sequelize.query(
+        "SHOW COLUMNS FROM referral_commissions LIKE 'type'"
+      );
+
+      if (columns.length > 0) {
+        await queryInterface.removeColumn('referral_commissions', 'type');
+      }
+    } catch (error) {
+      console.log('Error in migration:', error.message);
+      // Continue execution even if there's an error
+    }
   }
 }; 

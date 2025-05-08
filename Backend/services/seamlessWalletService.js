@@ -1,18 +1,18 @@
 // services/seamlessWalletService.js
-import axios from 'axios';
-import { Op } from 'sequelize';
-import { sequelize } from '../config/db.js';
-import { seamlessConfig } from '../config/seamlessConfig.js';
-import User from '../models/User.js';
-import SeamlessTransaction from '../models/SeamlessTransaction.js';
-import SeamlessGameSession from '../models/SeamlessGameSession.js';
+const axios = require('axios');
+const { Op } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { seamlessConfig } = require('../config/seamlessConfig');
+const User = require('../models/User');
+const SeamlessTransaction = require('../models/SeamlessTransaction');
+const SeamlessGameSession = require('../models/SeamlessGameSession');
 
 /**
  * Get list of available games from provider
  * @param {string} currency - Currency code (default: INR)
  * @returns {Promise<Object>} List of games
  */
-export const getGameList = async (currency = seamlessConfig.default_currency) => {
+const getGameList = async (currency = seamlessConfig.default_currency) => {
   try {
     const requestData = {
       api_login: seamlessConfig.api_login,
@@ -50,7 +50,7 @@ export const getGameList = async (currency = seamlessConfig.default_currency) =>
  * @param {number} userId - User ID
  * @returns {Promise<Object>} Player info or false
  */
-export const playerExists = async (userId) => {
+const playerExists = async (userId) => {
   try {
     // Get user
     const user = await User.findByPk(userId);
@@ -97,7 +97,7 @@ export const playerExists = async (userId) => {
  * @param {number} userId - User ID
  * @returns {Promise<Object>} Created player info
  */
-export const createPlayer = async (userId) => {
+const createPlayer = async (userId) => {
   try {
     // Get user
     const user = await User.findByPk(userId);
@@ -152,7 +152,7 @@ export const createPlayer = async (userId) => {
  * @param {string} language - Language code
  * @returns {Promise<Object>} Game launch URL
  */
-export const getGameUrl = async (userId, gameId, language = seamlessConfig.default_language) => {
+const getGameUrl = async (userId, gameId, language = seamlessConfig.default_language) => {
   try {
     // First, check if player exists
     const playerCheck = await playerExists(userId);
@@ -229,7 +229,7 @@ export const getGameUrl = async (userId, gameId, language = seamlessConfig.defau
  * @param {Object} queryParams - The query parameters from the request
  * @returns {Promise<Object>} Response for the provider
  */
-export const processBalanceRequest = async (queryParams) => {
+const processBalanceRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
@@ -311,7 +311,7 @@ export const processBalanceRequest = async (queryParams) => {
  * @param {Object} queryParams - The query parameters from the request
  * @returns {Promise<Object>} Response for the provider
  */
-export const processDebitRequest = async (queryParams) => {
+const processDebitRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
@@ -443,7 +443,7 @@ export const processDebitRequest = async (queryParams) => {
  * @param {Object} queryParams - The query parameters from the request
  * @returns {Promise<Object>} Response for the provider
  */
-export const processCreditRequest = async (queryParams) => {
+const processCreditRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
@@ -565,7 +565,7 @@ export const processCreditRequest = async (queryParams) => {
  * @param {Object} queryParams - The query parameters from the request
  * @returns {Promise<Object>} Response for the provider
  */
-export const processRollbackRequest = async (queryParams) => {
+const processRollbackRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
@@ -715,7 +715,7 @@ export const processRollbackRequest = async (queryParams) => {
  * @param {string} sessionToken - Session token
  * @returns {Promise<Object>} Result
  */
-export const closeGameSession = async (sessionToken) => {
+const closeGameSession = async (sessionToken) => {
   try {
     const gameSession = await SeamlessGameSession.findOne({
       where: { session_token: sessionToken, is_active: true }
@@ -751,7 +751,7 @@ export const closeGameSession = async (sessionToken) => {
  * Check for and close expired sessions
  * @returns {Promise<Object>} Result with count of closed sessions
  */
-export const cleanupExpiredSessions = async () => {
+const cleanupExpiredSessions = async () => {
   try {
     // Find sessions that haven't had activity for the configured expiry time
     const expiryTime = new Date();
@@ -798,7 +798,7 @@ export const cleanupExpiredSessions = async () => {
  * @param {string} betLevel - Bet level (min, med, max)
  * @returns {Promise<Object>} Response from API
  */
-export const addFreeRounds = async (
+const addFreeRounds = async (
   title,
   playerIds,
   gameIds,
@@ -853,7 +853,7 @@ export const addFreeRounds = async (
  * @param {string} playerIds - Comma-separated player IDs (optional)
  * @returns {Promise<Object>} Response from API
  */
-export const removeFreeRounds = async (freeRoundId, playerIds = '') => {
+const removeFreeRounds = async (freeRoundId, playerIds = '') => {
   try {
     const requestData = {
       api_login: seamlessConfig.api_login,
@@ -889,7 +889,7 @@ export const removeFreeRounds = async (freeRoundId, playerIds = '') => {
   }
 };
 
-export default {
+module.exports = {
   getGameList,
   playerExists,
   createPlayer,

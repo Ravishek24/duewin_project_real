@@ -1,6 +1,6 @@
 // Backend/models/GamePeriod.js
-import { DataTypes } from 'sequelize';
-import { sequelize } from '../config/db.js';
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const GamePeriod = sequelize.define('GamePeriod', {
     period_id: {
@@ -84,4 +84,4 @@ const GamePeriod = sequelize.define('GamePeriod', {
     ]
 });
 
-export default GamePeriod;
+module.exports = GamePeriod;

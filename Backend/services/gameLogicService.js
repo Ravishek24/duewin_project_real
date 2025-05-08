@@ -1,12 +1,11 @@
 // Backend/services/gameLogicService.js
-import { redis } from '../config/redisConfig.js';
-import { sequelize } from '../config/db.js';
-import User from '../models/User.js';
-import BetRecordWingo from '../models/BetRecordWingo.js';
-import BetResultWingo from '../models/BetResultWingo.js';
-import { v4 as uuidv4 } from 'uuid';
-import referralService from './referralService.js';
-
+const { redis } = require('../config/redisConfig');
+const { sequelize } = require('../config/db');
+const User = require('../models/User');
+const BetRecordWingo = require('../models/BetRecordWingo');
+const BetResultWingo = require('../models/BetResultWingo');
+const { v4: uuidv4 } = require('uuid');
+const referralService = require('./referralService');
 
 /**
  * Calculate optimized game result based on 60/40 algorithm
@@ -15,7 +14,7 @@ import referralService from './referralService.js';
  * @param {string} periodId - Period identifier
  * @returns {Object} - Optimized result and expected payout
  */
-export const calculateOptimizedResult = async (gameType, duration, periodId) => {
+const calculateOptimizedResult = async (gameType, duration, periodId) => {
     try {
       const durationKey = duration === 30 ? '30s' : 
                           duration === 60 ? '1m' : 
@@ -91,7 +90,7 @@ export const calculateOptimizedResult = async (gameType, duration, periodId) => 
  * @param {string} gameType - Game type (wingo, fiveD, k3)
  * @returns {Object} - Fallback result and expected payout
  */
-export const generateFallbackResult = async (gameType) => {
+const generateFallbackResult = async (gameType) => {
     try {
       // Generate all possible results for the game type
       const possibleResults = await generateAllPossibleResults(gameType);
@@ -147,7 +146,7 @@ export const generateFallbackResult = async (gameType) => {
  * @param {string} gameType - Game type (wingo, fiveD, k3)
  * @returns {Object} - Random result object
  */
-export const generateRandomResult = (gameType) => {
+const generateRandomResult = (gameType) => {
   switch (gameType) {
     case 'wingo':
       const number = Math.floor(Math.random() * 10); // 0-9
@@ -193,7 +192,7 @@ export const generateRandomResult = (gameType) => {
  * @param {string} gameType - Game type (wingo, fiveD, k3)
  * @returns {Array} - Array of all possible results
  */
-export const generateAllPossibleResults = async (gameType) => {
+const generateAllPossibleResults = async (gameType) => {
   switch (gameType) {
     case 'wingo':
       // For Wingo, there are 10 possible results (0-9)
@@ -257,7 +256,7 @@ export const generateAllPossibleResults = async (gameType) => {
  * @param {Object} result - Result object
  * @returns {number} - Expected payout
  */
-export const calculateExpectedPayout = async (gameType, durationKey, periodId, result) => {
+const calculateExpectedPayout = async (gameType, durationKey, periodId, result) => {
   let totalPayout = 0;
   
   switch (gameType) {
@@ -322,7 +321,7 @@ export const calculateExpectedPayout = async (gameType, durationKey, periodId, r
  * @param {string} betValue - Value that was bet on
  * @param {number} betAmount - Effective bet amount
  */
-export const storeBetInRedis = async (
+const storeBetInRedis = async (
   gameType, 
   duration, 
   periodId, 
@@ -390,7 +389,7 @@ export const storeBetInRedis = async (
  * @param {Object} betData - Bet data
  * @returns {Object} - Processing result
  */
-export const processBet = async (betData) => {
+const processBet = async (betData) => {
   const {
     userId,
     gameType,
@@ -513,7 +512,7 @@ export const processBet = async (betData) => {
  * @param {string} gameType - Game type (wingo, fiveD, k3)
  * @returns {Array} - Array of active periods
  */
-export const getActivePeriods = async (gameType) => {
+const getActivePeriods = async (gameType) => {
   try {
     const activePeriods = [];
     
@@ -605,7 +604,7 @@ const addPeriods = (activePeriods, gameType, duration, now) => {
  * @param {Date} now - Current date/time
  * @returns {string} - Period ID
  */
-export const generatePeriodId = (gameType, duration, now = new Date()) => {
+const generatePeriodId = (gameType, duration, now = new Date()) => {
     const date = now.toISOString().split('T')[0].replace(/-/g, '');
     
     // Calculate period number based on duration
@@ -628,7 +627,7 @@ export const generatePeriodId = (gameType, duration, now = new Date()) => {
  * @param {string} currentPeriodId - Current period ID
  * @returns {string} - Next period ID
  */
-export const generateNextPeriodId = (currentPeriodId) => {
+const generateNextPeriodId = (currentPeriodId) => {
   // Extract the numerical part of the period ID
   const prefix = currentPeriodId.replace(/\d+$/, '');
   const periodNumber = parseInt(currentPeriodId.match(/\d+$/)[0], 10);
@@ -648,7 +647,7 @@ export const generateNextPeriodId = (currentPeriodId) => {
  * @param {number} duration - Duration in seconds
  * @returns {Date} - End time
  */
-export const calculatePeriodEndTime = (periodId, duration) => {
+const calculatePeriodEndTime = (periodId, duration) => {
     // Extract date from period ID (now the first 8 characters)
     const dateStr = periodId.substring(0, 8);
     const year = parseInt(dateStr.substring(0, 4), 10);
@@ -670,7 +669,7 @@ export const calculatePeriodEndTime = (periodId, duration) => {
  * @param {string} periodId - Period ID
  * @returns {Object} - Period status
  */
-export const getPeriodStatus = async (gameType, duration, periodId) => {
+const getPeriodStatus = async (gameType, duration, periodId) => {
   try {
     // Calculate end time
     const endTime = calculatePeriodEndTime(periodId, duration);
@@ -716,7 +715,7 @@ export const getPeriodStatus = async (gameType, duration, periodId) => {
  * @param {string} periodId - Period ID
  * @param {Object} result - Result object
  */
-export const storeTemporaryResult = async (gameType, duration, periodId, result) => {
+const storeTemporaryResult = async (gameType, duration, periodId, result) => {
   const durationKey = duration === 30 ? '30s' : 
                       duration === 60 ? '1m' : 
                       duration === 180 ? '3m' : 
@@ -737,7 +736,7 @@ export const storeTemporaryResult = async (gameType, duration, periodId, result)
  * @param {number} duration - Duration in seconds
  * @param {string} periodId - Period ID
  */
-export const processGameResults = async (gameType, duration, periodId) => {
+const processGameResults = async (gameType, duration, periodId) => {
     const t = await sequelize.transaction();
     
     try {
@@ -802,7 +801,7 @@ export const processGameResults = async (gameType, duration, periodId) => {
  * @param {Object} result - Result object
  * @param {Object} transaction - Database transaction
  */
-export const processUserBets = async (gameType, duration, periodId, result, transaction) => {
+const processUserBets = async (gameType, duration, periodId, result, transaction) => {
   try {
     // Get all bets for this period
     let userBets;
@@ -903,7 +902,7 @@ export const processUserBets = async (gameType, duration, periodId, result, tran
  * @param {string} periodId - Period ID
  * @returns {Object} - Bet distribution data
  */
-export const getBetDistribution = async (gameType, duration, periodId) => {
+const getBetDistribution = async (gameType, duration, periodId) => {
   try {
     const durationKey = duration === 30 ? '30s' : 
                         duration === 60 ? '1m' : 
@@ -1074,7 +1073,7 @@ export const getBetDistribution = async (gameType, duration, periodId) => {
  * @param {number} adminId - Admin user ID
  * @returns {Object} - Override result
  */
-export const overrideResult = async (gameType, duration, periodId, result, adminId) => {
+const overrideResult = async (gameType, duration, periodId, result, adminId) => {
   try {
     // Validate that the period has not ended yet
     const periodStatus = await getPeriodStatus(gameType, duration, periodId);
@@ -1123,7 +1122,7 @@ export const overrideResult = async (gameType, duration, periodId, result, admin
  * @param {number} limit - Results per page
  * @returns {Object} - Game history data
  */
-export const getGameHistory = async (gameType, page = 1, limit = 20) => {
+const getGameHistory = async (gameType, page = 1, limit = 20) => {
   try {
     const offset = (page - 1) * limit;
     let results;
@@ -1164,7 +1163,7 @@ export const getGameHistory = async (gameType, page = 1, limit = 20) => {
   }
 };
 
-export default {
+module.exports = {
   calculateOptimizedResult,
   generateRandomResult,
   processBet,

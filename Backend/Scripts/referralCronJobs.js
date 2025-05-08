@@ -1,6 +1,6 @@
 // scripts/referralCronJobs.js
-import { processRebateCommission, recordBetExperience } from '../services/referralService.js';
-import { sequelize } from '../config/db.js';
+const { processRebateCommission, recordBetExperience } = require('../services/referralService');
+const { sequelize } = require('../config/db');
 
 
 // scripts/referralCronJobs.js (continued)
@@ -293,7 +293,9 @@ const processLotteryRebate = async () => {
     }
    };
 
-   
-   
-   // Run the jobs
-   runJobs();
+module.exports = {
+  runReferralCronJobs: runJobs
+};
+
+// Run the jobs
+runJobs();

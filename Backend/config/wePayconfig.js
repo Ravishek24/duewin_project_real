@@ -1,9 +1,9 @@
 // config/wePayConfig.js
-import dotenv from 'dotenv';
+const dotenv = require('dotenv');
 
 dotenv.config();
 
-export const wePayConfig = {
+const wePayConfig = {
   // API Base URLs
   collectUrl: 'https://api.wepayglobal.com/pay/web',
   transferUrl: 'https://api.wepayglobal.com/pay/transfer',
@@ -28,4 +28,4 @@ export const wePayConfig = {
   signType: "MD5"
 };
 
-export default wePayConfig;
+module.exports = wePayConfig;

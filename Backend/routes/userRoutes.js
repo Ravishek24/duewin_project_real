@@ -1,5 +1,5 @@
-import express from 'express';
-import { 
+const express = require('express');
+const { 
     loginController, 
     signupController,
     forgotPasswordController,
@@ -7,8 +7,8 @@ import {
     resetPasswordController,
     getProfileController,
     updateProfileController
-} from '../controllers/userController/index.js';
-import { auth, requirePhoneVerification } from '../middlewares/authMiddleware.js';
+} = require('../controllers/userController/index');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -31,4 +31,4 @@ router.get('/dashboard', auth, requirePhoneVerification, (req, res) => {
     });
 });
 
-export default router;
+module.exports = router;

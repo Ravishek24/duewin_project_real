@@ -1,9 +1,9 @@
 // routes/gameRoutes.js
-import express from 'express';
-import { fetchGameList } from '../controllers/gameController.js';
+const express = require('express');
+const { fetchGameList } = require('../controllers/gameController');
 
 const router = express.Router();
 
 router.get('/games', fetchGameList);
 
-export default router;
+module.exports = router;

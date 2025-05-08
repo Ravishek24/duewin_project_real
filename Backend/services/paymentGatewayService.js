@@ -1,13 +1,13 @@
 // services/paymentGatewayService.js
-import PaymentGateway from '../models/PaymentGateway.js';
-import { sequelize } from '../config/db.js';
+const PaymentGateway = require('../models/PaymentGateway');
+const { sequelize } = require('../config/db');
 
 /**
  * Get all active payment gateways
  * @param {boolean} forDeposit - If true, return gateways for deposit, else for withdrawal
  * @returns {Array} - List of active payment gateways
  */
-export const getActivePaymentGateways = async (forDeposit = true) => {
+const getActivePaymentGateways = async (forDeposit = true) => {
   try {
     const gateways = await PaymentGateway.findAll({
       where: {
@@ -35,7 +35,7 @@ export const getActivePaymentGateways = async (forDeposit = true) => {
  * @param {string} code - Gateway code
  * @returns {Object} - Payment gateway details
  */
-export const getPaymentGatewayByCode = async (code) => {
+const getPaymentGatewayByCode = async (code) => {
   try {
     const gateway = await PaymentGateway.findOne({
       where: { code }
@@ -66,7 +66,7 @@ export const getPaymentGatewayByCode = async (code) => {
  * @param {Object} gatewayData - Gateway data
  * @returns {Object} - Created gateway
  */
-export const createPaymentGateway = async (gatewayData) => {
+const createPaymentGateway = async (gatewayData) => {
   const t = await sequelize.transaction();
   
   try {
@@ -110,7 +110,7 @@ export const createPaymentGateway = async (gatewayData) => {
  * @param {Object} gatewayData - Updated gateway data
  * @returns {Object} - Update result
  */
-export const updatePaymentGateway = async (gatewayId, gatewayData) => {
+const updatePaymentGateway = async (gatewayId, gatewayData) => {
   const t = await sequelize.transaction();
   
   try {
@@ -166,7 +166,7 @@ export const updatePaymentGateway = async (gatewayId, gatewayData) => {
  * @param {number} gatewayId - Gateway ID
  * @returns {Object} - Toggle result
  */
-export const togglePaymentGatewayStatus = async (gatewayId) => {
+const togglePaymentGatewayStatus = async (gatewayId) => {
   const t = await sequelize.transaction();
   
   try {
@@ -205,7 +205,7 @@ export const togglePaymentGatewayStatus = async (gatewayId) => {
  * Initialize default payment gateways
  * @returns {Object} - Result
  */
-export const initializeDefaultGateways = async () => {
+const initializeDefaultGateways = async () => {
   const t = await sequelize.transaction();
   
   try {
@@ -268,7 +268,7 @@ export const initializeDefaultGateways = async () => {
   }
 };
 
-export default {
+module.exports = {
   getActivePaymentGateways,
   getPaymentGatewayByCode,
   createPaymentGateway,

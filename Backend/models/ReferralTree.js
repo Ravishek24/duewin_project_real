@@ -1,7 +1,7 @@
 // models/ReferralTree.js
-import { sequelize } from '../config/db.js';
-import { DataTypes } from 'sequelize';
-import User from './User.js';
+const { sequelize } = require('../config/db');
+const { DataTypes } = require('sequelize');
+const User = require('./User.js');
 
 const ReferralTree = sequelize.define('ReferralTree', {
     id: {
@@ -13,55 +13,51 @@ const ReferralTree = sequelize.define('ReferralTree', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         }
     },
-    level_1: {
-        type: DataTypes.TEXT,
+    referrer_id: {
+        type: DataTypes.INTEGER,
         allowNull: true,
-        comment: 'Comma-separated list of user IDs directly referred (Level 1)'
+        references: {
+            model: 'users',
+            key: 'id'
+        }
     },
-    level_2: {
-        type: DataTypes.TEXT,
-        allowNull: true,
-        comment: 'Comma-separated list of user IDs referred by Level 1 users'
-    },
-    level_3: {
-        type: DataTypes.TEXT,
-        allowNull: true,
-        comment: 'Comma-separated list of user IDs referred by Level 2 users'
-    },
-    level_4: {
-        type: DataTypes.TEXT,
-        allowNull: true,
-        comment: 'Comma-separated list of user IDs referred by Level 3 users'
-    },
-    level_5: {
-        type: DataTypes.TEXT,
-        allowNull: true,
-        comment: 'Comma-separated list of user IDs referred by Level 4 users'
-    },
-    level_6: {
-        type: DataTypes.TEXT,
-        allowNull: true,
-        comment: 'Comma-separated list of user IDs referred by Level 5 users'
+    level: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 1
     },
     created_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'referral_trees',
-    timestamps: false
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    indexes: [
+        {
+            unique: true,
+            fields: ['user_id']
+        },
+        {
+            fields: ['referrer_id']
+        }
+    ]
 });
 
 // Establish relationship
 User.hasOne(ReferralTree, { foreignKey: 'user_id' });
 ReferralTree.belongsTo(User, { foreignKey: 'user_id' });
 
-export default ReferralTree;
+module.exports = ReferralTree;

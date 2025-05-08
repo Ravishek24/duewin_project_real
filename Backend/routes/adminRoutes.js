@@ -1,12 +1,12 @@
 // routes/adminRoutes.js
-import express from 'express';
-import { 
+const express = require('express');
+const { 
   getPendingWithdrawalsController,
   getWithdrawalsController,
   processWithdrawalActionController
-} from '../controllers/adminController/withdrawalController.js';
-import { auth } from '../middlewares/authMiddleware.js';
-import { isAdmin } from '../middlewares/adminMiddleware.js';
+} = require('../controllers/adminController/withdrawalController');
+const { auth } = require('../middlewares/authMiddleware');
+const { isAdmin } = require('../middlewares/adminMiddleware');
 
 const router = express.Router();
 
@@ -19,4 +19,4 @@ router.get('/withdrawals/pending', getPendingWithdrawalsController);
 router.get('/withdrawals', getWithdrawalsController);
 router.post('/withdrawals/process', processWithdrawalActionController);
 
-export default router;
+module.exports = router;

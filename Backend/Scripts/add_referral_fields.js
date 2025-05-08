@@ -1,5 +1,5 @@
 // Backend/scripts/add_referral_fields.js
-import { sequelize } from '../config/db.js';
+const { sequelize } = require('../config/db');
 
 const addReferralFields = async () => {
   try {
@@ -29,3 +29,7 @@ const addReferralFields = async () => {
 };
 
 addReferralFields();
+
+module.exports = {
+  addReferralFields
+};
