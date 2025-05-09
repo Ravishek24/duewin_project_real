@@ -110,7 +110,7 @@ module.exports = {
 };
 
 // Only run directly if this file is being executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (require.main === module) {
     updateValidReferrals().then(() => {
         console.log('Valid referral update complete');
         process.exit(0);

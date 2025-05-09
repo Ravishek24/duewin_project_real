@@ -1,7 +1,6 @@
 // models/ReferralTree.js
 const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
-const User = require('./User.js');
 
 const ReferralTree = sequelize.define('ReferralTree', {
     id: {
@@ -14,7 +13,7 @@ const ReferralTree = sequelize.define('ReferralTree', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
     referrer_id: {
@@ -22,13 +21,32 @@ const ReferralTree = sequelize.define('ReferralTree', {
         allowNull: true,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
-    level: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-        defaultValue: 1
+    level_1: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
+    level_2: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
+    level_3: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
+    level_4: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
+    level_5: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
+    level_6: {
+        type: DataTypes.TEXT,
+        allowNull: true
     },
     created_at: {
         type: DataTypes.DATE,
@@ -55,9 +73,5 @@ const ReferralTree = sequelize.define('ReferralTree', {
         }
     ]
 });
-
-// Establish relationship
-User.hasOne(ReferralTree, { foreignKey: 'user_id' });
-ReferralTree.belongsTo(User, { foreignKey: 'user_id' });
 
 module.exports = ReferralTree;

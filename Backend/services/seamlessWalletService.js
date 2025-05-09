@@ -849,22 +849,21 @@ const addFreeRounds = async (
 
 /**
  * Remove free rounds from players
- * @param {string} freeRoundId - Free round ID to remove
- * @param {string} playerIds - Comma-separated player IDs (optional)
- * @returns {Promise<Object>} Response from API
+ * @param {string} title - Title of the free rounds to remove
+ * @param {string} playerIds - Comma-separated list of player IDs
+ * @param {string} gameIds - Comma-separated list of game IDs
+ * @returns {Promise<Object>} Result of the operation
  */
-const removeFreeRounds = async (freeRoundId, playerIds = '') => {
+const removeFreeRounds = async (title, playerIds, gameIds) => {
   try {
     const requestData = {
       api_login: seamlessConfig.api_login,
       api_password: seamlessConfig.api_password,
       method: 'removeFreeRounds',
-      freeround_id: freeRoundId
+      title: title,
+      player_ids: playerIds,
+      game_ids: gameIds
     };
-    
-    if (playerIds) {
-      requestData.playerids = playerIds;
-    }
 
     const response = await axios.post(
       seamlessConfig.api_url.production,
@@ -878,7 +877,7 @@ const removeFreeRounds = async (freeRoundId, playerIds = '') => {
     return {
       success: true,
       message: 'Free rounds removed successfully',
-      data: response.data.response
+      response: response.data.response
     };
   } catch (error) {
     console.error('Error in removeFreeRounds:', error);

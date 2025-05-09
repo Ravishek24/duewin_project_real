@@ -15,7 +15,7 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         },
         comment: 'User who earned the commission'
     },
@@ -24,7 +24,7 @@ const ReferralCommission = sequelize.define('ReferralCommission', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         },
         comment: 'User who generated the commission'
     },

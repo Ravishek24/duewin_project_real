@@ -13,7 +13,7 @@ const BankAccount = sequelize.define('BankAccount', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
     bank_name: {

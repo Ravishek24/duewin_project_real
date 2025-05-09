@@ -40,6 +40,18 @@ const payInController = async (req, res) => {
     let notifyUrl = '';
     let returnUrl = `${process.env.FRONTEND_URL}/wallet`;
 
+    // Find the payment gateway ID by code
+    const paymentGateway = await PaymentGateway.findOne({
+      where: { code: gateway, is_active: true }
+    });
+
+    if (!paymentGateway) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or inactive payment gateway'
+      });
+    }
+
     // Set the appropriate callback URL based on gateway
     switch (gateway) {
       case 'WEPAY':
@@ -59,15 +71,15 @@ const payInController = async (req, res) => {
     switch (gateway) {
       case 'WEPAY':
         // Use WePay payment gateway
-        result = await createWePayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl);
+        result = await createWePayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
         break;
       case 'MXPAY':
         // Use MxPay payment gateway
-        result = await createMxPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl);
+        result = await createMxPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
         break;
       default:
         // Default to OKPAY payment gateway
-        result = await createPayInOrder(userId, orderId, pay_type, amount, notifyUrl);
+        result = await createPayInOrder(userId, orderId, pay_type, amount, notifyUrl, paymentGateway.gateway_id);
         break;
     }
 

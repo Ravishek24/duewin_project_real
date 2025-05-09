@@ -14,23 +14,19 @@ const GameTransaction = sequelize.define('GameTransaction', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
-    game_session_id: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-        references: {
-            model: 'game_sessions',
-            key: 'id'
-        }
+    game_type: {
+        type: DataTypes.STRING,
+        allowNull: false
     },
     amount: {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false
     },
     type: {
-        type: DataTypes.ENUM('bet', 'win'),
+        type: DataTypes.ENUM('bet', 'win', 'refund'),
         allowNull: false
     },
     status: {
@@ -58,9 +54,6 @@ const GameTransaction = sequelize.define('GameTransaction', {
             fields: ['user_id']
         },
         {
-            fields: ['game_session_id']
-        },
-        {
             fields: ['type']
         },
         {
@@ -69,8 +62,9 @@ const GameTransaction = sequelize.define('GameTransaction', {
     ]
 });
 
-// Establish relationship
+// Add user association only
 User.hasMany(GameTransaction, { foreignKey: 'user_id' });
 GameTransaction.belongsTo(User, { foreignKey: 'user_id' });
 
+// Export the model only
 module.exports = GameTransaction;

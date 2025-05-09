@@ -18,7 +18,7 @@ const AttendanceRecord = require('./AttendanceRecord');
 const GameSession = require('./GameSession');
 const GameTransaction = require('./GameTransaction');
 const SeamlessTransaction = require('./SeamlessTransaction');
-const SeamlessGameSession = require('./seamlessGameSession');
+const SeamlessGameSession = require('./SeamlessGameSession');
 const PaymentGateway = require('./PaymentGateway');
 const GameConfig = require('./GameConfig');
 const GamePeriod = require('./GamePeriod');
@@ -71,8 +71,8 @@ const setupAssociations = () => {
     User.hasOne(UserRebateLevel, { foreignKey: 'user_id' });
     UserRebateLevel.belongsTo(User, { foreignKey: 'user_id' });
 
-    RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level' });
-    UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level', targetKey: 'level' });
+    RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level_id' });
+    UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level_id', targetKey: 'id' });
 
     // Game relationships
     User.hasMany(GameSession, { foreignKey: 'user_id' });
@@ -104,11 +104,71 @@ setupAssociations();
 // Function to initialize all models
 const initializeModels = async () => {
     try {
-        // Instead of sync, we'll just verify the connection
+        // First verify the connection
         await sequelize.authenticate();
         console.log('✅ Database connection established successfully');
         
-        // Log that models are loaded
+        // Don't sync automatically - use migrations instead
+        // await sequelize.sync({ alter: true });
+        
+        // Disable any auto-sync completely
+        sequelize.sync = function() {
+            console.log('⚠️ Attempted automatic sync operation blocked');
+            return Promise.resolve();
+        };
+        
+        // Aggressive fix to drop any newly added session_id column
+        try {
+            await sequelize.query('SET FOREIGN_KEY_CHECKS = 0;');
+            
+            // Check if session_id exists in game_transactions
+            const [hasGameSessionId] = await sequelize.query(`
+                SELECT COUNT(*) as count 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_SCHEMA = DATABASE() 
+                AND TABLE_NAME = 'game_transactions' 
+                AND COLUMN_NAME = 'session_id'
+            `);
+            
+            if (hasGameSessionId[0].count > 0) {
+                console.log('Found session_id in game_transactions, removing it');
+                await sequelize.query(`
+                    ALTER TABLE game_transactions 
+                    DROP FOREIGN KEY IF EXISTS game_transactions_session_id_foreign_idx;
+                `).catch(() => {});
+                
+                await sequelize.query(`
+                    ALTER TABLE game_transactions DROP COLUMN session_id;
+                `).catch(() => {});
+            }
+            
+            // Check if session_id exists in seamless_transactions
+            const [hasSeamlessSessionId] = await sequelize.query(`
+                SELECT COUNT(*) as count 
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_SCHEMA = DATABASE() 
+                AND TABLE_NAME = 'seamless_transactions' 
+                AND COLUMN_NAME = 'session_id'
+            `);
+            
+            if (hasSeamlessSessionId[0].count > 0) {
+                console.log('Found session_id in seamless_transactions, removing it');
+                await sequelize.query(`
+                    ALTER TABLE seamless_transactions 
+                    DROP FOREIGN KEY IF EXISTS seamless_transactions_session_id_foreign_idx;
+                `).catch(() => {});
+                
+                await sequelize.query(`
+                    ALTER TABLE seamless_transactions DROP COLUMN session_id;
+                `).catch(() => {});
+            }
+            
+            await sequelize.query('SET FOREIGN_KEY_CHECKS = 1;');
+        } catch (error) {
+            console.error('Error fixing database schema:', error);
+            // Continue execution even if there's an error
+        }
+        
         console.log('✅ All models loaded successfully');
     } catch (error) {
         console.error('❌ Error initializing models:', error);
@@ -148,4 +208,3 @@ module.exports = {
     initializeModels
 };
 
-// Add this function to sync the models in Backend/index.js  222.222

@@ -25,4 +25,6 @@ const validateSeamlessRequest = (req, res, next) => {
   }
 };
 
-module.exports = validateSeamlessRequest;
+module.exports = {
+  validateSeamlessRequest
+};

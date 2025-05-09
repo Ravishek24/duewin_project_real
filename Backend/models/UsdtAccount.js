@@ -1,5 +1,6 @@
 const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
+const User = require('./User.js');
 
 const UsdtAccount = sequelize.define('UsdtAccount', {
     id: {
@@ -12,15 +13,15 @@ const UsdtAccount = sequelize.define('UsdtAccount', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
-    wallet_address: {
+    address: {
         type: DataTypes.STRING,
         allowNull: false
     },
     network: {
-        type: DataTypes.ENUM('TRC20', 'ERC20', 'BEP20'),
+        type: DataTypes.STRING,
         allowNull: false
     },
     created_at: {
@@ -44,9 +45,13 @@ const UsdtAccount = sequelize.define('UsdtAccount', {
         },
         {
             unique: true,
-            fields: ['user_id', 'wallet_address']
+            fields: ['user_id', 'address']
         }
     ]
 });
+
+// Establish relationship
+User.hasMany(UsdtAccount, { foreignKey: 'user_id' });
+UsdtAccount.belongsTo(User, { foreignKey: 'user_id' });
 
 module.exports = UsdtAccount;

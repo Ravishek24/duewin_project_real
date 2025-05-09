@@ -14,39 +14,25 @@ const SeamlessTransaction = sequelize.define('SeamlessTransaction', {
     allowNull: false,
     references: {
       model: 'users',
-      key: 'id'
+      key: 'user_id'
     }
   },
-  game_session_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: 'seamless_game_sessions',
-      key: 'id'
-    }
-  },
-  provider_tx_id: {
+  game_type: {
     type: DataTypes.STRING,
-    allowNull: false,
-    unique: true
+    allowNull: false
   },
   amount: {
     type: DataTypes.DECIMAL(10, 2),
     allowNull: false
   },
   type: {
-    type: DataTypes.ENUM('bet', 'win', 'rollback'),
+    type: DataTypes.ENUM('bet', 'win', 'refund'),
     allowNull: false
   },
   status: {
-    type: DataTypes.ENUM('pending', 'completed', 'failed', 'rolled_back'),
+    type: DataTypes.ENUM('pending', 'completed', 'failed'),
     allowNull: false,
     defaultValue: 'pending'
-  },
-  related_tx_id: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    comment: 'Related transaction ID for rollbacks'
   },
   created_at: {
     type: DataTypes.DATE,
@@ -68,13 +54,6 @@ const SeamlessTransaction = sequelize.define('SeamlessTransaction', {
       fields: ['user_id']
     },
     {
-      fields: ['game_session_id']
-    },
-    {
-      unique: true,
-      fields: ['provider_tx_id']
-    },
-    {
       fields: ['type']
     },
     {
@@ -83,8 +62,9 @@ const SeamlessTransaction = sequelize.define('SeamlessTransaction', {
   ]
 });
 
-// Establish relationship
+// Add user association only
 User.hasMany(SeamlessTransaction, { foreignKey: 'user_id' });
 SeamlessTransaction.belongsTo(User, { foreignKey: 'user_id' });
 
+// Export the model only
 module.exports = SeamlessTransaction;

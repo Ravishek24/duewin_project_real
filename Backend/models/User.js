@@ -9,18 +9,18 @@ const User = sequelize.define('User', {
     },
     email: {
         type: DataTypes.STRING,
-        allowNull: false,
+        allowNull: true,
         unique: true,
         validate: {
-            isEmail: true, // Ensures the email format is valid
+            isEmail: true
         }
     },
     phone_no: {
         type: DataTypes.STRING,
-        allowNull: false,
+        allowNull: true,
         unique: true,
         validate: {
-            len: [10, 15] // Ensures phone number length is between 10 and 15 characters
+            len: [10, 15]
         }
     },
     user_name: {
@@ -31,7 +31,7 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         allowNull: false,
         validate: {
-            len: [6, 100] // Password must be at least 6 characters long
+            len: [6, 100]
         }
     },
     wallet_balance: {
@@ -41,6 +41,7 @@ const User = sequelize.define('User', {
     },
     is_phone_verified: {
         type: DataTypes.BOOLEAN,
+        allowNull: false,
         defaultValue: false
     },
     phone_otp_session_id: {
@@ -49,14 +50,14 @@ const User = sequelize.define('User', {
     },
     referral_code: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: true
     },
     referring_code: {
         type: DataTypes.STRING,
-        unique: true
+        allowNull: true
     },
     vip_exp: {
-        type: DataTypes.BIGINT,
+        type: DataTypes.INTEGER,
         allowNull: false,
         defaultValue: 0
     },
@@ -71,26 +72,24 @@ const User = sequelize.define('User', {
         defaultValue: 0
     },
     referral_level: {
-        type: DataTypes.STRING,
+        type: DataTypes.INTEGER,
         allowNull: false,
-        defaultValue: 'L0'
+        defaultValue: 0
     },
     current_ip: {
         type: DataTypes.STRING,
-        validate: {
-            isIP: true // Ensures valid IP address format
-        }
-    },
-    registration_ip: {
-        type: DataTypes.STRING,
+        allowNull: true,
         validate: {
             isIP: true
         }
     },
-
-    // Add these fields to your User model in models/User.js
-    // Inside the User.define() call, add these to your fields object:
-
+    registration_ip: {
+        type: DataTypes.STRING,
+        allowNull: true,
+        validate: {
+            isIP: true
+        }
+    },
     reset_token: {
         type: DataTypes.STRING,
         allowNull: true
@@ -98,19 +97,12 @@ const User = sequelize.define('User', {
     reset_token_expiry: {
         type: DataTypes.DATE,
         allowNull: true
-    },
-
-    created_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    },
-    updated_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'users',
-    timestamps: false
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
 });
 
 module.exports = User;

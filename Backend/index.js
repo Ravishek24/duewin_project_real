@@ -1,4 +1,8 @@
 // Backend/index.js
+// Install the direct hack fix FIRST before any other code runs
+const { installHackFix } = require('./config/hackFix');
+installHackFix();
+
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
@@ -8,8 +12,10 @@ const allRoutes = require('./routes/index');
 const internalGameRoutes = require('./routes/internalGameRoutes');
 const { initializeWebSocket } = require('./services/websocketService');
 require('./config/redisConfig'); // Import to initialize Redis connection
-const { updateValidReferrals } = require('./scripts/dailyReferralJobs');
+const { processDailyReferrals } = require('./scripts/dailyReferralJobs');
 const { initializeModels } = require('./models/index');
+const { prepareDatabase } = require('./scripts/prepDb');
+const { purgeForeignKeys } = require('./scripts/purgeForeignKeys');
 const cron = require('node-cron');
 
 // Load environment variables early
@@ -36,6 +42,14 @@ const startServer = async () => {
         // Connect to the database first
         await connectDB();
         console.log('✅ Database connected successfully');
+        
+        // Purge problematic foreign keys before doing anything else
+        await purgeForeignKeys();
+        console.log('✅ Foreign key purge completed');
+        
+        // Fix any database issues before initializing models
+        await prepareDatabase();
+        console.log('✅ Database preparation completed');
         
         // Initialize models
         try {
@@ -91,7 +105,7 @@ const startServer = async () => {
         cron.schedule('0 0 * * *', async () => {
             console.log('Running daily referral update job...');
             try {
-                await updateValidReferrals();
+                await processDailyReferrals();
                 console.log('✅ Daily referral update job completed successfully');
             } catch (error) {
                 console.error('❌ Error in daily referral update job:', error);
@@ -100,7 +114,7 @@ const startServer = async () => {
 
         // Run initial referral update
         try {
-            await updateValidReferrals();
+            await processDailyReferrals();
             console.log('✅ Initial referral update completed successfully');
         } catch (error) {
             console.error('❌ Error in initial referral update:', error);

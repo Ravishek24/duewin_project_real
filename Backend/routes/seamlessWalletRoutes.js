@@ -9,9 +9,9 @@ const {
   rollbackCallbackController,
   addFreeRoundsController,
   removeFreeRoundsController
-} = require('../controllers/seamlessController.js');
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware.js');
-const { validateSeamlessRequest } = require('../middlewares/seamlessMiddleware.js');
+} = require('../controllers/seamlessController');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+const { validateSeamlessRequest } = require('../middlewares/seamlessMiddleware');
 
 const router = express.Router();
 

@@ -1,6 +1,7 @@
 const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
 const User = require('./User.js');
+const PaymentGateway = require('./PaymentGateway.js');
 
 const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
     id: {
@@ -13,42 +14,37 @@ const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
     amount: {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false
     },
-    payment_method: {
-        type: DataTypes.ENUM('bank', 'usdt'),
-        allowNull: false
+    payment_gateway_id: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        references: {
+            model: 'payment_gateways',
+            key: 'gateway_id'
+        }
     },
     status: {
-        type: DataTypes.ENUM('pending', 'completed', 'failed'),
+        type: DataTypes.ENUM('pending', 'completed', 'failed', 'rejected'),
         allowNull: false,
         defaultValue: 'pending'
     },
-    transaction_id: {
+    admin_id: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: 'users',
+            key: 'user_id'
+        }
+    },
+    rejection_reason: {
         type: DataTypes.STRING,
-        allowNull: true,
-        unique: true
-    },
-    bank_account_id: {
-        type: DataTypes.INTEGER,
-        allowNull: true,
-        references: {
-            model: 'bank_accounts',
-            key: 'id'
-        }
-    },
-    usdt_account_id: {
-        type: DataTypes.INTEGER,
-        allowNull: true,
-        references: {
-            model: 'usdt_accounts',
-            key: 'id'
-        }
+        allowNull: true
     },
     created_at: {
         type: DataTypes.DATE,
@@ -70,16 +66,25 @@ const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
             fields: ['user_id']
         },
         {
+            fields: ['payment_gateway_id']
+        },
+        {
             fields: ['status']
         },
         {
-            fields: ['payment_method']
+            fields: ['admin_id']
         }
     ]
 });
 
-// Set up association
+// Establish relationships
 User.hasMany(WalletWithdrawal, { foreignKey: 'user_id' });
 WalletWithdrawal.belongsTo(User, { foreignKey: 'user_id' });
+
+User.hasMany(WalletWithdrawal, { foreignKey: 'admin_id' });
+WalletWithdrawal.belongsTo(User, { foreignKey: 'admin_id', as: 'admin' });
+
+PaymentGateway.hasMany(WalletWithdrawal, { foreignKey: 'payment_gateway_id' });
+WalletWithdrawal.belongsTo(PaymentGateway, { foreignKey: 'payment_gateway_id' });
 
 module.exports = WalletWithdrawal;

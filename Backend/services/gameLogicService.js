@@ -1,5 +1,5 @@
 // Backend/services/gameLogicService.js
-const { redis } = require('../config/redisConfig');
+const redis = require('../config/redisConfig');
 const { sequelize } = require('../config/db');
 const User = require('../models/User');
 const BetRecordWingo = require('../models/BetRecordWingo');

@@ -1,6 +1,6 @@
 // Backend/services/websocketService.js
 const { Server } = require('socket.io');
-const { redis } = require('../config/redisConfig');
+const { redis, isConnected } = require('../config/redisConfig');
 const { 
   getActivePeriods, 
   getPeriodStatus, 
@@ -103,6 +103,12 @@ const setupGameTypeTicks = (gameType, durations) => {
  */
 const gameTick = async (gameType, duration) => {
   try {
+    // Check Redis connection
+    if (!isConnected()) {
+      console.error('Redis not connected, skipping game tick');
+      return;
+    }
+
     const now = new Date();
     
     // Generate current period ID

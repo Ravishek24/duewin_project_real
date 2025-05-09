@@ -203,16 +203,25 @@ const addFreeRoundsController = async (req, res) => {
  */
 const removeFreeRoundsController = async (req, res) => {
   try {
-    const { freeRoundId } = req.params;
+    const {
+      title,
+      playerIds,
+      gameIds
+    } = req.body;
     
-    if (!freeRoundId) {
+    // Validate required fields
+    if (!title || !playerIds || !gameIds) {
       return res.status(400).json({
         success: false,
-        message: 'Free round ID is required'
+        message: 'Missing required fields'
       });
     }
     
-    const result = await removeFreeRounds(freeRoundId);
+    const result = await removeFreeRounds(
+      title,
+      playerIds,
+      gameIds
+    );
     
     if (result.success) {
       return res.status(200).json(result);

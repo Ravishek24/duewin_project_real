@@ -10,20 +10,20 @@ const ValidReferral = sequelize.define('ValidReferral', {
         primaryKey: true,
         autoIncrement: true
     },
-    referrer_id: {
+    user_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
-    referred_id: {
+    referred_user_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
     total_recharge: {
@@ -52,18 +52,23 @@ const ValidReferral = sequelize.define('ValidReferral', {
     updatedAt: 'updated_at',
     indexes: [
         {
+            fields: ['user_id']
+        },
+        {
+            fields: ['referred_user_id']
+        },
+        {
             unique: true,
-            fields: ['referrer_id', 'referred_id'],
-            name: 'valid_referrals_unique_pair'
+            fields: ['user_id', 'referred_user_id']
         }
     ]
 });
 
 // Establish relationships
-User.hasMany(ValidReferral, { foreignKey: 'referrer_id', as: 'Referrals' });
-ValidReferral.belongsTo(User, { foreignKey: 'referrer_id', as: 'Referrer' });
+User.hasMany(ValidReferral, { foreignKey: 'user_id' });
+ValidReferral.belongsTo(User, { foreignKey: 'user_id' });
 
-User.hasOne(ValidReferral, { foreignKey: 'referred_id', as: 'ReferredBy' });
-ValidReferral.belongsTo(User, { foreignKey: 'referred_id', as: 'Referred' });
+User.hasMany(ValidReferral, { foreignKey: 'referred_user_id' });
+ValidReferral.belongsTo(User, { foreignKey: 'referred_user_id', as: 'referredUser' });
 
 module.exports = ValidReferral;

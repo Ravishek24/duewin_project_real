@@ -1,6 +1,7 @@
 const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
 const User = require('./User.js');
+const PaymentGateway = require('./PaymentGateway.js');
 
 const WalletRecharge = sequelize.define('WalletRecharge', {
     id: {
@@ -13,42 +14,25 @@ const WalletRecharge = sequelize.define('WalletRecharge', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'id'
+            key: 'user_id'
         }
     },
     amount: {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false
     },
-    payment_method: {
-        type: DataTypes.ENUM('bank', 'usdt'),
-        allowNull: false
+    payment_gateway_id: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        references: {
+            model: 'payment_gateways',
+            key: 'gateway_id'
+        }
     },
     status: {
         type: DataTypes.ENUM('pending', 'completed', 'failed'),
         allowNull: false,
         defaultValue: 'pending'
-    },
-    transaction_id: {
-        type: DataTypes.STRING,
-        allowNull: true,
-        unique: true
-    },
-    bank_account_id: {
-        type: DataTypes.INTEGER,
-        allowNull: true,
-        references: {
-            model: 'bank_accounts',
-            key: 'id'
-        }
-    },
-    usdt_account_id: {
-        type: DataTypes.INTEGER,
-        allowNull: true,
-        references: {
-            model: 'usdt_accounts',
-            key: 'id'
-        }
     },
     created_at: {
         type: DataTypes.DATE,
@@ -70,16 +54,19 @@ const WalletRecharge = sequelize.define('WalletRecharge', {
             fields: ['user_id']
         },
         {
-            fields: ['status']
+            fields: ['payment_gateway_id']
         },
         {
-            fields: ['payment_method']
+            fields: ['status']
         }
     ]
 });
 
-// Set up association
+// Establish relationships
 User.hasMany(WalletRecharge, { foreignKey: 'user_id' });
 WalletRecharge.belongsTo(User, { foreignKey: 'user_id' });
+
+PaymentGateway.hasMany(WalletRecharge, { foreignKey: 'payment_gateway_id' });
+WalletRecharge.belongsTo(PaymentGateway, { foreignKey: 'payment_gateway_id' });
 
 module.exports = WalletRecharge;

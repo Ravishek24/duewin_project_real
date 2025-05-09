@@ -4,7 +4,7 @@ const { DataTypes } = require('sequelize');
 const User = require('./User');
 
 const GameSession = sequelize.define('GameSession', {
-    session_id: {
+    id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
@@ -13,86 +13,46 @@ const GameSession = sequelize.define('GameSession', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
+            model: 'users',
             key: 'user_id'
         }
     },
-    provider: {
+    game_type: {
         type: DataTypes.STRING,
         allowNull: false
     },
-    game_id: {
+    session_id: {
         type: DataTypes.STRING,
         allowNull: false
     },
-    launch_token: {
-        type: DataTypes.STRING,
+    balance: {
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
-        unique: true
+        defaultValue: 0
     },
-    session_token: {
-        type: DataTypes.STRING,
-        allowNull: true,
-        unique: true
-    },
-    currency: {
-        type: DataTypes.STRING,
-        allowNull: false
-    },
-    platform: {
-        type: DataTypes.ENUM('mobile', 'desktop'),
-        allowNull: true
-    },
-    ip_address: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    is_active: {
-        type: DataTypes.BOOLEAN,
-        defaultValue: true
-    },
-    start_time: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    },
-    end_time: {
-        type: DataTypes.DATE,
-        allowNull: true
+    status: {
+        type: DataTypes.ENUM('active', 'closed'),
+        allowNull: false,
+        defaultValue: 'active'
     },
     created_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
+        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
     tableName: 'game_sessions',
-    timestamps: false,
-    indexes: [
-        {
-            unique: true,
-            fields: ['launch_token']
-        },
-        {
-            unique: true,
-            fields: ['session_token']
-        },
-        {
-            fields: ['user_id']
-        },
-        {
-            fields: ['is_active']
-        },
-        {
-            fields: ['start_time']
-        }
-    ]
+    timestamps: false
 });
 
-// Establish relationship
+// Only establish User relationship
 User.hasMany(GameSession, { foreignKey: 'user_id' });
 GameSession.belongsTo(User, { foreignKey: 'user_id' });
 
+// Export only the model
 module.exports = GameSession;

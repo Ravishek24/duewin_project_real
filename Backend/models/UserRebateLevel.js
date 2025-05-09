@@ -18,14 +18,13 @@ const UserRebateLevel = sequelize.define('UserRebateLevel', {
             key: 'user_id'
         }
     },
-    rebate_level: {
-        type: DataTypes.STRING,
+    rebate_level_id: {
+        type: DataTypes.INTEGER,
         allowNull: false,
         references: {
             model: RebateLevel,
-            key: 'level'
-        },
-        defaultValue: 'L0'
+            key: 'id'
+        }
     },
     team_members_count: {
         type: DataTypes.INTEGER,
@@ -58,7 +57,7 @@ const UserRebateLevel = sequelize.define('UserRebateLevel', {
             fields: ['user_id']
         },
         {
-            fields: ['rebate_level']
+            fields: ['rebate_level_id']
         }
     ]
 });
@@ -67,7 +66,7 @@ const UserRebateLevel = sequelize.define('UserRebateLevel', {
 User.hasOne(UserRebateLevel, { foreignKey: 'user_id' });
 UserRebateLevel.belongsTo(User, { foreignKey: 'user_id' });
 
-RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level' });
-UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level', targetKey: 'level' });
+RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level_id' });
+UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level_id', targetKey: 'id' });
 
 module.exports = UserRebateLevel;

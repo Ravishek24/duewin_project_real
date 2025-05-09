@@ -38,7 +38,8 @@ const redis = createClient({
   }
 })();
 
+// Export both the client and a helper function to check connection
 module.exports = {
   redis,
-  redisClient
+  isConnected: () => redis.isOpen
 };

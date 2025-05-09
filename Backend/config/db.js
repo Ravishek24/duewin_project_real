@@ -1,32 +1,51 @@
 // config/db.js
 const { Sequelize } = require('sequelize');
 const dotenv = require('dotenv');
+const config = require('./config.cjs');
+const { SequelizeObserver } = require('./sequelizeObserver');
 
 dotenv.config();
 
+// Get the current environment
+const env = process.env.NODE_ENV || 'development';
+const dbConfig = config[env];
+
 // Create the Sequelize instance
 const sequelize = new Sequelize(
-    process.env.DB_NAME || 'diuwin',
-    process.env.DB_USER || 'root',
-    process.env.DB_PASS || '',
+    dbConfig.database,
+    dbConfig.username,
+    dbConfig.password,
     {
-        host: process.env.DB_HOST || 'localhost',
-        dialect: 'mysql',
+        host: dbConfig.host,
+        dialect: dbConfig.dialect,
         port: process.env.DB_PORT || 3306,
-        logging: false,
+        logging: dbConfig.logging,
         dialectOptions: {
             connectTimeout: 60000,
         },
+        // Disable sync operations completely
+        sync: {
+            force: false,
+            alter: false
+        }
     }
 );
+
+// Override the sync method to prevent automatic syncing
+const originalSync = sequelize.sync;
+sequelize.sync = function() {
+    console.log('⚠️ Automatic sync operation blocked');
+    return Promise.resolve();
+};
+
+// Install the query interceptor to block problematic session_id queries
+new SequelizeObserver(sequelize);
 
 // Connect to the database
 const connectDB = async () => {
     try {
         await sequelize.authenticate();
         console.log('✅ Database connected successfully.');
-        
-        console.log('✅ Database configuration loaded.');
         return true;
     } catch (error) {
         console.error('❌ Error connecting to the database:', error.message);
@@ -34,24 +53,4 @@ const connectDB = async () => {
     }
 };
 
-// Function to sync all models after they are loaded
-const syncModels = async () => {
-    try {
-        // Import models and initialize associations
-        const models = require('../models/index');
-        
-        // Wait a bit to ensure all associations are properly set up
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        // Sync with alter option
-        await sequelize.sync({ alter: true });
-        console.log('✅ All models synchronized successfully with database (altered).');
-        
-        return true;
-    } catch (error) {
-        console.error('❌ Error syncing models with database:', error.message);
-        process.exit(1);
-    }
-};
-
-module.exports = { sequelize, connectDB, syncModels };
+module.exports = { sequelize, connectDB };

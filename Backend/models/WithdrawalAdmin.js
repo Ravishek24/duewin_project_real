@@ -14,7 +14,7 @@ const WithdrawalAdmin = sequelize.define('WithdrawalAdmin', {
         allowNull: false,
         references: {
             model: WalletWithdrawal,
-            key: 'withdrawal_id'
+            key: 'id'
         }
     },
     admin_id: {
