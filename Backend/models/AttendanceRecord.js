@@ -1,7 +1,7 @@
 // File: Backend/models/AttendanceRecord.js
 
-const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 const User = require('./User');
 
 const AttendanceRecord = sequelize.define('AttendanceRecord', {
@@ -14,8 +14,8 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
-            key: 'user_id'
+            model: 'users',
+            key: 'id'
         }
     },
     attendance_date: {
@@ -36,20 +36,21 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
         comment: 'Whether user has recharged on this day'
     },
     recharge_amount: {
-        type: DataTypes.DECIMAL(15, 2),
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
         defaultValue: 0.00,
         comment: 'Amount recharged on this day'
     },
     additional_bonus: {
-        type: DataTypes.DECIMAL(15, 2),
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: false, 
         defaultValue: 0.00,
         comment: 'Additional bonus based on recharge amount'
     },
     bonus_amount: {
-        type: DataTypes.DECIMAL(15, 2),
-        allowNull: true,
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false,
+        defaultValue: 0.00,
         comment: 'Total bonus amount (streak + additional)'
     },
     bonus_claimed: {
@@ -67,10 +68,16 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
     created_at: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW
+    },
+    updated_at: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
     }
 }, {
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
     tableName: 'attendance_records',
-    timestamps: false,
     indexes: [
         {
             unique: true,
@@ -79,8 +86,10 @@ const AttendanceRecord = sequelize.define('AttendanceRecord', {
     ]
 });
 
-// Establish relationship
-User.hasMany(AttendanceRecord, { foreignKey: 'user_id' });
-AttendanceRecord.belongsTo(User, { foreignKey: 'user_id' });
+// Define associations
+AttendanceRecord.belongsTo(User, {
+    foreignKey: 'user_id',
+    as: 'user'
+});
 
 module.exports = AttendanceRecord;

@@ -1,45 +1,55 @@
-const debug = require('debug')('app:sequelize-observer');
+// Try to use debug module, but don't fail if it's not available
+let debug;
+try {
+    debug = require('debug')('app:sequelize-observer');
+} catch (error) {
+    debug = (...args) => console.log('[SequelizeObserver]', ...args);
+}
 
-// Create Sequelize Observer
+/**
+ * This class observes and intercepts Sequelize queries to prevent problematic operations
+ */
 class SequelizeObserver {
   constructor(sequelize) {
+    if (!sequelize) {
+      debug('⚠️ Sequelize instance not provided to SequelizeObserver');
+      return;
+    }
     this.sequelize = sequelize;
-    this.originalQuery = sequelize.query;
-    this.setupQueryInterceptor();
+    this.installQueryInterceptor();
   }
 
-  setupQueryInterceptor() {
-    // Override the query method to intercept and potentially block problematic queries
-    this.sequelize.query = (...args) => {
-      const sql = args[0];
-      
-      // Convert to string if it's an object
-      const sqlString = typeof sql === 'object' ? sql.query : sql;
-      
-      // Check if this is a problematic query that's trying to add session_id
-      if (
-        typeof sqlString === 'string' && (
-          (sqlString.includes('session_id') && 
-           sqlString.includes('FOREIGN KEY') && 
-           sqlString.includes('game_transactions')) ||
-          (sqlString.includes('session_id') && 
-           sqlString.includes('FOREIGN KEY') && 
-           sqlString.includes('seamless_transactions'))
-        )
-      ) {
-        console.error('🚫 BLOCKED QUERY: Attempt to add session_id column or constraint');
-        console.error('Query:', sqlString);
+  installQueryInterceptor() {
+    if (!this.sequelize || !this.sequelize.query) {
+      debug('⚠️ Cannot install query interceptor: Sequelize not properly initialized');
+      return;
+    }
+
+    // Store original query method
+    const originalQuery = this.sequelize.query;
+
+    // Override query method
+    this.sequelize.query = async function(sql, options) {
+      try {
+        // Convert sql to string if it's an object
+        const sqlString = typeof sql === 'object' && sql.sql ? sql.sql : String(sql);
         
-        // Return a promise that resolves to indicate "query executed successfully"
-        // but actually do nothing
-        return Promise.resolve([[], []]);
+        // Block problematic session_id queries
+        if (sqlString.includes('session_id') && 
+            (sqlString.includes('ALTER TABLE') || sqlString.includes('ADD COLUMN'))) {
+          debug('⚠️ Blocked problematic session_id query:', sqlString);
+          return Promise.resolve([]);
+        }
+
+        // Execute original query for all other cases
+        return originalQuery.call(this, sql, options);
+      } catch (error) {
+        debug('Error in query interceptor:', error);
+        throw error;
       }
-      
-      // For all other queries, pass through to the original method
-      return this.originalQuery.apply(this.sequelize, args);
     };
-    
-    console.log('✅ Sequelize query interceptor installed');
+
+    debug('✅ Sequelize query interceptor installed');
   }
 }
 

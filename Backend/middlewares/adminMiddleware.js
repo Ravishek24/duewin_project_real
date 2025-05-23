@@ -7,39 +7,64 @@ const User = require('../models/User');
  * @param {Object} res - Express response object
  * @param {Function} next - Express next function
  */
-const isAdmin = async (req, res, next) => {
-  try {
-    // Check if user exists in request (added by auth middleware)
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
+const isAdmin = (req, res, next) => {
+    if (!req.user.is_admin && !req.user.is_system_config) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Admin privileges required.'
+        });
     }
-    
-    // For this implementation, we'll assume there's an is_admin field in the User model
-    // In a real production system, you'd want to implement proper role-based access control
-    
-    // Get user from database to check admin status
-    const user = await User.findByPk(req.user.user_id);
-    
-    // Check if user is admin (this field would need to be added to your User model)
-    if (!user || !user.is_admin) {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin access required'
-      });
-    }
-    
-    // User is admin, proceed
     next();
-  } catch (error) {
-    console.error('Admin middleware error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error checking admin permissions'
-    });
-  }
 };
 
-module.exports = { isAdmin };
+// Middleware to check if user can manage admins
+const canManageAdmins = (req, res, next) => {
+    if (!req.user.can_manage_admins && !req.user.is_system_config) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Insufficient privileges to manage admins.'
+        });
+    }
+    next();
+};
+
+// Middleware to check if user can manage withdrawals
+const canManageWithdrawals = (req, res, next) => {
+    if (!req.user.can_manage_withdrawals && !req.user.is_system_config) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Insufficient privileges to manage withdrawals.'
+        });
+    }
+    next();
+};
+
+// Middleware to check if user can view reports
+const canViewReports = (req, res, next) => {
+    if (!req.user.can_view_reports && !req.user.is_system_config) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Insufficient privileges to view reports.'
+        });
+    }
+    next();
+};
+
+// Middleware to check if user can manage settings
+const canManageSettings = (req, res, next) => {
+    if (!req.user.can_manage_settings && !req.user.is_system_config) {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Insufficient privileges to manage settings.'
+        });
+    }
+    next();
+};
+
+module.exports = {
+    isAdmin,
+    canManageAdmins,
+    canManageWithdrawals,
+    canViewReports,
+    canManageSettings
+};

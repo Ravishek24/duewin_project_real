@@ -1,96 +1,54 @@
 // Backend/models/BetRecordWingo.js
-const { DataTypes } = require('sequelize');
-const { sequelize } = require('../config/db');
-const User = require('./User');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/db').sequelize;
 
-const BetRecordWingo = sequelize.define('BetRecordWingo', {
+class BetRecordWingo extends Model {}
+
+BetRecordWingo.init({
     bet_id: {
-        type: DataTypes.INTEGER,
-        primaryKey: true,
-        autoIncrement: true
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
     },
     user_id: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-        references: {
-            model: User,
-            key: 'user_id'
-        }
+        type: DataTypes.UUID,
+        allowNull: false
     },
-    time: {
+    period: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    bet_type: {
+        type: DataTypes.STRING,
+        allowNull: false
+    },
+    bet_amount: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false
+    },
+    odds: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false
+    },
+    status: {
+        type: DataTypes.ENUM('pending', 'won', 'lost'),
+        defaultValue: 'pending'
+    },
+    created_at: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW
     },
-    bet_number: {
-        type: DataTypes.INTEGER,
-        allowNull: true
-    },
-    bet_color: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    bet_size: {
-        type: DataTypes.ENUM('Big', 'Small'),
-        allowNull: true
-    },
-    bet_parity: {
-        type: DataTypes.ENUM('odd', 'even'),
-        allowNull: true
-    },
-    bet_amount: {
-        type: DataTypes.DECIMAL(10, 2),
-        allowNull: false
-    },
-    result_number: {
-        type: DataTypes.INTEGER,
-        allowNull: true
-    },
-    result_color: {
-        type: DataTypes.STRING,
-        allowNull: true
-    },
-    result_size: {
-        type: DataTypes.ENUM('Big', 'Small'),
-        allowNull: true
-    },
-    result_parity: {
-        type: DataTypes.ENUM('odd', 'even'),
-        allowNull: true
-    },
-    win_loss: {
-        type: DataTypes.BOOLEAN,
-        allowNull: true
-    },
-    payout_amount: {
-        type: DataTypes.DECIMAL(10, 2),
-        allowNull: true
-    },
-    duration: {
-        type: DataTypes.INTEGER, // Duration of the game in seconds
-        allowNull: false
-    },
-    period_id: {
-        type: DataTypes.STRING,
-        allowNull: false
+    updated_at: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
     }
 }, {
+    sequelize,
+    modelName: 'BetRecordWingo',
     tableName: 'bet_record_wingo',
-    timestamps: false,
-    indexes: [
-        {
-            fields: ['user_id']
-        },
-        {
-            fields: ['period_id']
-        },
-        {
-            fields: ['time']
-        }
-    ]
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at'
 });
-
-// Set up relationship
-User.hasMany(BetRecordWingo, { foreignKey: 'user_id' });
-BetRecordWingo.belongsTo(User, { foreignKey: 'user_id' });
 
 module.exports = BetRecordWingo;

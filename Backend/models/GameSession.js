@@ -1,7 +1,6 @@
 // models/GameSession.js
-const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
-const User = require('./User');
+const { sequelize } = require('../config/db');
 
 const GameSession = sequelize.define('GameSession', {
     id: {
@@ -14,7 +13,7 @@ const GameSession = sequelize.define('GameSession', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'user_id'
+            key: 'id'
         }
     },
     game_type: {
@@ -23,36 +22,27 @@ const GameSession = sequelize.define('GameSession', {
     },
     session_id: {
         type: DataTypes.STRING,
-        allowNull: false
-    },
-    balance: {
-        type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
-        defaultValue: 0
+        unique: true
     },
     status: {
-        type: DataTypes.ENUM('active', 'closed'),
+        type: DataTypes.STRING,
         allowNull: false,
         defaultValue: 'active'
     },
     created_at: {
         type: DataTypes.DATE,
-        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
-        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'game_sessions',
-    timestamps: false
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    tableName: 'game_sessions'
 });
 
-// Only establish User relationship
-User.hasMany(GameSession, { foreignKey: 'user_id' });
-GameSession.belongsTo(User, { foreignKey: 'user_id' });
-
-// Export only the model
 module.exports = GameSession;

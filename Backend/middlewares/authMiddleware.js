@@ -1,75 +1,122 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const SystemConfig = require('../models/SystemConfig');
 const dotenv = require('dotenv');
+const config = require('../config/config');
 
 dotenv.config();
 
+// Use same DEFAULT_JWT_SECRET as in jwt.js to ensure consistency
+const DEFAULT_JWT_SECRET = 'default_jwt_secret_for_development_only';
+
 const auth = async (req, res, next) => {
     try {
-        // Get token from header
-        const authHeader = req.headers.authorization;
-        
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Authentication failed. No token provided.' 
-            });
-        }
-        
-        const token = authHeader.split(' ')[1];
+        const token = req.header('Authorization')?.replace('Bearer ', '');
         
         if (!token) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Authentication failed. No token provided.' 
+            return res.status(401).json({
+                success: false,
+                message: 'Authentication required'
             });
         }
 
-        // Verify token
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        // First try with environment variable
+        let decoded;
+        try {
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
+        } catch (e) {
+            // If that fails, try with config
+            try {
+                decoded = jwt.verify(token, config.jwtSecret || DEFAULT_JWT_SECRET);
+            } catch (error) {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Invalid authentication token'
+                });
+            }
+        }
         
-        // Check if user exists
-        const user = await User.findByPk(decoded.id, {
-            attributes: ['user_id', 'email', 'is_phone_verified']
-        });
+        // Get user ID from token, supporting both formats
+        const userId = decoded.userId || decoded.user_id;
         
-        if (!user) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Authentication failed. User not found.' 
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid token format'
             });
         }
         
-        // Attach user to request
+        // First try to find regular admin
+        let user = await User.findOne({
+            where: {
+                user_id: userId
+            }
+        });
+
+        // If found, check if admin
+        const isAdmin = user?.is_admin === true;
+
+        // If not found or not admin, try system config
+        if (!user || !isAdmin) {
+            const systemConfig = await SystemConfig.findOne({
+                where: {
+                    id: userId
+                }
+            });
+
+            if (systemConfig) {
+                const decryptedData = systemConfig.getDecryptedData();
+                if (decryptedData) {
+                    user = {
+                        user_id: systemConfig.id,
+                        user_name: decryptedData.username,
+                        email: decryptedData.email,
+                        phone_no: decryptedData.phone,
+                        is_admin: true,  // Give admin access
+                        is_system_config: true,
+                        is_phone_verified: true,  // System config users are always verified
+                        can_manage_admins: true,  // Give full admin rights
+                        can_manage_withdrawals: true,
+                        can_view_reports: true,
+                        can_manage_settings: true
+                    };
+                }
+            }
+        }
+
+        // Check if user is blocked
+        if (user && user.is_blocked) {
+            return res.status(403).json({
+                success: false,
+                message: 'Your account has been blocked. Please contact support for more information.',
+                data: {
+                    block_reason: user.block_reason,
+                    blocked_at: user.blocked_at
+                }
+            });
+        }
+
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid authentication'
+            });
+        }
+
         req.user = user;
         next();
     } catch (error) {
         console.error('Auth middleware error:', error);
-        
-        if (error.name === 'JsonWebTokenError') {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Authentication failed. Invalid token.' 
-            });
-        }
-        
-        if (error.name === 'TokenExpiredError') {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'Authentication failed. Token expired.' 
-            });
-        }
-        
-        return res.status(500).json({ 
-            success: false, 
-            message: 'Server error during authentication.' 
+        return res.status(401).json({
+            success: false,
+            message: 'Invalid authentication'
         });
     }
 };
 
 // Middleware to check if phone is verified
 const requirePhoneVerification = (req, res, next) => {
-    if (!req.user.is_phone_verified) {
+    if (!req.user.is_phone_verified && !req.user.is_system_config) {
         return res.status(403).json({
             success: false,
             message: 'Phone verification required. Please verify your phone number before accessing this resource.'
@@ -78,4 +125,15 @@ const requirePhoneVerification = (req, res, next) => {
     next();
 };
 
-module.exports = { auth, requirePhoneVerification };
+// Middleware to check if user is an admin
+const isAdmin = (req, res, next) => {
+    if (!req.user.is_admin && !req.user.is_system_config) {
+        return res.status(403).json({
+            success: false,
+            message: 'Admin access required'
+        });
+    }
+    next();
+};
+
+module.exports = { auth, requirePhoneVerification, isAdmin };

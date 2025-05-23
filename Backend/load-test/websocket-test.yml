@@ -1,0 +1,49 @@
+config:
+  target: "wss://strike.atsproduct.in"
+  phases:
+    - duration: 60
+      arrivalRate: 5
+      rampTo: 50
+      name: "Warm up"
+    - duration: 300
+      arrivalRate: 50
+      rampTo: 1000
+      name: "Ramp up load"
+    - duration: 600
+      arrivalRate: 1000
+      name: "Sustained load"
+  processor: "./functions.js"
+  plugins:
+    metrics-by-endpoint: {}
+  ensure:
+    maxErrorRate: 5
+    maxResponseTime: 1000
+  variables:
+    token: "{{ $processEnvironment.TEST_TOKEN }}"
+
+scenarios:
+  - name: "WebSocket Game Flow"
+    engine: "ws"
+    flow:
+      - connect:
+          headers:
+            Authorization: "Bearer {{ token }}"
+      - think: 1
+      - send:
+          channel: "game"
+          data:
+            type: "join"
+            game: "k3"
+      - think: 2
+      - send:
+          channel: "game"
+          data:
+            type: "bet"
+            amount: "{{ generateBetAmount }}"
+            betType: "{{ generateK3BetType }}"
+      - think: 5
+      - send:
+          channel: "game"
+          data:
+            type: "leave"
+      - close: {} 

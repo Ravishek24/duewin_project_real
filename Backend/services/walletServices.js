@@ -226,63 +226,46 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
 };
 
 // Service to update wallet balance (internal use only)
-const updateWalletBalance = async (userId, amount, type, transaction = null) => {
-  const t = transaction || await sequelize.transaction();
-
+const updateWalletBalance = async (userId, amount, operation, transaction) => {
   try {
-    // Lock the user row for update to prevent race conditions
     const user = await User.findByPk(userId, {
       attributes: ['user_id', 'wallet_balance'],
       lock: true,
-      transaction: t
+      transaction
     });
 
     if (!user) {
-      if (!transaction) await t.rollback();
       return {
         success: false,
         message: 'User not found.'
       };
     }
 
-    let newBalance;
-    
-    if (type === 'add') {
-      // Credit to wallet
-      newBalance = parseFloat(user.wallet_balance) + parseFloat(amount);
-    } else if (type === 'subtract') {
-      // Debit from wallet
-      newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
-      
-      // Check for insufficient balance
-      if (newBalance < 0) {
-        if (!transaction) await t.rollback();
-        return {
-          success: false,
-          message: 'Insufficient balance.'
-        };
-      }
-    } else {
-      if (!transaction) await t.rollback();
+    const currentBalance = parseFloat(user.wallet_balance);
+    const newBalance = operation === 'add' 
+      ? currentBalance + parseFloat(amount)
+      : currentBalance - parseFloat(amount);
+
+    if (newBalance < 0) {
       return {
         success: false,
-        message: 'Invalid operation type.'
+        message: 'Insufficient balance.'
       };
     }
 
-    // Update balance
-    await user.update({
-      wallet_balance: newBalance
-    }, { transaction: t });
-
-    if (!transaction) await t.commit();
+    await User.update(
+      { wallet_balance: newBalance },
+      { 
+        where: { user_id: userId },
+        transaction
+      }
+    );
 
     return {
       success: true,
       newBalance: newBalance
     };
   } catch (error) {
-    if (!transaction) await t.rollback();
     console.error('Error updating wallet balance:', error);
     return {
       success: false,
@@ -296,6 +279,55 @@ const processRecharge = async (userId, amount, orderId, transactionId, paymentGa
   const t = await sequelize.transaction();
 
   try {
+    // Get user's current deposit status
+    const user = await User.findByPk(userId, {
+      attributes: [
+        'user_id', 
+        'wallet_balance', 
+        'actual_deposit_amount', 
+        'bonus_amount',
+        'has_received_first_bonus'
+      ],
+      lock: true,
+      transaction: t
+    });
+
+    if (!user) {
+      await t.rollback();
+      return {
+        success: false,
+        message: 'User not found.'
+      };
+    }
+
+    // Check if this is first deposit and user hasn't received bonus yet
+    const isFirstDeposit = parseFloat(user.actual_deposit_amount) === 0;
+    const isEligibleForFirstBonus = isFirstDeposit && !user.has_received_first_bonus;
+    let bonusAmount = 0;
+
+    // Calculate first deposit bonus if applicable
+    if (isEligibleForFirstBonus) {
+      // Define bonus tiers
+      const bonusTiers = [
+        { amount: 100, bonus: 20 },
+        { amount: 300, bonus: 60 },
+        { amount: 1000, bonus: 150 },
+        { amount: 3000, bonus: 300 },
+        { amount: 10000, bonus: 600 },
+        { amount: 30000, bonus: 2000 },
+        { amount: 100000, bonus: 7000 },
+        { amount: 200000, bonus: 15000 }
+      ];
+
+      // Find applicable bonus tier
+      for (let i = bonusTiers.length - 1; i >= 0; i--) {
+        if (parseFloat(amount) >= bonusTiers[i].amount) {
+          bonusAmount = bonusTiers[i].bonus;
+          break;
+        }
+      }
+    }
+
     // Create recharge record
     const recharge = await WalletRecharge.create({
       user_id: userId,
@@ -304,16 +336,26 @@ const processRecharge = async (userId, amount, orderId, transactionId, paymentGa
       transaction_id: transactionId,
       payment_gateway: paymentGateway,
       payment_status: true,
-      time_of_success: new Date()
+      time_of_success: new Date(),
+      bonus_amount: bonusAmount // Store bonus amount in recharge record
     }, { transaction: t });
 
-    // Update wallet balance
-    const balanceResult = await updateWalletBalance(userId, amount, 'add', t);
+    // Update user's actual deposit and bonus amounts
+    const updateData = {
+      actual_deposit_amount: parseFloat(user.actual_deposit_amount) + parseFloat(amount),
+      wallet_balance: parseFloat(user.wallet_balance) + parseFloat(amount) + bonusAmount
+    };
 
-    if (!balanceResult.success) {
-      await t.rollback();
-      return balanceResult;
+    // Only update bonus amount and flag if this is first bonus
+    if (isEligibleForFirstBonus && bonusAmount > 0) {
+      updateData.bonus_amount = parseFloat(user.bonus_amount) + bonusAmount;
+      updateData.has_received_first_bonus = true;
     }
+
+    await User.update(updateData, {
+      where: { user_id: userId },
+      transaction: t
+    });
 
     await t.commit();
 
@@ -321,7 +363,10 @@ const processRecharge = async (userId, amount, orderId, transactionId, paymentGa
       success: true,
       message: 'Recharge processed successfully.',
       recharge: recharge,
-      newBalance: balanceResult.newBalance
+      isFirstDeposit,
+      isEligibleForFirstBonus,
+      bonusAmount,
+      totalAdded: parseFloat(amount) + bonusAmount
     };
   } catch (error) {
     await t.rollback();
@@ -340,7 +385,7 @@ const processWithdrawal = async (userId, amount, orderId, transactionId, payment
   try {
     // Check if user has sufficient balance
     const user = await User.findByPk(userId, {
-      attributes: ['user_id', 'wallet_balance'],
+      attributes: ['user_id', 'wallet_balance', 'actual_deposit_amount', 'total_bet_amount'],
       lock: true,
       transaction: t
     });
@@ -353,11 +398,30 @@ const processWithdrawal = async (userId, amount, orderId, transactionId, payment
       };
     }
 
+    // Check if user has sufficient balance
     if (parseFloat(user.wallet_balance) < parseFloat(amount)) {
       await t.rollback();
       return {
         success: false,
         message: 'Insufficient balance.'
+      };
+    }
+
+    // Check if withdrawal amount exceeds actual deposit amount
+    if (parseFloat(amount) > parseFloat(user.actual_deposit_amount)) {
+      await t.rollback();
+      return {
+        success: false,
+        message: 'Withdrawal amount cannot exceed your actual deposit amount.'
+      };
+    }
+
+    // Check if user has bet their actual deposit amount
+    if (parseFloat(user.total_bet_amount) < parseFloat(user.actual_deposit_amount)) {
+      await t.rollback();
+      return {
+        success: false,
+        message: 'You must bet your actual deposit amount before withdrawing.'
       };
     }
 

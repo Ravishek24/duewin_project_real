@@ -11,6 +11,7 @@ const referralService = require('./referralService');
 const otpService = require('./otpService');
 const { processWePayTransfer } = require('./wePayService');
 const { Op } = require('sequelize');
+const PaymentGateway = require('../models/PaymentGateway');
 
 /**
  * Creates a PayIn order (deposit)
@@ -39,10 +40,10 @@ const createPayInOrder = async (userId, orderId, payType, amount, notifyUrl) => 
     await WalletRecharge.create({
       user_id: userId,
       phone_no: user.phone_no,
-      added_amount: amount,
+      amount: amount,
       order_id: orderId,
       payment_gateway: 'OKPAY',
-      payment_status: false
+      status: false
     }, { transaction: t });
     
     // Prepare request data
@@ -106,12 +107,12 @@ const createPayInOrder = async (userId, orderId, payType, amount, notifyUrl) => 
 };
 
 /**
- * Initial step for withdrawal - create a withdrawal request and send OTP
+ * Initial step for withdrawal - create a withdrawal request
  * @param {number} userId - User ID
  * @param {number} bankAccountId - Bank account ID
  * @param {number} amount - Withdrawal amount
  * @param {string} withdrawalType - BANK or UPI
- * @returns {Object} - Response with OTP session details
+ * @returns {Object} - Response with withdrawal details
  */
 const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType = 'BANK') => {
   const t = await sequelize.transaction();
@@ -156,37 +157,35 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
       };
     }
     
-    // Create a temporary orderId (will be finalized after OTP verification)
-    const tempOrderId = `TEMP_PO${Date.now()}${userId}`;
+    // Create order ID
+    const orderId = `PO${Date.now()}${userId}`;
     
-    // Generate and send OTP
-    const country_code = '91'; // Default to India
-    const otpResponse = await otpService.createOtpSession(
-      user.phone_no,
-      country_code,
-      user.user_name,
-      {
-        udf1: JSON.stringify({
-          bankAccountId,
-          amount,
-          withdrawalType,
-          tempOrderId
-        }),
-        udf2: 'withdrawal_init'
-      }
-    );
+    // Create withdrawal record
+    const withdrawal = await WalletWithdrawal.create({
+      user_id: userId,
+      phone_no: user.phone_no,
+      withdrawal_amount: amount,
+      status: false,
+      payment_gateway: 'OKPAY', // Default gateway
+      withdrawal_type: withdrawalType,
+      order_id: orderId,
+      remark: 'Withdrawal initiated. Awaiting admin approval.',
+      time_of_request: new Date(),
+      otp_verified: true, // Set to true since OTP is not required
+      admin_status: 'pending'
+    }, { transaction: t });
     
-    if (!otpResponse.success) {
-      await t.rollback();
-      return {
-        success: false,
-        message: `Failed to send OTP: ${otpResponse.message}`
-      };
-    }
+    // Create admin approval record
+    await WithdrawalAdmin.create({
+      withdrawal_id: withdrawal.withdrawal_id,
+      status: 'pending',
+      notes: `Withdrawal request initiated by user. Amount: ${amount} INR.`
+    }, { transaction: t });
     
-    // Update user with OTP session ID
+    // Deduct amount from wallet
+    const newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
     await User.update(
-      { phone_otp_session_id: otpResponse.otpSessionId.toString() },
+      { wallet_balance: newBalance },
       { where: { user_id: userId }, transaction: t }
     );
     
@@ -194,10 +193,13 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
     
     return {
       success: true,
-      message: "Withdrawal initiated. Please verify with OTP.",
-      otpSessionId: otpResponse.otpSessionId,
-      requiresVerification: true,
-      tempOrderId
+      message: "Withdrawal request submitted successfully. Awaiting admin approval.",
+      withdrawal: {
+        id: withdrawal.withdrawal_id,
+        amount,
+        status: 'pending',
+        created_at: withdrawal.time_of_request
+      }
     };
   } catch (error) {
     await t.rollback();
@@ -211,154 +213,6 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
 };
 
 /**
- * Verify OTP and create withdrawal request for admin approval
- * @param {number} userId - User ID
- * @param {string} otpSessionId - OTP session ID
- * @param {string} gateway - Payment gateway to use (OKPAY or WEPAY)
- * @returns {Object} - Response with withdrawal details
- */
-const verifyWithdrawalOtp = async (userId, otpSessionId, gateway = 'OKPAY') => {
-  const t = await sequelize.transaction();
-  
-  try {
-    // Get user
-    const user = await User.findByPk(userId, {
-      transaction: t
-    });
-    
-    if (!user) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "User not found"
-      };
-    }
-    
-    // Verify OTP session ID matches user's session
-    if (user.phone_otp_session_id !== otpSessionId.toString()) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "Invalid OTP session for this user"
-      };
-    }
-    
-    // Check OTP verification status
-    const otpVerificationResult = await otpService.checkOtpSession(otpSessionId);
-    
-    if (!otpVerificationResult.success) {
-      await t.rollback();
-      return {
-        success: false,
-        message: `OTP verification failed: ${otpVerificationResult.message}`
-      };
-    }
-    
-    // If OTP is not verified yet
-    if (!otpVerificationResult.verified) {
-      await t.rollback();
-      return {
-        success: false,
-        message: 'OTP has not been verified yet.',
-        status: otpVerificationResult.status
-      };
-    }
-    
-    // Extract withdrawal data from OTP session (stored in udf1)
-    const withdrawalData = JSON.parse(otpVerificationResult.userData.udf1);
-    const { bankAccountId, amount, withdrawalType, tempOrderId } = withdrawalData;
-    
-    // Check wallet balance again (might have changed since initiation)
-    if (parseFloat(user.wallet_balance) < parseFloat(amount)) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "Insufficient wallet balance"
-      };
-    }
-    
-    // Get bank account details
-    const bankAccount = await BankAccount.findOne({
-      where: {
-        bank_account_id: bankAccountId,
-        user_id: userId
-      },
-      transaction: t
-    });
-    
-    if (!bankAccount) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "Bank account not found"
-      };
-    }
-    
-    // Create actual order ID with gateway prefix
-    const gatewayPrefix = gateway === 'WEPAY' ? 'WP' : 'OP';
-    const orderId = `PO${gatewayPrefix}${Date.now()}${userId}`;
-    
-    // Create withdrawal record
-    const withdrawal = await WalletWithdrawal.create({
-      user_id: userId,
-      phone_no: user.phone_no,
-      withdrawal_amount: amount,
-      payment_status: false,
-      payment_gateway: gateway,
-      withdrawal_type: withdrawalType,
-      order_id: orderId,
-      remark: 'Withdrawal initiated and verified by OTP. Awaiting admin approval.',
-      time_of_request: new Date(),
-      otp_verified: true,
-      otp_session_id: otpSessionId.toString(),
-      admin_status: 'pending'
-    }, { transaction: t });
-    
-    // Create admin approval record
-    await WithdrawalAdmin.create({
-      withdrawal_id: withdrawal.withdrawal_id,
-      status: 'pending',
-      notes: `Withdrawal request initiated by user and verified by OTP. Amount: ${amount} INR. Gateway: ${gateway}`
-    }, { transaction: t });
-    
-    // Deduct amount from wallet
-    const newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
-    await User.update(
-      { 
-        wallet_balance: newBalance,
-        phone_otp_session_id: null // Clear OTP session
-      },
-      { 
-        where: { user_id: userId },
-        transaction: t 
-      }
-    );
-    
-    await t.commit();
-    
-    return {
-      success: true,
-      message: "Withdrawal request submitted successfully. Awaiting admin approval.",
-      withdrawal: {
-        id: withdrawal.withdrawal_id,
-        amount,
-        status: 'pending',
-        created_at: withdrawal.time_of_request,
-        gateway
-      }
-    };
-  } catch (error) {
-    await t.rollback();
-    console.error("Error verifying withdrawal OTP:", error);
-    
-    return {
-      success: false,
-      message: "Failed to process withdrawal verification"
-    };
-  }
-};
-
-/**
  * Process admin approval/rejection for a withdrawal
  * @param {number} adminId - Admin user ID
  * @param {number} withdrawalId - Withdrawal ID
@@ -366,7 +220,7 @@ const verifyWithdrawalOtp = async (userId, otpSessionId, gateway = 'OKPAY') => {
  * @param {string} notes - Admin notes or rejection reason
  * @returns {Object} - Processing result
  */
-const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes = '') => {
+const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes = '', selectedGateway = null) => {
   const t = await sequelize.transaction();
   
   try {
@@ -425,30 +279,37 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
     
     // Update withdrawal record based on admin action
     if (action === 'approve') {
-      // Determine which gateway to use
-      const gateway = withdrawal.payment_gateway;
+      // Use the selected gateway
+      const gateway = selectedGateway || withdrawal.payment_gateway;
       
       // Update withdrawal status to approved
       await withdrawal.update({
         admin_status: 'approved',
+        payment_gateway: gateway,
         remark: `Admin approved. Processing via ${gateway}.`
       }, { transaction: t });
       
       await t.commit();
       
       // After committing the DB transaction, process the actual transfer
-      // based on the selected gateway
       let transferResult;
+      const host = process.env.API_BASE_URL || 'http://localhost:8000';
+      let notifyUrl = '';
       
-      // Get host for callback URL
-      const notifyUrl = `${process.env.API_BASE_URL || 'http://localhost:8000'}/api/payments/${gateway.toLowerCase()}/payout-callback`;
-      
-      if (gateway === 'WEPAY') {
-        // Process via WePay
-        transferResult = await processWePayTransfer(withdrawalId, notifyUrl);
-      } else {
-        // Process via OKPAY (default)
-        transferResult = await processOkPayTransfer(withdrawalId, notifyUrl);
+      // Set the appropriate callback URL based on gateway
+      switch (gateway) {
+        case 'WEPAY':
+          notifyUrl = `${host}/api/payments/wepay/payout-callback`;
+          transferResult = await processWePayTransfer(withdrawalId, notifyUrl);
+          break;
+        case 'MXPAY':
+          notifyUrl = `${host}/api/payments/mxpay/transfer-callback`;
+          transferResult = await processMxPayTransfer(withdrawalId, notifyUrl);
+          break;
+        default: // OKPAY
+          notifyUrl = `${host}/api/payments/okpay/payout-callback`;
+          transferResult = await processOkPayTransfer(withdrawalId, notifyUrl);
+          break;
       }
       
       return transferResult;
@@ -525,7 +386,7 @@ const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
     }
     
     // Check if withdrawal is already processed
-    if (withdrawal.payment_status === true || withdrawal.time_of_failed) {
+    if (withdrawal.status === true || withdrawal.time_of_failed) {
       await t.rollback();
       return {
         success: false,
@@ -665,7 +526,7 @@ const processPayInCallback = async (callbackData) => {
       }
       
       // 4. Check if already processed
-      if (rechargeRecord.payment_status === true) {
+      if (rechargeRecord.status === true) {
           await t.rollback();
           return {
               success: true,
@@ -677,7 +538,7 @@ const processPayInCallback = async (callbackData) => {
       if (status === "1") { // Payment successful
           // Update recharge record
           await WalletRecharge.update({
-              payment_status: true,
+              status: true,
               time_of_success: new Date(),
               transaction_id: transaction_Id
           }, {
@@ -711,7 +572,7 @@ const processPayInCallback = async (callbackData) => {
           });
           
           // Process first recharge bonus if applicable
-          if (rechargeRecord.payment_status === false) {
+          if (rechargeRecord.status === false) {
               await referralService.processFirstRechargeBonus(rechargeRecord.user_id, addAmount);
           }
           
@@ -732,7 +593,7 @@ const processPayInCallback = async (callbackData) => {
           };
       } else { // Payment failed
           await WalletRecharge.update({
-              payment_status: false,
+              status: false,
               remark: `Payment failed with status: ${status}`
           }, {
               where: { order_id: out_trade_no },
@@ -813,7 +674,7 @@ const processPayOutCallback = async (callbackData) => {
     }
     
     // 4. Check if already processed
-    if (withdrawalRecord.payment_status === true || withdrawalRecord.time_of_failed) {
+    if (withdrawalRecord.status === true || withdrawalRecord.time_of_failed) {
       await t.rollback();
       return {
         success: true,
@@ -825,7 +686,7 @@ const processPayOutCallback = async (callbackData) => {
     if (status === "1") { // Withdrawal successful
       // Update withdrawal record
       await WalletWithdrawal.update({
-        payment_status: true,
+        status: true,
         time_of_success: new Date(),
         transaction_id: transaction_Id,
         remark: "Withdrawal processed successfully"
@@ -866,7 +727,7 @@ const processPayOutCallback = async (callbackData) => {
       
       // Update withdrawal record
       await WalletWithdrawal.update({
-        payment_status: false,
+        status: false,
         time_of_failed: new Date(),
         admin_status: 'rejected',
         remark: `Withdrawal failed with status: ${status}. Amount refunded to wallet.`
@@ -920,8 +781,8 @@ const getPaymentStatus = async (orderId) => {
       return {
         success: true,
         type: 'payin',
-        status: rechargeRecord.payment_status ? 'success' : 'pending',
-        amount: rechargeRecord.added_amount,
+        status: rechargeRecord.status ? 'success' : 'pending',
+        amount: rechargeRecord.amount,
         transactionId: rechargeRecord.transaction_id,
         timestamp: rechargeRecord.time_of_success || rechargeRecord.created_at,
         gateway: rechargeRecord.payment_gateway
@@ -940,7 +801,7 @@ const getPaymentStatus = async (orderId) => {
       }
       
       let status = 'pending';
-      if (withdrawalRecord.payment_status) {
+      if (withdrawalRecord.status) {
         status = 'success';
       } else if (withdrawalRecord.time_of_failed) {
         status = 'failed';
@@ -948,7 +809,7 @@ const getPaymentStatus = async (orderId) => {
         status = 'awaiting_approval';
       } else if (withdrawalRecord.admin_status === 'rejected') {
         status = 'rejected';
-      } else if (withdrawalRecord.admin_status === 'approved' && !withdrawalRecord.payment_status) {
+      } else if (withdrawalRecord.admin_status === 'approved' && !withdrawalRecord.status) {
         status = 'processing';
       }
       
@@ -999,17 +860,41 @@ const getPendingWithdrawals = async (page = 1, limit = 10) => {
       include: [
         {
           model: User,
-          attributes: ['user_id', 'user_name', 'email', 'phone_no']
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal']
+        },
+        {
+          model: BankAccount,
+          attributes: ['bank_name', 'account_number', 'ifsc_code', 'usdt_network', 'usdt_address', 'address_alias']
         }
       ],
       order: [['time_of_request', 'DESC']],
       limit,
       offset
     });
+
+    // Transform the data to match required format
+    const formattedWithdrawals = pendingWithdrawals.map(withdrawal => ({
+      user_id: withdrawal.User.user_id,
+      mobile_number: withdrawal.User.phone_no,
+      order_id: withdrawal.order_id,
+      withdraw_type: withdrawal.withdrawal_type,
+      applied_amount: withdrawal.withdrawal_amount,
+      balance_after: (parseFloat(withdrawal.User.wallet_balance) - parseFloat(withdrawal.withdrawal_amount)).toFixed(2),
+      total_recharge: withdrawal.User.total_deposit,
+      total_withdraw: withdrawal.User.total_withdrawal,
+      bank_name: withdrawal.BankAccount?.bank_name || 'N/A',
+      account_number: withdrawal.BankAccount?.account_number || 'N/A',
+      ifsc_code: withdrawal.BankAccount?.ifsc_code || 'N/A',
+      usdt_network: withdrawal.BankAccount?.usdt_network || 'N/A',
+      usdt_address: withdrawal.BankAccount?.usdt_address || 'N/A',
+      address_alias: withdrawal.BankAccount?.address_alias || 'N/A',
+      apply_date_time: withdrawal.time_of_request,
+      withdrawal_id: withdrawal.id
+    }));
     
     return {
       success: true,
-      withdrawals: pendingWithdrawals,
+      withdrawals: formattedWithdrawals,
       pagination: {
         total,
         page,
@@ -1103,15 +988,337 @@ const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
   }
 };
 
+/**
+ * Get all pending recharge requests using the updated model
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - List of pending recharges with pagination
+ */
+const getAllPendingRecharges = async (page = 1, limit = 10) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Get total count of pending recharges
+    const total = await WalletRecharge.count({
+      where: { status: 'pending' }
+    });
+    
+    // Get pending recharges with pagination
+    const pendingRecharges = await WalletRecharge.findAll({
+      where: { status: 'pending' },
+      include: [
+        {
+          model: User,
+          as: 'rechargeUser',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
+        },
+        {
+          model: PaymentGateway,
+          as: 'paymentGateway',
+          attributes: ['gateway_id', 'name']
+        }
+      ],
+      order: [['created_at', 'DESC']],
+      limit,
+      offset
+    });
+
+    // Transform the data to match required format
+    const formattedRecharges = pendingRecharges.map(recharge => ({
+      user_id: recharge.rechargeUser.user_id,
+      mobile_number: recharge.rechargeUser.phone_no,
+      order_id: recharge.order_id || recharge.id,
+      recharge_type: recharge.paymentGateway ? recharge.paymentGateway.name : `Gateway ${recharge.payment_gateway_id}`,
+      applied_amount: recharge.amount,
+      balance_after: (parseFloat(recharge.rechargeUser.wallet_balance) + parseFloat(recharge.amount)).toFixed(2),
+      total_recharge: recharge.rechargeUser.total_deposit,
+      total_withdraw: recharge.rechargeUser.total_withdrawal,
+      apply_date_time: recharge.created_at,
+      recharge_id: recharge.id,
+      user_registered_at: recharge.rechargeUser.created_at
+    }));
+    
+    return {
+      success: true,
+      recharges: formattedRecharges,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting pending recharges:', error);
+    return {
+      success: false,
+      message: 'Error fetching pending recharges'
+    };
+  }
+};
+
+/**
+ * Get successful first-time recharges using the updated model
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - List of first-time recharges with pagination
+ */
+const getFirstRecharges = async (page = 1, limit = 10) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Get all successful recharges
+    const successfulRecharges = await WalletRecharge.findAll({
+      where: { status: 'completed' },
+      include: [
+        {
+          model: User,
+          as: 'rechargeUser',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
+        },
+        {
+          model: PaymentGateway,
+          as: 'paymentGateway',
+          attributes: ['gateway_id', 'name']
+        }
+      ],
+      order: [['updated_at', 'DESC']]
+    });
+
+    // Create a map to track each user's first successful recharge
+    const userFirstRecharges = new Map();
+    successfulRecharges.forEach(recharge => {
+      if (!userFirstRecharges.has(recharge.user_id)) {
+        userFirstRecharges.set(recharge.user_id, recharge);
+      }
+    });
+
+    // Convert Map to array and apply pagination
+    const firstRecharges = Array.from(userFirstRecharges.values())
+      .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+      .slice(offset, offset + limit);
+
+    // Transform the data to match required format
+    const formattedRecharges = firstRecharges.map(recharge => ({
+      user_id: recharge.rechargeUser.user_id,
+      mobile_number: recharge.rechargeUser.phone_no,
+      order_id: recharge.order_id || recharge.id,
+      recharge_type: recharge.paymentGateway ? recharge.paymentGateway.name : `Gateway ${recharge.payment_gateway_id}`,
+      applied_amount: recharge.amount,
+      balance_after: (parseFloat(recharge.rechargeUser.wallet_balance)).toFixed(2),
+      total_recharge: recharge.rechargeUser.total_deposit,
+      total_withdraw: recharge.rechargeUser.total_withdrawal,
+      apply_date_time: recharge.updated_at,
+      recharge_id: recharge.id,
+      is_first_recharge: true,
+      user_registered_at: recharge.rechargeUser.created_at,
+      transaction_id: recharge.transaction_id || 'N/A'
+    }));
+    
+    return {
+      success: true,
+      recharges: formattedRecharges,
+      pagination: {
+        total: userFirstRecharges.size,
+        page,
+        limit,
+        pages: Math.ceil(userFirstRecharges.size / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting first recharges:', error);
+    return {
+      success: false,
+      message: 'Error fetching first recharges'
+    };
+  }
+};
+
+/**
+ * Get today's top deposits using the updated model
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - List of top deposits with pagination
+ */
+const getTodayTopDeposits = async (page = 1, limit = 10) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Get start of today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Get total count of today's successful deposits
+    const total = await WalletRecharge.count({
+      where: { 
+        status: 'completed',
+        updated_at: {
+          [Op.gte]: today
+        }
+      }
+    });
+    
+    // Get today's successful deposits with pagination
+    const deposits = await WalletRecharge.findAll({
+      where: { 
+        status: 'completed',
+        updated_at: {
+          [Op.gte]: today
+        }
+      },
+      include: [
+        {
+          model: User,
+          as: 'rechargeUser',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
+        },
+        {
+          model: PaymentGateway,
+          as: 'paymentGateway',
+          attributes: ['gateway_id', 'name']
+        }
+      ],
+      order: [['amount', 'DESC']],
+      limit,
+      offset
+    });
+
+    // Transform the data to match required format
+    const formattedDeposits = deposits.map(deposit => ({
+      user_id: deposit.rechargeUser.user_id,
+      mobile_number: deposit.rechargeUser.phone_no,
+      order_id: deposit.order_id || deposit.id,
+      recharge_type: deposit.paymentGateway ? deposit.paymentGateway.name : `Gateway ${deposit.payment_gateway_id}`,
+      applied_amount: deposit.amount,
+      balance_after: (parseFloat(deposit.rechargeUser.wallet_balance)).toFixed(2),
+      total_recharge: deposit.rechargeUser.total_deposit,
+      total_withdraw: deposit.rechargeUser.total_withdrawal,
+      apply_date_time: deposit.updated_at,
+      recharge_id: deposit.id,
+      user_registered_at: deposit.rechargeUser.created_at,
+      transaction_id: deposit.transaction_id || 'N/A'
+    }));
+    
+    return {
+      success: true,
+      deposits: formattedDeposits,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting today\'s top deposits:', error);
+    return {
+      success: false,
+      message: 'Error fetching today\'s top deposits'
+    };
+  }
+};
+
+/**
+ * Get today's top withdrawals using the updated model
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - List of top withdrawals with pagination
+ */
+const getTodayTopWithdrawals = async (page = 1, limit = 10) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Get start of today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Get total count of today's successful withdrawals
+    const total = await WalletWithdrawal.count({
+      where: { 
+        status: 'completed',
+        updated_at: {
+          [Op.gte]: today
+        }
+      }
+    });
+    
+    // Get today's successful withdrawals with pagination
+    const withdrawals = await WalletWithdrawal.findAll({
+      where: { 
+        status: 'completed',
+        updated_at: {
+          [Op.gte]: today
+        }
+      },
+      include: [
+        {
+          model: User,
+          as: 'withdrawalUser',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
+        },
+        {
+          model: BankAccount,
+          as: 'bankAccount',
+          attributes: ['bank_name', 'account_number', 'ifsc_code', 'usdt_network', 'usdt_address', 'address_alias']
+        }
+      ],
+      order: [['withdrawal_amount', 'DESC']],
+      limit,
+      offset
+    });
+
+    // Transform the data to match required format
+    const formattedWithdrawals = withdrawals.map(withdrawal => ({
+      user_id: withdrawal.withdrawalUser.user_id,
+      mobile_number: withdrawal.withdrawalUser.phone_no,
+      order_id: withdrawal.order_id || withdrawal.id,
+      withdraw_type: withdrawal.withdrawal_type || 'BANK',
+      applied_amount: withdrawal.withdrawal_amount,
+      balance_after: (parseFloat(withdrawal.withdrawalUser.wallet_balance)).toFixed(2),
+      total_recharge: withdrawal.withdrawalUser.total_deposit,
+      total_withdraw: withdrawal.withdrawalUser.total_withdrawal,
+      bank_name: withdrawal.bankAccount?.bank_name || 'N/A',
+      account_number: withdrawal.bankAccount?.account_number || 'N/A',
+      ifsc_code: withdrawal.bankAccount?.ifsc_code || 'N/A',
+      usdt_network: withdrawal.bankAccount?.usdt_network || 'N/A',
+      usdt_address: withdrawal.bankAccount?.usdt_address || 'N/A',
+      address_alias: withdrawal.bankAccount?.address_alias || 'N/A',
+      apply_date_time: withdrawal.updated_at,
+      withdrawal_id: withdrawal.id,
+      transaction_id: withdrawal.transaction_id || 'N/A'
+    }));
+    
+    return {
+      success: true,
+      withdrawals: formattedWithdrawals,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting today\'s top withdrawals:', error);
+    return {
+      success: false,
+      message: 'Error fetching today\'s top withdrawals'
+    };
+  }
+};
+
 module.exports = {
   createPayInOrder,
   initiateWithdrawal,
-  verifyWithdrawalOtp,
   processWithdrawalAdminAction,
   processOkPayTransfer,
   processPayInCallback,
   processPayOutCallback,
   getPaymentStatus,
   getPendingWithdrawals,
-  getWithdrawalsAdmin
+  getWithdrawalsAdmin,
+  getAllPendingRecharges,
+  getFirstRecharges,
+  getTodayTopDeposits,
+  getTodayTopWithdrawals
 };

@@ -4,6 +4,10 @@ const { Op } = require('sequelize');
 const { generateJWT } = require('../utils/tokenUtils');
 const referralService = require('./referralService');
 const otpService = require('./otpService');
+const jwt = require('jsonwebtoken');
+const config = require('../config/config');
+const { generateTokens, verifyAccessToken } = require('./tokenService');
+const UserSession = require('../models/UserSession');
 
 // Function to generate a unique referral code
 const generateReferralCode = async () => {
@@ -22,34 +26,81 @@ const generateReferralCode = async () => {
     return referralCode;
 };
 
+// Function to generate a unique username
+const generateUniqueUsername = async () => {
+    let isUnique = false;
+    let username;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    while (!isUnique && attempts < maxAttempts) {
+        // Generate a random number between 1000 and 9999
+        const randomNum = Math.floor(Math.random() * 9000) + 1000;
+        username = `user${randomNum}`;
+
+        const existingUser = await User.findOne({ where: { user_name: username } });
+        if (!existingUser) {
+            isUnique = true;
+        }
+        attempts++;
+    }
+
+    if (!isUnique) {
+        throw new Error('Failed to generate unique username after multiple attempts');
+    }
+
+    return username;
+};
+
 // Service to create a new user
 const createUser = async (userData, ipAddress) => {
-    const { user_name, email, phone_no, password, referral_code, country_code = '91' } = userData;
+    const { phone_no, password, referral_code, email, country_code = '91' } = userData;
 
     try {
-        // Validate referral code
-        if (!referral_code) {
-            throw new Error('Referral code is required for registration.');
+        // Validate required fields
+        if (!phone_no || !password) {
+            throw new Error('Phone number and password are required.');
         }
 
-        const referralValidation = await User.findOne({ where: { referring_code: referral_code } });
-        if (!referralValidation) {
-            throw new Error('Invalid referral code.');
+        // Validate phone number format
+        if (!/^\d{10,15}$/.test(phone_no)) {
+            throw new Error('Invalid phone number format. Must be 10-15 digits.');
         }
 
-        // Check if the user already exists by email or phone number
-        const userExists = await User.findOne({
-            where: {
-                [Op.or]: [
-                    { email: email },
-                    { phone_no: phone_no }
-                ]
+        // Validate password length
+        if (password.length < 6) {
+            throw new Error('Password must be at least 6 characters long.');
+        }
+
+        // Validate email if provided
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            throw new Error('Invalid email format.');
+        }
+
+        // Check if phone number already exists
+        const existingPhone = await User.findOne({ where: { phone_no } });
+        if (existingPhone) {
+            throw new Error('Phone number is already registered.');
+        }
+
+        // Check if email already exists (if provided)
+        if (email) {
+            const existingEmail = await User.findOne({ where: { email } });
+            if (existingEmail) {
+                throw new Error('Email is already registered.');
             }
-        });
-
-        if (userExists) {
-            throw new Error('User already exists with the provided email or phone number.');
         }
+
+        // Validate referral code if provided
+        if (referral_code) {
+            const referralValidation = await User.findOne({ where: { referring_code: referral_code } });
+            if (!referralValidation) {
+                throw new Error('Invalid referral code.');
+            }
+        }
+
+        // Generate unique username
+        const username = await generateUniqueUsername();
 
         // Hash the password
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -57,57 +108,46 @@ const createUser = async (userData, ipAddress) => {
         // Generate a unique referral code for the new user
         const newReferralCode = await generateReferralCode();
 
-        // Generate and send OTP for phone verification
-        const otpResponse = await otpService.createOtpSession(
-            phone_no, 
-            country_code, 
-            user_name, 
-            { udf1: email } // Store email in udf1 for reference
-        );
-
-        if (!otpResponse.success) {
-            throw new Error(`Failed to send OTP: ${otpResponse.message}`);
-        }
-
-        // Create user with unverified phone
+        // Create user
         const newUser = await User.create({
-            user_name: user_name,
-            email: email,
+            user_name: username,
+            email: email || null,
             phone_no: phone_no,
             password: hashedPassword,
-            referral_code: referral_code, // The referral code used for registration
-            referring_code: newReferralCode, // The new referral code for this user
+            referral_code: referral_code || null,
+            referring_code: newReferralCode,
             current_ip: ipAddress,
             registration_ip: ipAddress,
             wallet_balance: 0.00,
-            is_phone_verified: false,
-            phone_otp_session_id: otpResponse.otpSessionId.toString()
+            is_phone_verified: true
         });
 
         // Generate JWT token
         const token = generateJWT(newUser.user_id, newUser.email);
 
+        // Create referral tree if referral code was used
+        if (referral_code) {
+            await referralService.createReferralTree(newUser.user_id, newUser.referral_code);
+        }
+
         return {
             success: true,
-            message: 'Registration initiated. Please verify your phone number with the OTP sent.',
+            message: 'Registration successful.',
             user: {
                 id: newUser.user_id,
+                username: newUser.user_name,
                 email: newUser.email,
                 phone_no: newUser.phone_no,
-                user_name: newUser.user_name,
                 referring_code: newUser.referring_code,
                 is_phone_verified: newUser.is_phone_verified
             },
-            token: token,
-            otpSessionId: otpResponse.otpSessionId,
-            requiresVerification: true
+            token: token
         };
     } catch (error) {
-        console.error('Error creating user:', error); 
+        console.error('Error creating user:', error);
         return {
             success: false,
-            message: error.message,
-            details: error.errors 
+            message: error.message
         };
     }
 };
@@ -235,104 +275,87 @@ const resendPhoneOtp = async (userId) => {
     }
 };
 
-// Service to login a user
-const loginUser = async (credentials, ipAddress) => {
-    const { email, password } = credentials;
-
+/**
+* Login user
+* @param {string} email - User email
+* @param {string} password - User password
+* @param {string} ipAddress - User IP address
+* @returns {Object} - Login result
+*/
+const login = async (email, password, ipAddress) => {
     try {
-        // Find user
-        const user = await User.findOne({ 
-            where: { 
+        // Find user by email or phone
+        const user = await User.findOne({
+            where: {
                 [Op.or]: [
                     { email: email },
-                    { phone_no: email } // Allow login with phone number as well
+                    { phone_no: email }
                 ]
-            } 
+            }
         });
 
-        if (!user) {
+        // Generic error for both invalid user and password
+        if (!user || !(await bcrypt.compare(password, user.password))) {
             return {
                 success: false,
-                message: 'User not found.'
+                message: 'Invalid credentials'
             };
         }
 
-        // Verify password
-        const isPasswordMatch = await bcrypt.compare(password, user.password);
-        if (!isPasswordMatch) {
+        // Check if user is active - use generic message
+        if (!user.is_active) {
             return {
                 success: false,
-                message: 'Invalid credentials.'
+                message: 'Invalid credentials'
             };
         }
 
-        // Check if phone is verified
-        if (!user.is_phone_verified) {
-            // Generate a new OTP session for verification
-            const country_code = '91'; // Default, can be changed based on your needs
-            const otpResponse = await otpService.createOtpSession(
-                user.phone_no, 
-                country_code, 
-                user.user_name,
-                { udf1: user.email }
-            );
-            
-            if (!otpResponse.success) {
-                return {
-                    success: false,
-                    message: `Login requires phone verification but failed to send OTP: ${otpResponse.message}`
-                };
-            }
-            
-            // Update user with new OTP session ID
-            await User.update(
-                { phone_otp_session_id: otpResponse.otpSessionId.toString() }, 
-                { where: { user_id: user.user_id } }
-            );
-            
-            // Generate JWT token
-            const token = generateJWT(user.user_id, user.email);
-            
-            return {
-                success: true,
-                message: 'Phone verification required to complete login.',
-                requiresVerification: true,
-                otpSessionId: otpResponse.otpSessionId,
-                token: token,
-                user: {
-                    id: user.user_id,
-                    email: user.email,
-                    user_name: user.user_name,
-                    phone_no: user.phone_no,
-                    is_phone_verified: false
+        // Check for existing session from different IP
+        const existingSession = await UserSession.findOne({
+            where: {
+                userId: user.user_id,
+                isValid: true,
+                expiresAt: {
+                    [Op.gt]: new Date()
                 }
+            }
+        });
+
+        if (existingSession && existingSession.ipAddress !== ipAddress) {
+            return {
+                success: false,
+                message: 'Invalid credentials'
             };
         }
 
-        // Update current IP
-        await User.update({ current_ip: ipAddress }, { where: { user_id: user.user_id } });
+        // Generate tokens with IP
+        const { accessToken, refreshToken } = await generateTokens(user, ipAddress);
 
-        // Generate JWT token
-        const token = generateJWT(user.user_id, user.email);
+        // Update user's current IP
+        await User.update(
+            { current_ip: ipAddress },
+            { where: { user_id: user.user_id } }
+        );
 
         return {
             success: true,
             message: 'Login successful',
-            token: token,
             user: {
                 id: user.user_id,
+                username: user.user_name,
                 email: user.email,
-                user_name: user.user_name,
                 phone_no: user.phone_no,
                 is_phone_verified: user.is_phone_verified,
                 wallet_balance: user.wallet_balance
-            }
+            },
+            accessToken,
+            refreshToken
         };
     } catch (error) {
-        console.error('Error during login:', error);
+        console.error('Login error:', error);
         return {
             success: false,
-            message: 'Server error during login.'
+            message: 'Invalid credentials'
         };
     }
 };
@@ -517,45 +540,40 @@ const verifyPhoneUpdateOtp = async (userId, otpSessionId, newPhone) => {
  */
 const requestPasswordReset = async (email) => {
     try {
-        // Find user by email
         const user = await User.findOne({ where: { email } });
         
+        // Always return same message regardless of user existence
         if (!user) {
-            // Don't reveal if user exists for security reasons
             return {
-                success: false,
+                success: true,
                 message: "If your email is registered, you will receive password reset instructions."
             };
         }
         
-        // Generate reset token
         const resetToken = generateJWT(user.user_id, user.email, '1h');
         
-        // Update user with reset token
         await User.update(
             {
                 reset_token: resetToken,
-                reset_token_expiry: new Date(Date.now() + 3600000) // 1 hour from now
+                reset_token_expiry: new Date(Date.now() + 3600000)
             },
             { where: { user_id: user.user_id } }
         );
         
-        // In a real implementation, you would send an SMS with OTP
-        // For now, we'll just console log the reset token for testing
-        console.log('Reset token for user:', resetToken);
+        // Remove token logging in production
+        if (process.env.NODE_ENV === 'development') {
+            console.log('Reset token generated for testing');
+        }
         
         return {
             success: true,
-            message: "Password reset instructions sent.",
-            // We can include the token directly for development 
-            // Remove this in production!
-            token: resetToken
+            message: "If your email is registered, you will receive password reset instructions."
         };
     } catch (error) {
         console.error('Error requesting password reset:', error);
         return {
-            success: false,
-            message: "Failed to process password reset request."
+            success: true,
+            message: "If your email is registered, you will receive password reset instructions."
         };
     }
 };
@@ -644,7 +662,7 @@ module.exports = {
     createUser,
     verifyPhoneOtp,
     resendPhoneOtp,
-    loginUser,
+    login,
     getUserProfile,
     updateUserProfile,
     verifyPhoneUpdateOtp,

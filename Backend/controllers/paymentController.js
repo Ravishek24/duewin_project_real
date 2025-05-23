@@ -13,13 +13,26 @@ const {
   processWePayTransferCallback
 } = require('../services/wePayService');
 
-// Controller to handle payment creation (adding money to wallet) with gateway selection
-// Updated section for paymentController.js to include MxPay
-
 // Import the new MxPay service
 const { createMxPayCollectionOrder } = require('../services/mxPayService');
 
-// Update the payInController to support MxPay
+// Import the new OKPAY service
+const { 
+  createOkPayCollectionOrder,
+  processOkPayCallback 
+} = require('../services/okPayService');
+
+// Import PaymentGateway model
+const PaymentGateway = require('../models/PaymentGateway');
+const User = require('../models/User');
+const { sequelize } = require('../config/db');
+const WithdrawalAdmin = require('../models/WithdrawalAdmin');
+const WalletWithdrawal = require('../models/WalletWithdrawal');
+
+// Controller to handle payment creation (adding money to wallet) with gateway selection
+// Updated section for paymentController.js to include MxPay
+
+// Update the payInController to support OKPAY specifically
 const payInController = async (req, res) => {
   try {
     const { amount, pay_type = 'UPI', gateway = 'OKPAY' } = req.body;
@@ -60,10 +73,15 @@ const payInController = async (req, res) => {
       case 'MXPAY':
         notifyUrl = `${host}/api/payments/mxpay/collection-callback`;
         break;
-      default: // OKPAY or any other
+      case 'OKPAY':
+        notifyUrl = `${host}/api/payments/okpay/payin-callback`;
+        break;
+      default:
         notifyUrl = `${host}/api/payments/okpay/payin-callback`;
         break;
     }
+
+    console.log(`Creating payment with gateway: ${gateway}, amount: ${amount}, notifyUrl: ${notifyUrl}`);
 
     let result;
 
@@ -77,9 +95,13 @@ const payInController = async (req, res) => {
         // Use MxPay payment gateway
         result = await createMxPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
         break;
+      case 'OKPAY':
+        // Use OKPAY payment gateway (our new implementation)
+        result = await createOkPayCollectionOrder(userId, orderId, pay_type, amount, notifyUrl, paymentGateway.gateway_id);
+        break;
       default:
         // Default to OKPAY payment gateway
-        result = await createPayInOrder(userId, orderId, pay_type, amount, notifyUrl, paymentGateway.gateway_id);
+        result = await createOkPayCollectionOrder(userId, orderId, pay_type, amount, notifyUrl, paymentGateway.gateway_id);
         break;
     }
 
@@ -372,6 +394,258 @@ const getPaymentStatusController = async (req, res) => {
   }
 };
 
+// Add OKPAY-specific callback handler
+const okPayCallbackController = async (req, res) => {
+  try {
+    console.log('OKPAY Callback Received:', req.body);
+    const result = await processOkPayCallback(req.body);
+    
+    if (result.success) {
+      // OKPAY requires the string "success" as response
+      return res.status(200).send('success');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing OKPAY callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing OKPAY callback'
+    });
+  }
+};
+
+// Controller to handle deposit initiation
+const initiateDeposit = async (req, res) => {
+    try {
+        const { amount, payment_method, currency = 'INR' } = req.body;
+        const userId = req.user.user_id;
+
+        if (!amount || parseFloat(amount) <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid amount provided'
+            });
+        }
+
+        // Create a unique order ID
+        const orderId = `DEP${Date.now()}${userId}`;
+
+        // Get host for callback URL
+        const host = `${req.protocol}://${req.get('host')}`;
+        let notifyUrl = '';
+        
+        // Set the callback URL based on payment method
+        switch (payment_method) {
+            case 'WEPAY':
+                notifyUrl = `${host}/api/payments/wepay/payin-callback`;
+                break;
+            case 'MXPAY':
+                notifyUrl = `${host}/api/payments/mxpay/collection-callback`;
+                break;
+            case 'OKPAY':
+                notifyUrl = `${host}/api/payments/okpay/payin-callback`;
+                break;
+            default:
+                notifyUrl = `${host}/api/payments/deposit-callback`;
+                break;
+        }
+        
+        const returnUrl = `${process.env.FRONTEND_URL}/wallet`;
+
+        // Find the payment gateway based on payment method
+        const paymentGateway = await PaymentGateway.findOne({
+            where: { 
+                code: payment_method,
+                is_active: true 
+            }
+        });
+
+        if (!paymentGateway) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid or inactive payment method'
+            });
+        }
+
+        // Create deposit order based on payment method
+        let result;
+        switch (payment_method) {
+            case 'WEPAY':
+                result = await createWePayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
+                break;
+            case 'MXPAY':
+                result = await createMxPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
+                break;
+            case 'OKPAY':
+                result = await createOkPayCollectionOrder(userId, orderId, 'UPI', amount, notifyUrl, paymentGateway.gateway_id);
+                break;
+            default:
+                return res.status(400).json({
+                    success: false,
+                    message: 'Unsupported payment method'
+                });
+        }
+
+        if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('Error initiating deposit:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error initiating deposit'
+        });
+    }
+};
+
+// Controller to get deposit history
+const getDepositHistory = async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { page = 1, limit = 10, status } = req.query;
+        const offset = (page - 1) * limit;
+
+        // Build where clause
+        const whereClause = { user_id: userId };
+        if (status) {
+            whereClause.status = status;
+        }
+
+        // Get deposits with pagination
+        const deposits = await sequelize.query(`
+            SELECT 
+                d.*,
+                pg.name as gateway_name,
+                pg.code as gateway_code
+            FROM deposits d
+            LEFT JOIN payment_gateways pg ON d.gateway_id = pg.gateway_id
+            WHERE d.user_id = :userId
+            ${status ? 'AND d.status = :status' : ''}
+            ORDER BY d.created_at DESC
+            LIMIT :limit OFFSET :offset
+        `, {
+            replacements: {
+                userId,
+                status,
+                limit: parseInt(limit),
+                offset: parseInt(offset)
+            },
+            type: sequelize.QueryTypes.SELECT
+        });
+
+        // Get total count
+        const totalCount = await sequelize.query(`
+            SELECT COUNT(*) as count
+            FROM deposits
+            WHERE user_id = :userId
+            ${status ? 'AND status = :status' : ''}
+        `, {
+            replacements: {
+                userId,
+                status
+            },
+            type: sequelize.QueryTypes.SELECT
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                deposits,
+                pagination: {
+                    total: totalCount[0].count,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    pages: Math.ceil(totalCount[0].count / limit)
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error getting deposit history:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting deposit history'
+        });
+    }
+};
+
+// Controller to get withdrawal history
+const getWithdrawalHistory = async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { page = 1, limit = 10, status } = req.query;
+        const offset = (page - 1) * limit;
+
+        // Build where clause
+        const whereClause = { user_id: userId };
+        if (status) {
+            whereClause.status = status;
+        }
+
+        // Get withdrawals with pagination
+        const withdrawals = await sequelize.query(`
+            SELECT 
+                w.*,
+                pg.name as gateway_name,
+                pg.code as gateway_code,
+                ba.account_number,
+                ba.ifsc_code,
+                ba.bank_name,
+                ba.account_holder_name
+            FROM wallet_withdrawals w
+            LEFT JOIN payment_gateways pg ON w.payment_gateway = pg.code
+            LEFT JOIN bank_accounts ba ON w.bank_account_id = ba.id
+            WHERE w.user_id = :userId
+            ${status ? 'AND w.status = :status' : ''}
+            ORDER BY w.created_at DESC
+            LIMIT :limit OFFSET :offset
+        `, {
+            replacements: {
+                userId,
+                status,
+                limit: parseInt(limit),
+                offset: parseInt(offset)
+            },
+            type: sequelize.QueryTypes.SELECT
+        });
+
+        // Get total count
+        const totalCount = await sequelize.query(`
+            SELECT COUNT(*) as count
+            FROM wallet_withdrawals
+            WHERE user_id = :userId
+            ${status ? 'AND status = :status' : ''}
+        `, {
+            replacements: {
+                userId,
+                status
+            },
+            type: sequelize.QueryTypes.SELECT
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                withdrawals,
+                pagination: {
+                    total: totalCount[0].count,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    pages: Math.ceil(totalCount[0].count / limit)
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error getting withdrawal history:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting withdrawal history'
+        });
+    }
+};
+
 module.exports = {
   payInController,
   processWithdrawalAdminAction,
@@ -381,5 +655,9 @@ module.exports = {
   payOutCallbackController,
   wePayCollectionCallbackController,
   wePayTransferCallbackController,
-  getPaymentStatusController
+  getPaymentStatusController,
+  okPayCallbackController,
+  initiateDeposit,
+  getDepositHistory,
+  getWithdrawalHistory
 };

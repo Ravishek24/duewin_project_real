@@ -1,9 +1,7 @@
 // scripts/referralCronJobs.js
 const { processRebateCommission, recordBetExperience } = require('../services/referralService');
 const { sequelize } = require('../config/db');
-
-
-// scripts/referralCronJobs.js (continued)
+const { Op } = require('sequelize');
 
 /**
 * Process lottery rebate commissions
@@ -44,59 +42,113 @@ const processLotteryRebate = async () => {
     console.log('Starting monthly VIP rewards processing...');
     
     try {
-      // Connect to database
-      await sequelize.authenticate();
-      
-      // Get all VIP levels
-      const vipLevels = await sequelize.query(
-        `SELECT * FROM vip_levels ORDER BY level ASC`,
-        { type: sequelize.QueryTypes.SELECT }
-      );
-      
-      // Get all users with VIP level > 0
-      const users = await sequelize.query(
-        `SELECT user_id, vip_level FROM users WHERE vip_level > 0`,
-        { type: sequelize.QueryTypes.SELECT }
-      );
-      
-      console.log(`Found ${users.length} VIP users for monthly rewards`);
-      
-      // Process each user
-      for (const user of users) {
-        // Find the VIP level details
-        const vipLevel = vipLevels.find(vl => vl.level === user.vip_level);
+        // Connect to database
+        await sequelize.authenticate();
         
-        if (vipLevel) {
-          // Award monthly reward
-          await sequelize.query(
-            `UPDATE users SET wallet_balance = wallet_balance + :reward WHERE user_id = :userId`,
-            { 
-              replacements: { 
-                reward: vipLevel.monthly_reward,
-                userId: user.user_id
-              },
-              type: sequelize.QueryTypes.UPDATE
+        // Get all VIP levels
+        const vipLevels = await sequelize.query(
+            `SELECT * FROM vip_levels ORDER BY level ASC`,
+            { type: sequelize.QueryTypes.SELECT }
+        );
+        
+        // Get all users with VIP level > 0
+        const users = await sequelize.query(
+            `SELECT user_id, vip_level FROM users WHERE vip_level > 0`,
+            { type: sequelize.QueryTypes.SELECT }
+        );
+        
+        console.log(`Found ${users.length} VIP users for monthly rewards`);
+        
+        // Process each user
+        for (const user of users) {
+            const t = await sequelize.transaction();
+            
+            try {
+                // Find the VIP level details
+                const vipLevel = vipLevels.find(vl => vl.level === user.vip_level);
+                
+                if (vipLevel) {
+                    // Check if monthly reward already claimed this month
+                    const startOfMonth = new Date();
+                    startOfMonth.setDate(1);
+                    startOfMonth.setHours(0, 0, 0, 0);
+
+                    const existingReward = await sequelize.query(
+                        `SELECT * FROM vip_rewards 
+                         WHERE user_id = :userId 
+                         AND level = :level 
+                         AND reward_type = 'monthly' 
+                         AND claimed_at >= :startOfMonth`,
+                        {
+                            replacements: {
+                                userId: user.user_id,
+                                level: user.vip_level,
+                                startOfMonth
+                            },
+                            type: sequelize.QueryTypes.SELECT,
+                            transaction: t
+                        }
+                    );
+
+                    if (!existingReward.length) {
+                        // Create reward record
+                        await sequelize.query(
+                            `INSERT INTO vip_rewards 
+                             (user_id, level, reward_type, amount, claimed_at, created_at, updated_at)
+                             VALUES (:userId, :level, 'monthly', :amount, NOW(), NOW(), NOW())`,
+                            {
+                                replacements: {
+                                    userId: user.user_id,
+                                    level: user.vip_level,
+                                    amount: vipLevel.monthly_reward
+                                },
+                                type: sequelize.QueryTypes.INSERT,
+                                transaction: t
+                            }
+                        );
+
+                        // Update user's wallet balance
+                        await sequelize.query(
+                            `UPDATE users 
+                             SET wallet_balance = wallet_balance + :amount 
+                             WHERE user_id = :userId`,
+                            {
+                                replacements: {
+                                    userId: user.user_id,
+                                    amount: vipLevel.monthly_reward
+                                },
+                                type: sequelize.QueryTypes.UPDATE,
+                                transaction: t
+                            }
+                        );
+
+                        // Log the transaction
+                        await sequelize.query(
+                            `INSERT INTO transactions 
+                             (user_id, amount, type, note, created_at)
+                             VALUES (:userId, :amount, 'credit', 'Monthly VIP reward', NOW())`,
+                            {
+                                replacements: {
+                                    userId: user.user_id,
+                                    amount: vipLevel.monthly_reward
+                                },
+                                type: sequelize.QueryTypes.INSERT,
+                                transaction: t
+                            }
+                        );
+                    }
+                }
+                
+                await t.commit();
+            } catch (error) {
+                await t.rollback();
+                console.error(`Error processing monthly reward for user ${user.user_id}:`, error);
             }
-          );
-          
-          // Log the transaction
-          await sequelize.query(
-            `INSERT INTO transactions (user_id, amount, type, note, created_at)
-             VALUES (:userId, :amount, 'credit', 'Monthly VIP reward', NOW())`,
-            {
-              replacements: {
-                userId: user.user_id,
-                amount: vipLevel.monthly_reward
-              },
-              type: sequelize.QueryTypes.INSERT
-            }
-          );
         }
-      }
-      
-      console.log(`Processed monthly rewards for ${users.length} users`);
+        
+        console.log(`Processed monthly rewards for ${users.length} users`);
     } catch (error) {
-      console.error('Error processing monthly VIP rewards:', error);
+        console.error('Error in processMonthlyVipRewards:', error);
     }
     
     console.log('Monthly VIP rewards processing complete');

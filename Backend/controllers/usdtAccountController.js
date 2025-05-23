@@ -1,37 +1,39 @@
 const UsdtAccount = require('../models/UsdtAccount');
 const { sequelize } = require('../config/db');
 
-// Service to get user's USDT accounts
-const getUsdtAccounts = async (userId) => {
+// Controller to get user's USDT accounts
+const getUsdtAccounts = async (req, res) => {
     try {
+        const userId = req.user.user_id;
         const usdtAccounts = await UsdtAccount.findAll({
             where: { user_id: userId },
             order: [['is_primary', 'DESC'], ['created_at', 'DESC']]
         });
 
-        return {
+        return res.status(200).json({
             success: true,
             usdtAccounts: usdtAccounts
-        };
+        });
     } catch (error) {
         console.error('Error fetching USDT accounts:', error);
-        return {
+        return res.status(500).json({
             success: false,
             message: 'Server error fetching USDT accounts.'
-        };
+        });
     }
 };
 
-// Service to add a USDT account
-const addUsdtAccount = async (userId, accountData) => {
+// Controller to add a USDT account
+const addUsdtAccount = async (req, res) => {
     const t = await sequelize.transaction();
 
     try {
+        const userId = req.user.user_id;
         const { 
             wallet_address, 
             network_type,
             is_primary = false 
-        } = accountData;
+        } = req.body;
 
         // Check if this is the first account (should be primary)
         const existingAccounts = await UsdtAccount.count({
@@ -62,26 +64,34 @@ const addUsdtAccount = async (userId, accountData) => {
 
         await t.commit();
 
-        return {
+        return res.status(201).json({
             success: true,
             message: 'USDT account added successfully.',
             usdtAccount: newUsdtAccount
-        };
+        });
     } catch (error) {
         await t.rollback();
         console.error('Error adding USDT account:', error);
-        return {
+        return res.status(500).json({
             success: false,
             message: 'Server error adding USDT account.'
-        };
+        });
     }
 };
 
-// Service to update a USDT account
-const updateUsdtAccount = async (userId, accountId, accountData) => {
+// Controller to update a USDT account
+const updateUsdtAccount = async (req, res) => {
     const t = await sequelize.transaction();
 
     try {
+        const userId = req.user.user_id;
+        const accountId = req.params.id;
+        const { 
+            wallet_address, 
+            network_type,
+            is_primary 
+        } = req.body;
+
         // Check if the account exists and belongs to the user
         const usdtAccount = await UsdtAccount.findOne({
             where: {
@@ -93,17 +103,11 @@ const updateUsdtAccount = async (userId, accountId, accountData) => {
 
         if (!usdtAccount) {
             await t.rollback();
-            return {
+            return res.status(404).json({
                 success: false,
                 message: 'USDT account not found or does not belong to the user.'
-            };
+            });
         }
-
-        const { 
-            wallet_address, 
-            network_type,
-            is_primary 
-        } = accountData;
 
         // If this account should be primary, unset primary from all other accounts
         if (is_primary) {
@@ -137,26 +141,29 @@ const updateUsdtAccount = async (userId, accountId, accountData) => {
 
         await t.commit();
 
-        return {
+        return res.status(200).json({
             success: true,
             message: 'USDT account updated successfully.',
             usdtAccount: updatedUsdtAccount
-        };
+        });
     } catch (error) {
         await t.rollback();
         console.error('Error updating USDT account:', error);
-        return {
+        return res.status(500).json({
             success: false,
             message: 'Server error updating USDT account.'
-        };
+        });
     }
 };
 
-// Service to delete a USDT account
-const deleteUsdtAccount = async (userId, accountId) => {
+// Controller to delete a USDT account
+const deleteUsdtAccount = async (req, res) => {
     const t = await sequelize.transaction();
 
     try {
+        const userId = req.user.user_id;
+        const accountId = req.params.id;
+
         // Check if the account exists and belongs to the user
         const usdtAccount = await UsdtAccount.findOne({
             where: {
@@ -168,10 +175,10 @@ const deleteUsdtAccount = async (userId, accountId) => {
 
         if (!usdtAccount) {
             await t.rollback();
-            return {
+            return res.status(404).json({
                 success: false,
                 message: 'USDT account not found or does not belong to the user.'
-            };
+            });
         }
 
         const wasPrimary = usdtAccount.is_primary;
@@ -206,17 +213,17 @@ const deleteUsdtAccount = async (userId, accountId) => {
 
         await t.commit();
 
-        return {
+        return res.status(200).json({
             success: true,
             message: 'USDT account deleted successfully.'
-        };
+        });
     } catch (error) {
         await t.rollback();
         console.error('Error deleting USDT account:', error);
-        return {
+        return res.status(500).json({
             success: false,
             message: 'Server error deleting USDT account.'
-        };
+        });
     }
 };
 

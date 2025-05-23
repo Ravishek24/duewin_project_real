@@ -2,24 +2,31 @@
 const axios = require('axios');
 const { Op } = require('sequelize');
 const { sequelize } = require('../config/db');
-const { seamlessConfig } = require('../config/seamlessConfig');
+const seamlessConfig = require('../config/seamlessConfig');
 const User = require('../models/User');
 const SeamlessTransaction = require('../models/SeamlessTransaction');
 const SeamlessGameSession = require('../models/SeamlessGameSession');
+const thirdPartyWalletService = require('./thirdPartyWalletService');
 
 /**
  * Get list of available games from provider
- * @param {string} currency - Currency code (default: INR)
+ * @param {string} currency - Currency code (default: EUR)
+ * @param {Object} filters - Optional filters for games
+ * @param {string} filters.category - Category to filter by (e.g. 'video-slots', 'livecasino', etc.)
+ * @param {string} filters.provider - Provider to filter by (e.g. 'ha' for Habanero)
+ * @param {boolean} filters.mobile - Filter for mobile games only
+ * @param {boolean} filters.jackpot - Filter for jackpot games only
+ * @param {boolean} filters.freerounds - Filter for games supporting free rounds
  * @returns {Promise<Object>} List of games
  */
-const getGameList = async (currency = seamlessConfig.default_currency) => {
+const getGameList = async (currency = seamlessConfig.default_currency, filters = {}) => {
   try {
     const requestData = {
       api_login: seamlessConfig.api_login,
       api_password: seamlessConfig.api_password,
       method: 'getGameList',
       show_systems: 0,
-      show_additional: true,
+      show_additional: true, // Important to get all filtering data
       currency: currency
     };
 
@@ -32,9 +39,46 @@ const getGameList = async (currency = seamlessConfig.default_currency) => {
       throw new Error(`Error getting game list: ${response.data.message || 'Unknown error'}`);
     }
 
+    // Apply filters if provided
+    let filteredGames = response.data.response;
+    
+    if (filters) {
+      // Filter by category (e.g. 'video-slots', 'livecasino', etc.)
+      if (filters.category) {
+        filteredGames = filteredGames.filter(game => 
+          game.type === filters.category || game.category === filters.category
+        );
+      }
+      
+      // Filter by provider/system (e.g. 'ha' for Habanero)
+      if (filters.provider) {
+        filteredGames = filteredGames.filter(game => 
+          game.system === filters.provider || 
+          game.subcategory?.toLowerCase() === filters.provider.toLowerCase()
+        );
+      }
+      
+      // Filter for mobile games
+      if (filters.mobile === true) {
+        filteredGames = filteredGames.filter(game => game.mobile === true);
+      }
+      
+      // Filter for jackpot games
+      if (filters.jackpot === true) {
+        filteredGames = filteredGames.filter(game => game.has_jackpot === true);
+      }
+      
+      // Filter for games supporting free rounds
+      if (filters.freerounds === true) {
+        filteredGames = filteredGames.filter(game => game.freerounds_supported === true);
+      }
+    }
+
     return {
       success: true,
-      games: response.data.response
+      games: filteredGames,
+      totalCount: response.data.response.length,
+      filteredCount: filteredGames.length
     };
   } catch (error) {
     console.error('Error in getGameList:', error);
@@ -154,6 +198,29 @@ const createPlayer = async (userId) => {
  */
 const getGameUrl = async (userId, gameId, language = seamlessConfig.default_language) => {
   try {
+    let warningMessage = null;
+    
+    // First, check if there's already a third-party wallet with funds
+    const walletBalanceCheck = await thirdPartyWalletService.getBalance(userId);
+    
+    // If wallet doesn't exist or has zero balance, try to transfer from main wallet
+    if (!walletBalanceCheck.success || parseFloat(walletBalanceCheck.balance) <= 0) {
+      // Transfer balance from main wallet to third-party wallet
+      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+      
+      if (!transferResult.success) {
+        // If error is about no funds, still continue but inform the user
+        if (transferResult.message === 'No funds available in main wallet') {
+          console.log(`User ${userId} has no funds to transfer to third-party wallet`);
+          // Continue with game loading, but user won't be able to place bets
+          warningMessage = 'You have no funds available to play. Please deposit first.';
+        } else {
+          console.error(`Failed to transfer to third-party wallet for user ${userId}:`, transferResult.message);
+          throw new Error(`Failed to transfer to third-party wallet: ${transferResult.message}`);
+        }
+      }
+    }
+    
     // First, check if player exists
     const playerCheck = await playerExists(userId);
     
@@ -161,6 +228,7 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
     if (!playerCheck.success || !playerCheck.exists) {
       const playerCreation = await createPlayer(userId);
       if (!playerCreation.success) {
+        console.error(`Failed to create player for user ${userId}:`, playerCreation.message);
         throw new Error(`Failed to create player: ${playerCreation.message}`);
       }
     }
@@ -194,7 +262,8 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
     );
 
     if (response.data.error !== 0) {
-      throw new Error(`Error getting game URL: ${response.data.message || 'Unknown error'}`);
+      console.error(`Error getting game URL for user ${userId}, game ${gameId}:`, response.data);
+      throw new Error(`Error getting game URL: ${response.data.message || 'Unknown error'} (code: ${response.data.error})`);
     }
 
     // Store game session info
@@ -206,17 +275,40 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
       game_id: gameId.includes('_') ? gameId.split('_')[1] : gameId,
       game_id_hash: gameId,
       is_active: true,
-      ip_address: null // Could be passed from the controller if needed
+      ip_address: null, // Could be passed from the controller if needed
+      game_type: gameId.includes('_') ? gameId.split('_')[0] : 'unknown', // Adding required field
+      session_id: response.data.sessionid // Adding required field
     });
 
+    // Handle different response formats from the provider
+    // Sometimes the URL is in response.data.url, other times it's directly in response.data.response
+    const gameUrl = response.data.url || response.data.response;
+    
     return {
       success: true,
-      gameUrl: response.data.response,
+      gameUrl: gameUrl,
+      warningMessage,
       sessionId: response.data.sessionid,
       gameSessionId: response.data.gamesession_id
     };
   } catch (error) {
-    console.error('Error in getGameUrl:', error);
+    console.error(`Error in getGameUrl for user ${userId}, game ${gameId}:`, error);
+    
+    // Provide more specific error messages based on common issues
+    if (error.message.includes('Network Error') || error.code === 'ECONNREFUSED') {
+      return {
+        success: false,
+        message: 'Unable to connect to game provider. Please try again later.'
+      };
+    }
+    
+    if (error.response && error.response.status === 403) {
+      return {
+        success: false,
+        message: 'Access denied by game provider. IP address may not be whitelisted.'
+      };
+    }
+    
     return {
       success: false,
       message: error.message || 'Failed to get game URL'
@@ -270,6 +362,17 @@ const processBalanceRequest = async (queryParams) => {
       };
     }
     
+    // Get balance from third-party wallet instead of main wallet
+    const walletResult = await thirdPartyWalletService.getBalance(user.user_id);
+    
+    if (!walletResult.success) {
+      await t.rollback();
+      return {
+        status: '500',
+        msg: 'Wallet not found'
+      };
+    }
+    
     // Record this balance request
     await SeamlessTransaction.create({
       user_id: user.user_id,
@@ -281,8 +384,8 @@ const processBalanceRequest = async (queryParams) => {
       type: 'balance',
       amount: 0, // Balance requests don't have an amount
       session_id: session_id || null,
-      wallet_balance_before: user.wallet_balance,
-      wallet_balance_after: user.wallet_balance
+      wallet_balance_before: walletResult.balance,
+      wallet_balance_after: walletResult.balance
     }, { transaction: t });
     
     // Update the session's last activity
@@ -294,7 +397,7 @@ const processBalanceRequest = async (queryParams) => {
     
     return {
       status: '200',
-      balance: parseFloat(user.wallet_balance).toFixed(2)
+      balance: parseFloat(walletResult.balance).toFixed(2)
     };
   } catch (error) {
     await t.rollback();
@@ -361,9 +464,8 @@ const processDebitRequest = async (queryParams) => {
       };
     }
     
-    // Get user with locking to prevent race conditions
+    // Get user 
     const user = await User.findByPk(gameSession.user_id, {
-      lock: true,
       transaction: t
     });
     
@@ -375,27 +477,27 @@ const processDebitRequest = async (queryParams) => {
       };
     }
     
-    // Check if user has enough balance
+    // Use third-party wallet service to update balance (deduct amount)
     const betAmount = parseFloat(amount);
-    if (parseFloat(user.wallet_balance) < betAmount) {
+    const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, -betAmount);
+    
+    if (!walletResult.success) {
       await t.rollback();
+      
+      // Check if failure was due to insufficient funds
+      if (walletResult.message === 'Insufficient funds') {
+        return {
+          status: '403',
+          balance: parseFloat(walletResult.currentBalance).toFixed(2),
+          msg: 'Insufficient funds'
+        };
+      }
+      
       return {
-        status: '403',
-        balance: parseFloat(user.wallet_balance).toFixed(2),
-        msg: 'Insufficient funds'
+        status: '500',
+        msg: walletResult.message || 'Failed to update wallet'
       };
     }
-    
-    // Update wallet balance
-    const oldBalance = parseFloat(user.wallet_balance);
-    const newBalance = oldBalance - betAmount;
-    
-    await User.update({
-      wallet_balance: newBalance
-    }, {
-      where: { user_id: user.user_id },
-      transaction: t
-    });
     
     // Record transaction
     const transactionRecord = await SeamlessTransaction.create({
@@ -409,8 +511,8 @@ const processDebitRequest = async (queryParams) => {
       type: 'debit',
       amount: betAmount,
       session_id: session_id || null,
-      wallet_balance_before: oldBalance,
-      wallet_balance_after: newBalance,
+      wallet_balance_before: walletResult.oldBalance,
+      wallet_balance_after: walletResult.newBalance,
       is_freeround_bet: is_freeround_bet === '1',
       jackpot_contribution_in_amount: jackpot_contribution_in_amount || 0,
       gameplay_final: gameplay_final === '1'
@@ -425,7 +527,7 @@ const processDebitRequest = async (queryParams) => {
     
     return {
       status: '200',
-      balance: newBalance.toFixed(2),
+      balance: walletResult.newBalance.toFixed(2),
       transactionId: transactionRecord.transaction_id
     };
   } catch (error) {
@@ -493,9 +595,8 @@ const processCreditRequest = async (queryParams) => {
       };
     }
     
-    // Get user with locking to prevent race conditions
+    // Get user
     const user = await User.findByPk(gameSession.user_id, {
-      lock: true,
       transaction: t
     });
     
@@ -507,17 +608,17 @@ const processCreditRequest = async (queryParams) => {
       };
     }
     
-    // Process the win
+    // Process the win using third-party wallet
     const winAmount = parseFloat(amount);
-    const oldBalance = parseFloat(user.wallet_balance);
-    const newBalance = oldBalance + winAmount;
+    const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, winAmount);
     
-    await User.update({
-      wallet_balance: newBalance
-    }, {
-      where: { user_id: user.user_id },
-      transaction: t
-    });
+    if (!walletResult.success) {
+      await t.rollback();
+      return {
+        status: '500',
+        msg: walletResult.message || 'Failed to update wallet'
+      };
+    }
     
     // Record transaction
     const transactionRecord = await SeamlessTransaction.create({
@@ -531,8 +632,8 @@ const processCreditRequest = async (queryParams) => {
       type: 'credit',
       amount: winAmount,
       session_id: session_id || null,
-      wallet_balance_before: oldBalance,
-      wallet_balance_after: newBalance,
+      wallet_balance_before: walletResult.oldBalance,
+      wallet_balance_after: walletResult.newBalance,
       is_freeround_win: is_freeround_win === '1',
       is_jackpot_win: is_jackpot_win === '1',
       gameplay_final: gameplay_final === '1'
@@ -547,7 +648,7 @@ const processCreditRequest = async (queryParams) => {
     
     return {
       status: '200',
-      balance: newBalance.toFixed(2),
+      balance: walletResult.newBalance.toFixed(2),
       transactionId: transactionRecord.transaction_id
     };
   } catch (error) {
@@ -620,9 +721,8 @@ const processRollbackRequest = async (queryParams) => {
       };
     }
     
-    // Get user with locking to prevent race conditions
+    // Get user
     const user = await User.findByPk(originalTransaction.user_id, {
-      lock: true,
       transaction: t
     });
     
@@ -634,39 +734,41 @@ const processRollbackRequest = async (queryParams) => {
       };
     }
     
-    // Process the rollback - reverse the original transaction effect
-    const oldBalance = parseFloat(user.wallet_balance);
-    let newBalance = oldBalance;
+    // Process the rollback in third-party wallet
+    let walletResult;
     
     // If original was debit (bet), add money back to wallet
     if (originalTransaction.type === 'debit') {
-      newBalance += parseFloat(originalTransaction.amount);
+      walletResult = await thirdPartyWalletService.updateBalance(
+        user.user_id, 
+        parseFloat(originalTransaction.amount)
+      );
     } 
     // If original was credit (win), subtract money from wallet
     else if (originalTransaction.type === 'credit') {
-      newBalance -= parseFloat(originalTransaction.amount);
+      walletResult = await thirdPartyWalletService.updateBalance(
+        user.user_id, 
+        -parseFloat(originalTransaction.amount)
+      );
       
-      // Check if user has enough balance for the rollback
-
-      // Check if user has enough balance for the rollback
-      if (newBalance < 0) {
+      // Check if wallet has enough balance for the rollback
+      if (!walletResult.success && walletResult.message === 'Insufficient funds') {
         await t.rollback();
         return {
           status: '403',
-          balance: oldBalance.toFixed(2),
+          balance: walletResult.currentBalance.toFixed(2),
           msg: 'Insufficient funds for rollback'
         };
       }
     }
     
-    // Update wallet balance
-    await User.update(
-      { wallet_balance: newBalance },
-      { 
-        where: { user_id: user.user_id },
-        transaction: t 
-      }
-    );
+    if (!walletResult || !walletResult.success) {
+      await t.rollback();
+      return {
+        status: '500',
+        msg: walletResult ? walletResult.message : 'Failed to process rollback'
+      };
+    }
     
     // Mark original transaction as rolled back
     await originalTransaction.update({
@@ -687,8 +789,8 @@ const processRollbackRequest = async (queryParams) => {
       type: 'rollback',
       amount: parseFloat(originalTransaction.amount),
       session_id: session_id || null,
-      wallet_balance_before: oldBalance,
-      wallet_balance_after: newBalance,
+      wallet_balance_before: walletResult.oldBalance,
+      wallet_balance_after: walletResult.newBalance,
       related_transaction_id: transaction_id,
       status: 'success'
     }, { transaction: t });
@@ -697,7 +799,7 @@ const processRollbackRequest = async (queryParams) => {
     
     return {
       status: '200',
-      balance: newBalance.toFixed(2),
+      balance: walletResult.newBalance.toFixed(2),
       transactionId: transactionRecord.transaction_id
     };
   } catch (error) {
@@ -711,7 +813,7 @@ const processRollbackRequest = async (queryParams) => {
 };
 
 /**
- * Close an active game session
+ * Close an active game session and transfer balance back to main wallet
  * @param {string} sessionToken - Session token
  * @returns {Promise<Object>} Result
  */
@@ -734,9 +836,19 @@ const closeGameSession = async (sessionToken) => {
       closed_at: new Date()
     });
     
+    // Transfer balance back to main wallet
+    const transferResult = await thirdPartyWalletService.transferToMainWallet(gameSession.user_id);
+    
+    if (!transferResult.success) {
+      return {
+        success: false,
+        message: `Game session closed but failed to transfer balance: ${transferResult.message}`
+      };
+    }
+    
     return {
       success: true,
-      message: 'Game session closed successfully'
+      message: 'Game session closed and balance transferred successfully'
     };
   } catch (error) {
     console.error('Error closing game session:', error);

@@ -1,16 +1,7 @@
 // services/referralService.js
-const { sequelize } = require('../config/db');
-const User = require('../models/User');
-const ReferralTree = require('../models/ReferralTree');
-const ReferralCommission = require('../models/ReferralCommission');
-const VipLevel = require('../models/VipLevel');
-const RebateLevel = require('../models/RebateLevel');
-const UserRebateLevel = require('../models/UserRebateLevel');
-const AttendanceRecord = require('../models/AttendanceRecord');
-const WalletRecharge = require('../models/WalletRecharge');
+const { sequelize, User, ReferralTree, ReferralCommission, VipLevel, RebateLevel, UserRebateLevel, AttendanceRecord, WalletRecharge, ValidReferral, VipReward } = require('../models');
 const { Op } = require('sequelize');
 const { updateWalletBalance } = require('./walletServices');
-const ValidReferral = require('../models/ValidReferral');
 
 /**
  * Create or update a user's referral tree when a new user is registered
@@ -19,111 +10,31 @@ const ValidReferral = require('../models/ValidReferral');
  * @returns {Object} - Operation result
  */
 const createReferralTree = async (userId, referralCode) => {
-    const t = await sequelize.transaction();
-
     try {
-        // Find the referrer by their referring_code
+        // Find the referrer using the referral code
         const referrer = await User.findOne({
-            where: { referring_code: referralCode },
-            transaction: t
+            where: { referral_code: referralCode }
         });
 
         if (!referrer) {
-            await t.rollback();
-            return {
-                success: false,
-                message: 'Invalid referral code'
-            };
+            throw new Error('Invalid referral code');
         }
 
-        // Get referrer's tree or create new if not exists
-        let referrerTree = await ReferralTree.findOne({
-            where: { user_id: referrer.user_id },
-            transaction: t
-        });
-
-        if (!referrerTree) {
-            referrerTree = await ReferralTree.create({
-                user_id: referrer.user_id,
-                level_1: userId.toString(),
-                created_at: new Date(),
-                updated_at: new Date()
-            }, { transaction: t });
-        } else {
-            // Add the new user to level 1 of referrer
-            const level1Users = referrerTree.level_1 ?
-                referrerTree.level_1.split(',').map(id => parseInt(id)) : [];
-
-            if (!level1Users.includes(userId)) {
-                level1Users.push(userId);
-                await referrerTree.update({
-                    level_1: level1Users.join(','),
-                    updated_at: new Date()
-                }, { transaction: t });
-            }
-        }
-
-        // Increment direct referral count for referrer
-        await User.increment('direct_referral_count', {
-            by: 1,
-            where: { user_id: referrer.user_id },
-            transaction: t
-        });
-
-        // Create new user's tree
-        await ReferralTree.create({
+        // Create the referral tree entry
+        const referralTree = await ReferralTree.create({
             user_id: userId,
-            created_at: new Date(),
-            updated_at: new Date()
-        }, { transaction: t });
-
-        // Now, update higher level trees recursively
-        // Get referrer's referrer (level 2 for new user)
-        const level2ReferrerId = referrer.referral_code ?
-            (await User.findOne({
-                where: { referring_code: referrer.referral_code },
-                transaction: t
-            }))?.user_id : null;
-
-        if (level2ReferrerId) {
-            // Get or create level 2 referrer's tree
-            let level2Tree = await ReferralTree.findOne({
-                where: { user_id: level2ReferrerId },
-                transaction: t
-            });
-
-            if (level2Tree) {
-                // Add the new user to level 2 of this tree
-                const level2Users = level2Tree.level_2 ?
-                    level2Tree.level_2.split(',').map(id => parseInt(id)) : [];
-
-                if (!level2Users.includes(userId)) {
-                    level2Users.push(userId);
-                    await level2Tree.update({
-                        level_2: level2Users.join(','),
-                        updated_at: new Date()
-                    }, { transaction: t });
-                }
-
-                // Continue for level 3 and beyond...
-                // Note: Actual implementation would continue this pattern for levels 3-6
-                // This is simplified for brevity
-            }
-        }
-
-        await t.commit();
+            referrer_id: referrer.id,
+            level: 1,
+            commission_rate: 5.00 // Default commission rate
+        });
 
         return {
             success: true,
-            message: 'Referral tree created successfully'
+            data: referralTree
         };
     } catch (error) {
-        await t.rollback();
         console.error('Error creating referral tree:', error);
-        return {
-            success: false,
-            message: 'Error creating referral tree'
-        };
+        throw error;
     }
 };
 
@@ -303,7 +214,7 @@ const getDirectReferrals = async (userId, dateFilter = null) => {
             where: whereClause,
             attributes: [
                 'user_id', 'user_name', 'email', 'phone_no',
-                'created_at', 'wallet_balance', 'vip_level'
+                'created_at', 'wallet_balance', 'vip_level', 'actual_deposit_amount'
             ],
             order: [['created_at', 'DESC']]
         });
@@ -381,7 +292,7 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
                     where: whereClause,
                     attributes: [
                         'user_id', 'user_name', 'email', 'phone_no',
-                        'created_at', 'wallet_balance', 'vip_level'
+                        'created_at', 'wallet_balance', 'vip_level', 'actual_deposit_amount'
                     ],
                     order: [['created_at', 'DESC']]
                 });
@@ -729,93 +640,74 @@ const getCommissionEarnings = async (userId, dateFilter = null) => {
 /**
 * Get referral tree details for API
 * @param {number} userId - User ID
-* @param {number} maxLevel - Maximum level to return (default: 6)
+* @param {number} maxLevel - Maximum level to return (default: 5)
 * @returns {Object} - Referral tree details
 */
-const getReferralTreeDetails = async (userId, maxLevel = 6) => {
+const getReferralTreeDetails = async (userId, maxLevel = 5) => {
     try {
-        // Get the referral tree
         const referralTree = await ReferralTree.findOne({
             where: { user_id: userId }
         });
 
         if (!referralTree) {
-            return {
-                success: true,
-                referralTree: [],
-                totalCount: 0
-            };
+            return { referrals: [], totalCount: 0 };
         }
 
-        // Initialize result array
-        const treeDetails = [];
+        const result = [];
         let totalCount = 0;
 
         // Process each level
         for (let level = 1; level <= maxLevel; level++) {
-            const fieldName = `level_${level}`;
+            const levelUsers = [];
+            const levelField = `level_${level}`;
 
-            if (referralTree[fieldName]) {
-                const userIds = referralTree[fieldName].split(',').map(id => parseInt(id));
-
-                // Get users for this level
+            if (referralTree[levelField]) {
+                const userIds = referralTree[levelField].split(',');
                 const users = await User.findAll({
-                    where: { user_id: { [Op.in]: userIds } },
+                    where: {
+                        user_id: userIds
+                    },
                     attributes: [
-                        'user_id', 'user_name', 'email', 'created_at'
+                        'user_id',
+                        'user_name',
+                        'email',
+                        'phone_no',
+                        'wallet_balance',
+                        'bonus_amount',
+                        'total_bet_amount',
+                        'direct_referral_count',
+                        'referral_level',
+                        'vip_level',
+                        'vip_exp',
+                        'created_at'
                     ]
                 });
 
-                // Get deposit totals for each user
                 for (const user of users) {
-                    const deposits = await WalletRecharge.findAll({
-                        where: {
-                            user_id: user.user_id,
-                            payment_status: true
-                        },
-                        attributes: [
-                            'added_amount'
-                        ]
+                    const depositTotal = await getTotalDeposits(user.user_id);
+                    levelUsers.push({
+                        ...user.toJSON(),
+                        deposit_total: depositTotal
                     });
+                }
 
-                    const totalDeposit = deposits.reduce(
-                        (sum, deposit) => sum + parseFloat(deposit.added_amount),
-                        0
-                    );
-
-                    // Get latest commission
-                    const latestCommission = await ReferralCommission.findOne({
-                        where: {
-                            user_id: userId,
-                            referred_user_id: user.user_id
-                        },
-                        order: [['created_at', 'DESC']]
-                    });
-
-                    treeDetails.push({
-                        user_id: user.user_id,
-                        user_name: user.user_name,
+                if (levelUsers.length > 0) {
+                    result.push({
                         level,
-                        total_deposit: totalDeposit,
-                        latest_commission_time: latestCommission?.created_at || null
+                        users: levelUsers
                     });
-
-                    totalCount++;
+                    totalCount += levelUsers.length;
                 }
             }
         }
 
         return {
-            success: true,
-            referralTree: treeDetails,
+            referrals: result,
             totalCount
         };
     } catch (error) {
-        console.error('Error getting referral tree details:', error);
-        return {
-            success: false,
-            message: 'Error getting referral tree details'
-        };
+        console.error('Error in getReferralTreeDetails:', error);
+        throw error;
     }
 };
 
@@ -852,13 +744,13 @@ const recordBetExperience = async (userId, betAmount) => {
 
         // Check for VIP level up
         const vipLevels = await VipLevel.findAll({
-            order: [['exp_required', 'ASC']],
+            order: [['required_exp', 'ASC']],
             transaction: t
         });
 
         let newVipLevel = 0;
         for (const vipLevel of vipLevels) {
-            if (newExp >= vipLevel.exp_required) {
+            if (newExp >= vipLevel.required_exp) {
                 newVipLevel = vipLevel.level;
             } else {
                 break;
@@ -871,17 +763,38 @@ const recordBetExperience = async (userId, betAmount) => {
             // Get level details
             const levelDetails = vipLevels.find(l => l.level === newVipLevel);
 
-            // Update user's VIP level
-            await user.update({ vip_level: newVipLevel }, { transaction: t });
+            // Check if reward already claimed
+            const existingReward = await VipReward.findOne({
+                where: {
+                    user_id: userId,
+                    level: newVipLevel,
+                    reward_type: 'level_up'
+                },
+                transaction: t
+            });
 
-            // Award bonus if level up
-            await updateWalletBalance(userId, levelDetails.bonus_amount, 'add', t);
+            if (!existingReward) {
+                // Update user's VIP level
+                await user.update({ vip_level: newVipLevel }, { transaction: t });
 
-            levelUpDetails = {
-                oldLevel: user.vip_level,
-                newLevel: newVipLevel,
-                bonusAmount: levelDetails.bonus_amount
-            };
+                // Create reward record
+                await VipReward.create({
+                    user_id: userId,
+                    level: newVipLevel,
+                    reward_type: 'level_up',
+                    amount: levelDetails.bonus_amount,
+                    claimed_at: new Date()
+                }, { transaction: t });
+
+                // Award bonus if level up
+                await updateWalletBalance(userId, levelDetails.bonus_amount, 'add', t);
+
+                levelUpDetails = {
+                    oldLevel: user.vip_level,
+                    newLevel: newVipLevel,
+                    bonusAmount: levelDetails.bonus_amount
+                };
+            }
         }
 
         await t.commit();
@@ -904,10 +817,10 @@ const recordBetExperience = async (userId, betAmount) => {
 };
 
 /**
-* Process direct invitation bonus based on referral count
-* @param {number} userId - User ID
-* @returns {Object} - Operation result
-*/
+ * Process direct invitation bonus based on referral count
+ * @param {number} userId - User ID
+ * @returns {Object} - Operation result
+ */
 const processDirectInvitationBonus = async (userId) => {
     const t = await sequelize.transaction();
 
@@ -1861,6 +1774,83 @@ const getInvitationBonusStatus = async (userId) => {
     }
 };
 
+// Helper function to get commission rate based on level
+const getCommissionRate = (level) => {
+    const rates = {
+        1: 0.10, // 10% for level 1
+        2: 0.05, // 5% for level 2
+        3: 0.03, // 3% for level 3
+        4: 0.02, // 2% for level 4
+        5: 0.01, // 1% for level 5
+        6: 0.005 // 0.5% for level 6
+    };
+    return rates[level] || 0;
+};
+
+// Helper function to calculate commission
+const calculateCommission = (referredUser, rate) => {
+    // Get user's total bets for the day
+    const totalBets = referredUser.total_bet_amount || 0;
+    return totalBets * rate;
+};
+
+// Process referrals for all users
+const processReferrals = async () => {
+    try {
+        // Use raw SQL query to avoid Sequelize's automatic join behavior
+        const referralTrees = await sequelize.query(`
+            SELECT 
+                rt.id, rt.user_id, rt.referrer_id, 
+                rt.level_1, rt.level_2, rt.level_3, rt.level_4, rt.level_5, rt.level_6,
+                u1.user_id as referred_user_id, u1.user_name as referred_username, 
+                u1.wallet_balance as referred_balance, u1.total_bet_amount as referred_total_bet,
+                u2.user_id as referrer_user_id, u2.user_name as referrer_username, 
+                u2.wallet_balance as referrer_balance
+            FROM referral_trees rt
+            LEFT JOIN users u1 ON rt.user_id = u1.user_id
+            LEFT JOIN users u2 ON rt.referrer_id = u2.user_id
+        `, {
+            type: sequelize.QueryTypes.SELECT
+        });
+
+        for (const tree of referralTrees) {
+            // Process each level
+            for (let level = 1; level <= 6; level++) {
+                const levelField = `level_${level}`;
+                if (tree[levelField]) {
+                    const userIds = tree[levelField].split(',').map(id => parseInt(id));
+                    const rate = getCommissionRate(level);
+
+                    // Get users at this level
+                    const users = await User.findAll({
+                        where: { user_id: userIds },
+                        attributes: ['user_id', 'total_bet_amount']
+                    });
+
+                    // Calculate commission for each user at this level
+                    for (const user of users) {
+                        const commission = calculateCommission(user, rate);
+                        if (commission > 0) {
+                            // Update referrer's balance
+                            await User.increment('wallet_balance', {
+                                by: commission,
+                                where: { user_id: tree.referrer_id }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        return {
+            success: true,
+            message: 'Referral processing completed'
+        };
+    } catch (error) {
+        console.error('Error processing referrals:', error);
+        throw error;
+    }
+};
 
 module.exports = {
     createReferralTree,
@@ -1875,7 +1865,12 @@ module.exports = {
     processDirectInvitationBonus,
     recordAttendance,
     processFirstRechargeBonus,
+    processRechargeForAttendance,
+    claimAttendanceBonus,
+    getUnclaimedAttendanceBonuses,
+    updateReferralOnRecharge,
     updateInvitationTier,
     claimInvitationBonus,
-    getInvitationBonusStatus
+    getInvitationBonusStatus,
+    processReferrals
 };

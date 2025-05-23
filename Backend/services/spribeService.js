@@ -8,6 +8,7 @@ const {
   parseAmount 
 } = require('../utils/spribeUtils');
 const User = require('../models/User');
+const thirdPartyWalletService = require('./thirdPartyWalletService');
 const { 
   createGameSession, 
   updateGameSession,
@@ -44,6 +45,25 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
       };
     }
     
+    // Transfer balance from main wallet to third-party wallet
+    const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+    
+    // Store whether user had funds for later use in the response
+    let hasNoFunds = false;
+    if (!transferResult.success) {
+      // If error is about no funds, still continue but inform the user
+      if (transferResult.message === 'No funds available in main wallet') {
+        console.log(`User ${userId} has no funds to transfer to third-party wallet`);
+        // Continue with game loading, but user won't be able to place bets
+        hasNoFunds = true;
+      } else {
+        return {
+          success: false,
+          message: `Failed to transfer to third-party wallet: ${transferResult.message}`
+        };
+      }
+    }
+    
     // Generate frontend return URL
     const returnUrl = `${process.env.FRONTEND_URL}/games`;
     const accountHistoryUrl = `${process.env.FRONTEND_URL}/account/history`;
@@ -69,6 +89,15 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
       accountHistoryUrl,
       ircDuration: 3600, // 1 hour reality check
     });
+    
+    // If we had a funds issue, include that in the response
+    if (hasNoFunds) {
+      return {
+        success: true,
+        url: launchUrl,
+        warningMessage: 'You have no funds available to play. Please deposit first.'
+      };
+    }
     
     return {
       success: true,
@@ -114,6 +143,15 @@ const handleAuth = async (authData) => {
       };
     }
     
+    // Get balance from third-party wallet
+    const walletResult = await thirdPartyWalletService.getBalance(userId);
+    if (!walletResult.success) {
+      return {
+        code: 500,
+        message: 'Wallet not found'
+      };
+    }
+    
     // Return successful auth response
     return {
       code: 200,
@@ -121,7 +159,7 @@ const handleAuth = async (authData) => {
       data: {
         user_id: user.user_id.toString(),
         username: user.user_name,
-        balance: formatAmount(user.wallet_balance, currency),
+        balance: formatAmount(walletResult.balance, currency),
         currency: currency
       }
     };
@@ -152,6 +190,15 @@ const handlePlayerInfo = async (infoData) => {
       };
     }
     
+    // Get balance from third-party wallet
+    const walletResult = await thirdPartyWalletService.getBalance(user_id);
+    if (!walletResult.success) {
+      return {
+        code: 500,
+        message: 'Wallet not found'
+      };
+    }
+    
     // Return player info
     return {
       code: 200,
@@ -159,7 +206,7 @@ const handlePlayerInfo = async (infoData) => {
       data: {
         user_id: user.user_id.toString(),
         username: user.user_name,
-        balance: formatAmount(user.wallet_balance, currency),
+        balance: formatAmount(walletResult.balance, currency),
         currency: currency
       }
     };
@@ -215,7 +262,26 @@ const handleWithdraw = async (withdrawData) => {
     // Parse amount from SPRIBE format
     const parsedAmount = parseAmount(amount, currency);
     
-    // Process the bet transaction
+    // Update third-party wallet balance (deduct amount)
+    const walletResult = await thirdPartyWalletService.updateBalance(user_id, -parsedAmount);
+    
+    if (!walletResult.success) {
+      // Handle insufficient funds case
+      if (walletResult.message === 'Insufficient funds') {
+        return {
+          code: 402,
+          message: 'Insufficient funds'
+        };
+      }
+      
+      // Generic error
+      return {
+        code: 500,
+        message: walletResult.message || 'Failed to update wallet'
+      };
+    }
+    
+    // Process the bet transaction (for record keeping only)
     const result = await processBetTransaction({
       user_id,
       provider,
@@ -225,19 +291,13 @@ const handleWithdraw = async (withdrawData) => {
       currency,
       action_id,
       platform,
-      ip_address: null // We don't get this from SPRIBE
+      ip_address: null, // We don't get this from SPRIBE
+      old_balance: walletResult.oldBalance,
+      new_balance: walletResult.newBalance
     });
     
     if (!result.success) {
-      // Handle insufficient funds case
-      if (result.code === 402) {
-        return {
-          code: 402,
-          message: 'Insufficient funds'
-        };
-      }
-      
-      // Generic error
+      // This shouldn't happen as we've already updated the wallet, but handle it anyway
       return {
         code: 500,
         message: result.message || 'Transaction processing failed'
@@ -253,8 +313,8 @@ const handleWithdraw = async (withdrawData) => {
         operator_tx_id: result.operator_tx_id,
         provider: provider,
         provider_tx_id: provider_tx_id,
-        old_balance: formatAmount(result.oldBalance, currency),
-        new_balance: formatAmount(result.newBalance, currency),
+        old_balance: formatAmount(walletResult.oldBalance, currency),
+        new_balance: formatAmount(walletResult.newBalance, currency),
         currency: currency
       }
     };
@@ -312,7 +372,17 @@ const handleDeposit = async (depositData) => {
     // Parse amount from SPRIBE format
     const parsedAmount = parseAmount(amount, currency);
     
-    // Process the win transaction
+    // Update third-party wallet balance (add amount)
+    const walletResult = await thirdPartyWalletService.updateBalance(user_id, parsedAmount);
+    
+    if (!walletResult.success) {
+      return {
+        code: 500,
+        message: walletResult.message || 'Failed to update wallet'
+      };
+    }
+    
+    // Process the win transaction (for record keeping only)
     const result = await processWinTransaction({
       user_id,
       provider,
@@ -323,7 +393,9 @@ const handleDeposit = async (depositData) => {
       action_id,
       platform,
       ip_address: null,
-      withdraw_provider_tx_id
+      withdraw_provider_tx_id,
+      old_balance: walletResult.oldBalance,
+      new_balance: walletResult.newBalance
     });
     
     if (!result.success) {
@@ -342,8 +414,8 @@ const handleDeposit = async (depositData) => {
         operator_tx_id: result.operator_tx_id,
         provider: provider,
         provider_tx_id: provider_tx_id,
-        old_balance: formatAmount(result.oldBalance, currency),
-        new_balance: formatAmount(result.newBalance, currency),
+        old_balance: formatAmount(walletResult.oldBalance, currency),
+        new_balance: formatAmount(walletResult.newBalance, currency),
         currency: currency
       }
     };
@@ -396,14 +468,48 @@ const handleRollback = async (rollbackData) => {
       };
     }
     
-    // Get currency from transaction or user 
-    // (In production, always fetch from the original transaction)
-    const currency = 'INR';
+    // Find original transaction to determine if it was a bet or win
+    const originalTx = await findTransactionByProviderTxId(rollback_provider_tx_id);
+    if (!originalTx.success) {
+      return {
+        code: 408,
+        message: 'Transaction does not found'
+      };
+    }
+    
+    // Get currency from transaction or user
+    const currency = originalTx.transaction.currency || 'INR';
     
     // Parse amount from SPRIBE format
     const parsedAmount = parseAmount(amount, currency);
     
-    // Process the rollback transaction
+    // Determine if we need to add or subtract based on original transaction type
+    let walletResult;
+    
+    if (originalTx.transaction.type === 'bet') {
+      // If rolling back a bet, give money back to player
+      walletResult = await thirdPartyWalletService.updateBalance(user_id, parsedAmount);
+    } else if (originalTx.transaction.type === 'win') {
+      // If rolling back a win, take money from player
+      walletResult = await thirdPartyWalletService.updateBalance(user_id, -parsedAmount);
+      
+      // Handle insufficient funds case
+      if (!walletResult.success && walletResult.message === 'Insufficient funds') {
+        return {
+          code: 402,
+          message: 'Insufficient funds for rollback'
+        };
+      }
+    }
+    
+    if (!walletResult || !walletResult.success) {
+      return {
+        code: 500,
+        message: walletResult ? walletResult.message : 'Failed to process rollback'
+      };
+    }
+    
+    // Process the rollback transaction (for record keeping only)
     const result = await processRollbackTransaction({
       user_id,
       provider,
@@ -414,19 +520,12 @@ const handleRollback = async (rollbackData) => {
       currency,
       action_id,
       platform: null, // Might not be available in rollback
-      ip_address: null
+      ip_address: null,
+      old_balance: walletResult.oldBalance,
+      new_balance: walletResult.newBalance
     });
     
     if (!result.success) {
-      // Handle transaction not found
-      if (result.code === 408) {
-        return {
-          code: 408,
-          message: 'Transaction does not found'
-        };
-      }
-      
-      // Generic error
       return {
         code: 500,
         message: result.message || 'Rollback processing failed'
@@ -443,8 +542,8 @@ const handleRollback = async (rollbackData) => {
         operator_tx_id: result.operator_tx_id,
         provider: provider,
         provider_tx_id: provider_tx_id,
-        old_balance: formatAmount(result.oldBalance, currency),
-        new_balance: formatAmount(result.newBalance, currency)
+        old_balance: formatAmount(walletResult.oldBalance, currency),
+        new_balance: formatAmount(walletResult.newBalance, currency)
       }
     };
   } catch (error) {

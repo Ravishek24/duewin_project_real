@@ -1,21 +1,32 @@
 const express = require('express');
-const { 
+const {
   getWalletBalanceController,
   getTransactionHistoryController,
-  getRechargeHistoryController,
-  getWithdrawalHistoryController
-} = require('../controllers/walletController.js');
-const { auth } = require('../middlewares/authMiddleware');
+  getDepositHistoryController,
+  getWithdrawalHistoryController,
+  getFirstBonusStatusController,
+  initiateWithdrawalController,
+  getAllWalletBalances,
+  transferFromThirdPartyToMain
+} = require('../controllers/walletController');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
-// All wallet routes require authentication
-router.use(auth);
+// Protected routes (require authentication)
+router.get('/balance', auth, getWalletBalanceController);
+router.get('/history', auth, getTransactionHistoryController);
+router.get('/deposit-history', auth, getDepositHistoryController);
+router.get('/withdrawal-history', auth, getWithdrawalHistoryController);
+router.get('/first-bonus-status', auth, getFirstBonusStatusController);
 
-// Wallet routes
-router.get('/balance', getWalletBalanceController);
-router.get('/transactions', getTransactionHistoryController);
-router.get('/recharges', getRechargeHistoryController);
-router.get('/withdrawals', getWithdrawalHistoryController);
+// Initiate withdrawal - only define this route once
+router.post('/withdraw', auth, requirePhoneVerification, initiateWithdrawalController);
+
+// Get all wallet balances (main and third-party)
+router.get('/balances', auth, requirePhoneVerification, getAllWalletBalances);
+
+// Transfer from third-party wallet to main wallet
+router.post('/transfer-from-third-party', auth, requirePhoneVerification, transferFromThirdPartyToMain);
 
 module.exports = router;

@@ -1,7 +1,5 @@
-const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
-const User = require('./User.js');
-const PaymentGateway = require('./PaymentGateway.js');
+const { sequelize } = require('../config/db');
 
 const WalletRecharge = sequelize.define('WalletRecharge', {
     id: {
@@ -34,39 +32,24 @@ const WalletRecharge = sequelize.define('WalletRecharge', {
         allowNull: false,
         defaultValue: 'pending'
     },
+    bonus_amount: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false,
+        defaultValue: 0.00
+    },
     created_at: {
         type: DataTypes.DATE,
-        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
-        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'wallet_recharges',
     timestamps: true,
     createdAt: 'created_at',
     updatedAt: 'updated_at',
-    indexes: [
-        {
-            fields: ['user_id']
-        },
-        {
-            fields: ['payment_gateway_id']
-        },
-        {
-            fields: ['status']
-        }
-    ]
+    tableName: 'wallet_recharges'
 });
-
-// Establish relationships
-User.hasMany(WalletRecharge, { foreignKey: 'user_id' });
-WalletRecharge.belongsTo(User, { foreignKey: 'user_id' });
-
-PaymentGateway.hasMany(WalletRecharge, { foreignKey: 'payment_gateway_id' });
-WalletRecharge.belongsTo(PaymentGateway, { foreignKey: 'payment_gateway_id' });
 
 module.exports = WalletRecharge;

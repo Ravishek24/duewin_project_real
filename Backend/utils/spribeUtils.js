@@ -20,10 +20,7 @@ const generateOneTimeToken = () => {
  */
 const generateGameLaunchUrl = (gameId, user, options = {}) => {
   // Generate a one-time token for this launch
-  const token = generateOneTimeToken();
-  
-  // Store token in database or cache with user association
-  // (This would be implemented in a token service)
+  const token = options.token || generateOneTimeToken();
   
   // Base URL parameters
   const params = {
@@ -32,7 +29,8 @@ const generateGameLaunchUrl = (gameId, user, options = {}) => {
     token: token,
     currency: options.currency || spribeConfig.defaultCurrency,
     operator: spribeConfig.operatorKey,
-    lang: options.language || spribeConfig.defaultLanguage
+    lang: options.language || spribeConfig.defaultLanguage,
+    callback_url: spribeConfig.callbackUrl // Use the unified callback URL
   };
   
   // Add optional parameters if provided

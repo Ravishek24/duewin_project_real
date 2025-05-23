@@ -1,9 +1,17 @@
+require('dotenv').config({ path: '../.env' });
 const bcrypt = require('bcrypt');
 const { sequelize } = require('../config/db');
 
 async function createTestUser() {
   try {
     console.log('Starting test user creation...');
+    console.log('Database config:', {
+      host: process.env.DB_HOST,
+      port: process.env.DB_PORT,
+      database: process.env.DB_NAME,
+      user: process.env.DB_USER,
+      hasPassword: !!process.env.DB_PASS
+    });
     
     // Connect to database
     await sequelize.authenticate();

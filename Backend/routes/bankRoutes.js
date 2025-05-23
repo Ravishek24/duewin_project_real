@@ -1,26 +1,50 @@
 const express = require('express');
-const { 
-    getBankAccountsController, 
-    initBankAccountController, 
-    completeBankAccountController,
-    updateBankAccountController, 
-    deleteBankAccountController 
-} = require('../controllers/bankAccountController');
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
-
 const router = express.Router();
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+const rateLimiters = require('../middleware/rateLimiter');
+const validationRules = require('../middleware/inputValidator');
+const {
+    getBankAccountsController,
+    initBankAccountController,
+    completeBankAccountController,
+    updateBankAccountController,
+    deleteBankAccountController
+} = require('../controllers/bankAccountController');
 
-// All bank account routes require authentication and phone verification
+// All bank routes require authentication and phone verification
 router.use(auth);
 router.use(requirePhoneVerification);
 
-router.get('/', getBankAccountsController);
+// Initialize bank account addition (send OTP)
+router.post('/accounts/init',
+    rateLimiters.bankAccount,
+    validationRules.bankAccount,
+    initBankAccountController
+);
 
-// Two-step bank account addition with OTP verification
-router.post('/init', initBankAccountController);
-router.post('/complete', completeBankAccountController);
+// Complete bank account addition (verify OTP)
+router.post('/accounts/complete',
+    rateLimiters.bankAccount,
+    completeBankAccountController
+);
 
-router.put('/:id', updateBankAccountController);
-router.delete('/:id', deleteBankAccountController);
+// Update bank account
+router.put('/accounts/:id',
+    rateLimiters.bankAccount,
+    validationRules.bankAccount,
+    updateBankAccountController
+);
+
+// Delete bank account
+router.delete('/accounts/:id',
+    rateLimiters.bankAccount,
+    deleteBankAccountController
+);
+
+// Get bank accounts
+router.get('/accounts',
+    rateLimiters.general,
+    getBankAccountsController
+);
 
 module.exports = router;

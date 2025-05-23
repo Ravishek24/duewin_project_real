@@ -1,0 +1,130 @@
+// Add the isBettingFrozen, hasBets, and updateGameHistory functions here
+// Do NOT include duplicate processGameResults function declarations
+
+/**
+ * Check if betting is frozen for the current period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {boolean} - Whether betting is frozen
+ */
+const isBettingFrozen = async (gameType, duration, periodId) => {
+    try {
+        // Get period end time
+        const endTime = calculatePeriodEndTime(periodId, duration);
+        const now = new Date();
+        
+        // Calculate time remaining in seconds
+        const timeRemaining = Math.max(0, (endTime - now) / 1000);
+        
+        // Betting is frozen in the last 5 seconds
+        return timeRemaining <= 5;
+    } catch (error) {
+        logger.error('Error checking if betting is frozen', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+        
+        // Default to frozen in case of error
+        return true;
+    }
+};
+
+/**
+ * Check if there are any bets for the current period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {boolean} - Whether there are any bets
+ */
+const hasBets = async (gameType, duration, periodId) => {
+    try {
+        // Get duration key for Redis
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+        
+        // Create Redis key for bets
+        const betsKey = `${gameType}:${durationKey}:${periodId}:bets`;
+        
+        // Get bets from Redis
+        const betsStr = await redisClient.get(betsKey);
+        
+        if (!betsStr) {
+            return false;
+        }
+        
+        const bets = JSON.parse(betsStr);
+        
+        return bets.length > 0;
+    } catch (error) {
+        logger.error('Error checking if period has bets', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+        
+        return false;
+    }
+};
+
+/**
+ * Update game history in Redis
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {Object} result - Game result
+ */
+const updateGameHistory = async (gameType, duration, periodId, result) => {
+    try {
+        // Get duration key for Redis
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+        
+        // Create Redis key for history
+        const historyKey = `${gameType}:${durationKey}:history`;
+        
+        // Get current history
+        let history = await redisClient.get(historyKey);
+        
+        if (!history) {
+            history = '[]';
+        }
+        
+        const historyData = JSON.parse(history);
+        
+        // Add new result to history
+        const historyItem = {
+            periodId,
+            result,
+            timestamp: new Date().toISOString()
+        };
+        
+        // Add to the beginning of the array
+        historyData.unshift(historyItem);
+        
+        // Limit to 100 items
+        if (historyData.length > 100) {
+            historyData.pop();
+        }
+        
+        // Save updated history
+        await redisClient.set(historyKey, JSON.stringify(historyData), 'EX', 86400); // Expire after 24 hours
+    } catch (error) {
+        logger.error('Error updating game history', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+    }
+}; 

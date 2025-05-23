@@ -1,7 +1,5 @@
 const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
-const User = require('./User.js');
-const PaymentGateway = require('./PaymentGateway.js');
 
 const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
     id: {
@@ -28,6 +26,10 @@ const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
             model: 'payment_gateways',
             key: 'gateway_id'
         }
+    },
+    transaction_id: {
+        type: DataTypes.STRING,
+        allowNull: false
     },
     status: {
         type: DataTypes.ENUM('pending', 'completed', 'failed', 'rejected'),
@@ -69,6 +71,9 @@ const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
             fields: ['payment_gateway_id']
         },
         {
+            fields: ['transaction_id']
+        },
+        {
             fields: ['status']
         },
         {
@@ -76,15 +81,5 @@ const WalletWithdrawal = sequelize.define('WalletWithdrawal', {
         }
     ]
 });
-
-// Establish relationships
-User.hasMany(WalletWithdrawal, { foreignKey: 'user_id' });
-WalletWithdrawal.belongsTo(User, { foreignKey: 'user_id' });
-
-User.hasMany(WalletWithdrawal, { foreignKey: 'admin_id' });
-WalletWithdrawal.belongsTo(User, { foreignKey: 'admin_id', as: 'admin' });
-
-PaymentGateway.hasMany(WalletWithdrawal, { foreignKey: 'payment_gateway_id' });
-WalletWithdrawal.belongsTo(PaymentGateway, { foreignKey: 'payment_gateway_id' });
 
 module.exports = WalletWithdrawal;

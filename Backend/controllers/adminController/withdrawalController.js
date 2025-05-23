@@ -75,7 +75,7 @@ const {
    */
   const processWithdrawalActionController = async (req, res) => {
     try {
-      const { withdrawal_id, action, notes } = req.body;
+      const { withdrawal_id, action, notes, gateway } = req.body;
       const adminId = req.user.user_id;
       
       if (!withdrawal_id || !action) {
@@ -98,12 +98,27 @@ const {
           message: 'Notes are required when rejecting a withdrawal'
         });
       }
+
+      if (action === 'approve' && !gateway) {
+        return res.status(400).json({
+          success: false,
+          message: 'Payment gateway is required when approving a withdrawal'
+        });
+      }
+
+      if (action === 'approve' && !['OKPAY', 'WEPAY', 'MXPAY'].includes(gateway)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid payment gateway. Must be one of: OKPAY, WEPAY, MXPAY'
+        });
+      }
       
       const result = await processWithdrawalAdminAction(
         adminId,
         withdrawal_id,
         action,
-        notes
+        notes,
+        gateway
       );
       
       if (result.success) {

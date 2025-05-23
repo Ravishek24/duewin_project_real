@@ -1,14 +1,27 @@
 // config/db.js
+require('dotenv').config();
 const { Sequelize } = require('sequelize');
-const dotenv = require('dotenv');
-const config = require('./config.cjs');
 const { SequelizeObserver } = require('./sequelizeObserver');
 
-dotenv.config();
+// Get database configuration from environment variables
+const dbConfig = {
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 3306,
+    database: process.env.DB_NAME || 'duewin',
+    username: process.env.DB_USER || 'root',
+    password: process.env.DB_PASS || '',
+    dialect: 'mysql'
+};
 
-// Get the current environment
-const env = process.env.NODE_ENV || 'development';
-const dbConfig = config[env];
+// Debug logging
+console.log('Database Configuration:', {
+    host: dbConfig.host,
+    port: dbConfig.port,
+    database: dbConfig.database,
+    username: dbConfig.username,
+    dialect: dbConfig.dialect,
+    hasPassword: !!dbConfig.password
+});
 
 // Create the Sequelize instance
 const sequelize = new Sequelize(
@@ -18,15 +31,31 @@ const sequelize = new Sequelize(
     {
         host: dbConfig.host,
         dialect: dbConfig.dialect,
-        port: process.env.DB_PORT || 3306,
-        logging: dbConfig.logging,
-        dialectOptions: {
-            connectTimeout: 60000,
+        port: dbConfig.port,
+        logging: false,
+        define: {
+            underscored: true,
+            timestamps: true,
+            createdAt: 'created_at',
+            updatedAt: 'updated_at'
         },
-        // Disable sync operations completely
-        sync: {
-            force: false,
-            alter: false
+        pool: {
+            max: 5,
+            min: 0,
+            acquire: 30000,
+            idle: 10000
+        },
+        retry: {
+            max: 3,
+            match: [
+                /SequelizeConnectionError/,
+                /SequelizeConnectionRefusedError/,
+                /SequelizeHostNotFoundError/,
+                /SequelizeHostNotReachableError/,
+                /SequelizeInvalidConnectionError/,
+                /SequelizeConnectionTimedOutError/,
+                /TimeoutError/
+            ]
         }
     }
 );
@@ -38,19 +67,39 @@ sequelize.sync = function() {
     return Promise.resolve();
 };
 
-// Install the query interceptor to block problematic session_id queries
-new SequelizeObserver(sequelize);
-
 // Connect to the database
 const connectDB = async () => {
-    try {
-        await sequelize.authenticate();
-        console.log('✅ Database connected successfully.');
-        return true;
-    } catch (error) {
-        console.error('❌ Error connecting to the database:', error.message);
-        process.exit(1);
+    let retries = 3;
+    while (retries > 0) {
+        try {
+            await sequelize.authenticate();
+            console.log('✅ Database connection established successfully');
+            
+            // Install the query interceptor after successful connection
+            try {
+                const observer = new SequelizeObserver(sequelize);
+                if (observer) {
+                    console.log('✅ Sequelize observer installed');
+                }
+            } catch (error) {
+                console.warn('⚠️ Failed to install Sequelize observer:', error.message);
+                // Don't throw error, continue with initialization
+            }
+            return true;
+        } catch (error) {
+            retries--;
+            if (retries === 0) {
+                console.error('❌ Unable to connect to the database after multiple attempts:', error);
+                throw error;
+            }
+            console.warn(`⚠️ Database connection failed. Retrying... (${retries} attempts remaining)`);
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retrying
+        }
     }
 };
 
-module.exports = { sequelize, connectDB };
+// Export the sequelize instance and connectDB function
+module.exports = {
+    sequelize,
+    connectDB
+};

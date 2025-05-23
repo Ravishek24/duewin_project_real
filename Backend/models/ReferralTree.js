@@ -1,6 +1,6 @@
 // models/ReferralTree.js
-const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const ReferralTree = sequelize.define('ReferralTree', {
     id: {
@@ -11,6 +11,7 @@ const ReferralTree = sequelize.define('ReferralTree', {
     user_id: {
         type: DataTypes.INTEGER,
         allowNull: false,
+        unique: true,
         references: {
             model: 'users',
             key: 'user_id'
@@ -59,19 +60,10 @@ const ReferralTree = sequelize.define('ReferralTree', {
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'referral_trees',
     timestamps: true,
     createdAt: 'created_at',
     updatedAt: 'updated_at',
-    indexes: [
-        {
-            unique: true,
-            fields: ['user_id']
-        },
-        {
-            fields: ['referrer_id']
-        }
-    ]
+    tableName: 'referral_trees'
 });
 
 module.exports = ReferralTree;

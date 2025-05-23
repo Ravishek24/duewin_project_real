@@ -1,6 +1,6 @@
 // models/RebateLevel.js
-const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 const User = require('./User');
 
 const RebateLevel = sequelize.define('RebateLevel', {
@@ -31,13 +31,15 @@ const RebateLevel = sequelize.define('RebateLevel', {
         comment: 'Minimum team deposit required'
     },
     lottery_l1_rebate: {
-        type: DataTypes.DECIMAL(5, 4),
+        type: DataTypes.DECIMAL(5, 2),
         allowNull: false,
+        defaultValue: 0.00,
         comment: 'Level 1 lottery rebate percentage'
     },
     lottery_l2_rebate: {
-        type: DataTypes.DECIMAL(5, 4),
+        type: DataTypes.DECIMAL(5, 2),
         allowNull: false,
+        defaultValue: 0.00,
         comment: 'Level 2 lottery rebate percentage'
     },
     lottery_l3_rebate: {
@@ -61,13 +63,15 @@ const RebateLevel = sequelize.define('RebateLevel', {
         comment: 'Level 6 lottery rebate percentage'
     },
     casino_l1_rebate: {
-        type: DataTypes.DECIMAL(5, 4),
+        type: DataTypes.DECIMAL(5, 2),
         allowNull: false,
+        defaultValue: 0.00,
         comment: 'Level 1 casino rebate percentage'
     },
     casino_l2_rebate: {
-        type: DataTypes.DECIMAL(5, 4),
+        type: DataTypes.DECIMAL(5, 2),
         allowNull: false,
+        defaultValue: 0.00,
         comment: 'Level 2 casino rebate percentage'
     },
     casino_l3_rebate: {
@@ -99,8 +103,10 @@ const RebateLevel = sequelize.define('RebateLevel', {
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'rebate_levels',
-    timestamps: false
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    tableName: 'rebate_levels'
 });
 
 module.exports = RebateLevel;

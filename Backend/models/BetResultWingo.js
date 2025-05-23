@@ -1,15 +1,17 @@
 // Backend/models/BetResultWingo.js
-const { DataTypes } = require('sequelize');
-const { sequelize } = require('../config/db');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/db').sequelize;
 
-const BetResultWingo = sequelize.define('BetResultWingo', {
+class BetResultWingo extends Model {}
+
+BetResultWingo.init({
     bet_id: {
         type: DataTypes.INTEGER,
-        primaryKey: true,
-        autoIncrement: true
+        autoIncrement: true,
+        primaryKey: true
     },
     bet_number: {
-        type: DataTypes.STRING, // This holds the period ID
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true
     },
@@ -25,26 +27,28 @@ const BetResultWingo = sequelize.define('BetResultWingo', {
         type: DataTypes.STRING,
         allowNull: false
     },
-    time: {
-        type: DataTypes.INTEGER, // Duration of the game in seconds
-        allowNull: false
+    duration: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        comment: 'Duration in seconds (30, 60, 180, 300)'
+    },
+    timeline: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        defaultValue: 'default',
+        comment: 'Timeline identifier (30s, 1m, 3m, 5m)'
     },
     created_at: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'bet_result_wingo',
-    timestamps: false,
-    indexes: [
-        {
-            unique: true,
-            fields: ['bet_number']
-        },
-        {
-            fields: ['created_at']
-        }
-    ]
+    sequelize,
+    modelName: 'BetResultWingo',
+    tableName: 'bet_result_wingos',
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: false
 });
 
 module.exports = BetResultWingo;

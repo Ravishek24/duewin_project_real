@@ -1,0 +1,98 @@
+config:
+  target: "https://strike.atsproduct.in"  # Change this to your API endpoint
+  phases:
+    - duration: 60
+      arrivalRate: 5
+      rampTo: 50
+      name: "Warm up"
+    - duration: 300
+      arrivalRate: 50
+      rampTo: 3000
+      name: "Ramp up load"
+    - duration: 600
+      arrivalRate: 3000
+      name: "Sustained load"
+  processor: "./functions.js"
+  plugins:
+    metrics-by-endpoint: {}
+  ensure:
+    maxErrorRate: 5
+    maxResponseTime: 1000
+  variables:
+    token: "{{ $processEnvironment.TEST_TOKEN }}"
+
+scenarios:
+  - name: "Game API Flow"
+    weight: 3
+    flow:
+      - post:
+          url: "/api/games/k3/start"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          json:
+            bet_amount: 100
+          capture:
+            - json: "$.session_id"
+              as: "sessionId"
+          expect:
+            - statusCode: 200
+            - hasProperty: "session_id"
+      - think: 2
+      - post:
+          url: "/api/games/k3/play"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          json:
+            session_id: "{{ sessionId }}"
+            bet_amount: 100
+          expect:
+            - statusCode: 200
+            - hasProperty: "result"
+      - think: 1
+      - post:
+          url: "/api/games/k3/end"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          json:
+            session_id: "{{ sessionId }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "final_balance"
+
+  - name: "VIP Level Flow"
+    weight: 2
+    flow:
+      - get:
+          url: "/api/vip/status"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "current_level"
+      - think: 1
+      - get:
+          url: "/api/vip/rewards"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "available_rewards"
+
+  - name: "Referral System Flow"
+    weight: 2
+    flow:
+      - get:
+          url: "/api/referrals/stats"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "total_referrals"
+      - think: 1
+      - get:
+          url: "/api/referrals/earnings"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "total_earnings" 

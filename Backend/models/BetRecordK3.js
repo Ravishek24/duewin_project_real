@@ -1,10 +1,9 @@
 // Backend/models/BetRecordK3.js
 const { DataTypes } = require('sequelize');
 const { sequelize } = require('../config/db');
-const User = require('./User');
 
 const BetRecordK3 = sequelize.define('BetRecordK3', {
-    bet_id: {
+    id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
         autoIncrement: true
@@ -13,82 +12,44 @@ const BetRecordK3 = sequelize.define('BetRecordK3', {
         type: DataTypes.INTEGER,
         allowNull: false,
         references: {
-            model: User,
+            model: 'users',
             key: 'user_id'
         }
     },
-    time: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    },
-    bet_type: {
-        type: DataTypes.ENUM('SUM', 'SUM_CATEGORY', 'MATCHING_DICE', 'NUMBER_PATTERN'),
+    period: {
+        type: DataTypes.STRING,
         allowNull: false
     },
-    bet_category: {
+    bet_type: {
         type: DataTypes.STRING,
-        allowNull: true,
-        comment: 'Additional category for bet types that need it (like triple_exact, pair_specific)'
-    },
-    bet_value: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        comment: 'Specific value bet on (sum number, matching pattern, etc)'
+        allowNull: false
     },
     bet_amount: {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false
     },
-    result_dice_1: {
-        type: DataTypes.INTEGER, // 1-6
-        allowNull: true
-    },
-    result_dice_2: {
-        type: DataTypes.INTEGER, // 1-6
-        allowNull: true
-    },
-    result_dice_3: {
-        type: DataTypes.INTEGER, // 1-6
-        allowNull: true
-    },
-    result_sum: {
-        type: DataTypes.INTEGER, // 3-18
-        allowNull: true
-    },
-    win_loss: {
-        type: DataTypes.BOOLEAN,
-        allowNull: true
-    },
-    payout_amount: {
+    odds: {
         type: DataTypes.DECIMAL(10, 2),
-        allowNull: true
-    },
-    duration: {
-        type: DataTypes.INTEGER, // Duration of the game in seconds
         allowNull: false
     },
-    period_id: {
-        type: DataTypes.STRING,
-        allowNull: false
+    status: {
+        type: DataTypes.ENUM('pending', 'won', 'lost'),
+        allowNull: false,
+        defaultValue: 'pending'
+    },
+    created_at: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
+    },
+    updated_at: {
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'bet_record_k3',
-    timestamps: false,
-    indexes: [
-        {
-            fields: ['user_id']
-        },
-        {
-            fields: ['period_id']
-        },
-        {
-            fields: ['time']
-        }
-    ]
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    tableName: 'bet_record_k3s'
 });
-
-// Set up relationship
-User.hasMany(BetRecordK3, { foreignKey: 'user_id' });
-BetRecordK3.belongsTo(User, { foreignKey: 'user_id' });
 
 module.exports = BetRecordK3;

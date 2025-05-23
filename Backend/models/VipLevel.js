@@ -1,6 +1,6 @@
 // models/VipLevel.js
-const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
 const VipLevel = sequelize.define('VipLevel', {
     id: {
@@ -13,30 +13,25 @@ const VipLevel = sequelize.define('VipLevel', {
         allowNull: false,
         unique: true
     },
-    name: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        comment: 'VIP level name (e.g., VIP 1, VIP 2)'
-    },
-    exp_required: {
+    required_exp: {
         type: DataTypes.BIGINT,
         allowNull: false,
-        comment: 'Experience points required to reach this level'
+        defaultValue: 0
     },
     bonus_amount: {
-        type: DataTypes.DECIMAL(15, 2),
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
-        comment: 'One-time bonus amount when reaching this level'
+        defaultValue: 0.00
     },
     monthly_reward: {
-        type: DataTypes.DECIMAL(15, 2),
+        type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
-        comment: 'Monthly reward amount for this level'
+        defaultValue: 0.00
     },
     rebate_rate: {
         type: DataTypes.DECIMAL(5, 2),
         allowNull: false,
-        comment: 'Rebate rate for this level (percentage)'
+        defaultValue: 0.00
     },
     created_at: {
         type: DataTypes.DATE,
@@ -47,8 +42,10 @@ const VipLevel = sequelize.define('VipLevel', {
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'vip_levels',
-    timestamps: false
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    tableName: 'vip_levels'
 });
 
 module.exports = VipLevel;

@@ -1,6 +1,11 @@
 // services/paymentGatewayService.js
 const PaymentGateway = require('../models/PaymentGateway');
 const { sequelize } = require('../config/db');
+const PaymentGatewaySettings = require('../models/PaymentGatewaySettings');
+const WalletRecharge = require('../models/WalletRecharge');
+const WalletWithdrawal = require('../models/WalletWithdrawal');
+const moment = require('moment-timezone');
+const { Op } = require('sequelize');
 
 /**
  * Get all active payment gateways
@@ -249,6 +254,20 @@ const initializeDefaultGateways = async () => {
         min_withdrawal: 500.00,
         max_withdrawal: 50000.00,
         display_order: 2
+      },
+      {
+        name: 'MxPay',
+        code: 'MXPAY',
+        description: 'Secure payment gateway for deposits and withdrawals',
+        logo_url: '/assets/images/payment/mxpay.png',
+        is_active: true,
+        supports_deposit: true,
+        supports_withdrawal: true,
+        min_deposit: 100.00,
+        max_deposit: 100000.00,
+        min_withdrawal: 500.00,
+        max_withdrawal: 50000.00,
+        display_order: 3
       }
     ], { transaction: t });
     
@@ -256,7 +275,7 @@ const initializeDefaultGateways = async () => {
     
     return {
       success: true,
-      message: 'Default payment gateways initialized'
+      message: 'Default payment gateways initialized successfully'
     };
   } catch (error) {
     await t.rollback();
@@ -268,11 +287,316 @@ const initializeDefaultGateways = async () => {
   }
 };
 
+/**
+ * Get all payment gateway settings
+ * @param {boolean} isAdmin - Whether the request is from admin
+ * @returns {Object} - List of payment gateway settings
+ */
+const getAllPaymentGateways = async (isAdmin = false) => {
+  try {
+    const whereClause = isAdmin ? {} : { is_active: true };
+    
+    const gateways = await PaymentGatewaySettings.findAll({
+      where: whereClause,
+      order: [['gateway_name', 'ASC']]
+    });
+
+    return {
+      success: true,
+      gateways: gateways.map(gateway => ({
+        id: gateway.id,
+        gateway_name: gateway.gateway_name,
+        is_deposit_enabled: gateway.is_deposit_enabled,
+        is_withdrawal_enabled: gateway.is_withdrawal_enabled,
+        min_deposit_amount: parseFloat(gateway.min_deposit_amount),
+        max_deposit_amount: parseFloat(gateway.max_deposit_amount),
+        is_active: gateway.is_active
+      }))
+    };
+  } catch (error) {
+    console.error('Error getting payment gateways:', error);
+    return {
+      success: false,
+      message: 'Error fetching payment gateways'
+    };
+  }
+};
+
+/**
+ * Get available payment gateways for deposit
+ * @returns {Object} - List of available payment gateways for deposit
+ */
+const getAvailableDepositGateways = async () => {
+  try {
+    const gateways = await PaymentGatewaySettings.findAll({
+      where: {
+        is_active: true,
+        is_deposit_enabled: true
+      },
+      order: [['gateway_name', 'ASC']]
+    });
+
+    return {
+      success: true,
+      gateways: gateways.map(gateway => ({
+        gateway_name: gateway.gateway_name,
+        min_amount: parseFloat(gateway.min_deposit),
+        max_amount: parseFloat(gateway.max_deposit)
+      }))
+    };
+  } catch (error) {
+    console.error('Error getting available deposit gateways:', error);
+    return {
+      success: false,
+      message: 'Error fetching available deposit gateways'
+    };
+  }
+};
+
+/**
+ * Get available payment gateways for withdrawal
+ * @returns {Object} - List of available payment gateways for withdrawal
+ */
+const getAvailableWithdrawalGateways = async () => {
+  try {
+    const gateways = await PaymentGatewaySettings.findAll({
+      where: {
+        is_active: true,
+        is_withdrawal_enabled: true
+      },
+      order: [['gateway_name', 'ASC']]
+    });
+
+    return {
+      success: true,
+      gateways: gateways.map(gateway => ({
+        gateway_name: gateway.gateway_name
+      }))
+    };
+  } catch (error) {
+    console.error('Error getting available withdrawal gateways:', error);
+    return {
+      success: false,
+      message: 'Error fetching available withdrawal gateways'
+    };
+  }
+};
+
+/**
+ * Toggle deposit status for a payment gateway
+ * @param {number} gatewayId - Gateway ID
+ * @returns {Object} - Update result
+ */
+const toggleDepositStatus = async (gatewayId) => {
+  try {
+    const gateway = await PaymentGatewaySettings.findByPk(gatewayId);
+    
+    if (!gateway) {
+      return {
+        success: false,
+        message: 'Payment gateway not found'
+      };
+    }
+
+    await gateway.update({
+      is_deposit_enabled: !gateway.is_deposit_enabled
+    });
+
+    return {
+      success: true,
+      message: `Deposit ${gateway.is_deposit_enabled ? 'enabled' : 'disabled'} successfully`,
+      gateway: {
+        id: gateway.id,
+        gateway_name: gateway.gateway_name,
+        is_deposit_enabled: gateway.is_deposit_enabled
+      }
+    };
+  } catch (error) {
+    console.error('Error toggling deposit status:', error);
+    return {
+      success: false,
+      message: 'Error updating deposit status'
+    };
+  }
+};
+
+/**
+ * Toggle withdrawal status for a payment gateway
+ * @param {number} gatewayId - Gateway ID
+ * @returns {Object} - Update result
+ */
+const toggleWithdrawalStatus = async (gatewayId) => {
+  try {
+    const gateway = await PaymentGatewaySettings.findByPk(gatewayId);
+    
+    if (!gateway) {
+      return {
+        success: false,
+        message: 'Payment gateway not found'
+      };
+    }
+
+    await gateway.update({
+      is_withdrawal_enabled: !gateway.is_withdrawal_enabled
+    });
+
+    return {
+      success: true,
+      message: `Withdrawal ${gateway.is_withdrawal_enabled ? 'enabled' : 'disabled'} successfully`,
+      gateway: {
+        id: gateway.id,
+        gateway_name: gateway.gateway_name,
+        is_withdrawal_enabled: gateway.is_withdrawal_enabled
+      }
+    };
+  } catch (error) {
+    console.error('Error toggling withdrawal status:', error);
+    return {
+      success: false,
+      message: 'Error updating withdrawal status'
+    };
+  }
+};
+
+/**
+ * Update deposit limits for a payment gateway
+ * @param {number} gatewayId - Gateway ID
+ * @param {Object} limits - Min and max deposit amounts
+ * @returns {Object} - Update result
+ */
+const updateDepositLimits = async (gatewayId, limits) => {
+  try {
+    const gateway = await PaymentGatewaySettings.findByPk(gatewayId);
+    
+    if (!gateway) {
+      return {
+        success: false,
+        message: 'Payment gateway not found'
+      };
+    }
+
+    // Validate limits
+    if (limits.min_deposit_amount >= limits.max_deposit_amount) {
+      return {
+        success: false,
+        message: 'Minimum deposit amount must be less than maximum deposit amount'
+      };
+    }
+
+    await gateway.update({
+      min_deposit_amount: limits.min_deposit_amount,
+      max_deposit_amount: limits.max_deposit_amount
+    });
+
+    return {
+      success: true,
+      message: 'Deposit limits updated successfully',
+      gateway: {
+        id: gateway.id,
+        gateway_name: gateway.gateway_name,
+        min_deposit_amount: parseFloat(gateway.min_deposit_amount),
+        max_deposit_amount: parseFloat(gateway.max_deposit_amount)
+      }
+    };
+  } catch (error) {
+    console.error('Error updating deposit limits:', error);
+    return {
+      success: false,
+      message: 'Error updating deposit limits'
+    };
+  }
+};
+
+/**
+ * Get payment gateway statistics
+ * @returns {Object} - Statistics for each payment gateway
+ */
+const getPaymentGatewayStats = async () => {
+  try {
+    const todayIST = moment().tz('Asia/Kolkata').startOf('day');
+    
+    // Get all active payment gateways
+    const gateways = await PaymentGateway.findAll({
+      where: { is_active: true },
+      attributes: ['gateway_id', 'name', 'code']
+    });
+
+    const stats = await Promise.all(gateways.map(async (gateway) => {
+      // Get today's deposits
+      const todayDeposits = await WalletRecharge.sum('amount', {
+        where: {
+          payment_gateway: gateway.code,
+          created_at: {
+            [Op.gte]: todayIST.toDate()
+          },
+          status: 'completed'
+        }
+      });
+
+      // Get total deposits
+      const totalDeposits = await WalletRecharge.sum('amount', {
+        where: {
+          payment_gateway: gateway.code,
+          status: 'completed'
+        }
+      });
+
+      // Get today's withdrawals
+      const todayWithdrawals = await WalletWithdrawal.sum('amount', {
+        where: {
+          payment_gateway: gateway.code,
+          created_at: {
+            [Op.gte]: todayIST.toDate()
+          },
+          status: 'completed'
+        }
+      });
+
+      // Get total withdrawals
+      const totalWithdrawals = await WalletWithdrawal.sum('amount', {
+        where: {
+          payment_gateway: gateway.code,
+          status: 'completed'
+        }
+      });
+
+      return {
+        gateway_id: gateway.gateway_id,
+        gateway_name: gateway.name,
+        gateway_code: gateway.code,
+        today_deposits: todayDeposits || 0,
+        total_deposits: totalDeposits || 0,
+        today_withdrawals: todayWithdrawals || 0,
+        total_withdrawals: totalWithdrawals || 0,
+        net_amount: (totalDeposits || 0) - (totalWithdrawals || 0)
+      };
+    }));
+
+    return {
+      success: true,
+      stats
+    };
+  } catch (error) {
+    console.error('Error getting payment gateway statistics:', error);
+    return {
+      success: false,
+      message: 'Error fetching payment gateway statistics'
+    };
+  }
+};
+
 module.exports = {
   getActivePaymentGateways,
   getPaymentGatewayByCode,
   createPaymentGateway,
   updatePaymentGateway,
   togglePaymentGatewayStatus,
-  initializeDefaultGateways
+  initializeDefaultGateways,
+  getAllPaymentGateways,
+  getAvailableDepositGateways,
+  getAvailableWithdrawalGateways,
+  toggleDepositStatus,
+  toggleWithdrawalStatus,
+  updateDepositLimits,
+  getPaymentGatewayStats
 };

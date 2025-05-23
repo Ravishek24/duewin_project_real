@@ -1,6 +1,6 @@
 // utils/seamlessUtils.js
 const crypto = require('crypto');
-const { seamlessConfig } = require('../config/seamlessConfig');
+const seamlessConfig = require('../config/seamlessConfig');
 
 /**
  * Validate the signature in a seamless wallet request

@@ -23,11 +23,14 @@ const seamlessConfig = {
   default_language: 'en',
   
   // Default currency
-  default_currency: 'INR',
+  default_currency: 'EUR',
   
   // Default URLs
   home_url: process.env.FRONTEND_URL || 'http://localhost:3000',
   cashier_url: process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL}/wallet` : 'http://localhost:3000/wallet',
+  
+  // Callback URL (unified endpoint for all transaction types)
+  callback_url: process.env.SEAMLESS_CALLBACK_URL || 'https://yourdomain.com/api/seamless/callback',
   
   // Free rounds settings
   default_betlevel: 'min',

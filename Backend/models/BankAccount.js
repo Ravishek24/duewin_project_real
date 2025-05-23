@@ -1,6 +1,5 @@
-const { sequelize } = require('../config/db');
 const { DataTypes } = require('sequelize');
-const User = require('./User.js');
+const { sequelize } = require('../config/db');
 
 const BankAccount = sequelize.define('BankAccount', {
     id: {
@@ -13,7 +12,7 @@ const BankAccount = sequelize.define('BankAccount', {
         allowNull: false,
         references: {
             model: 'users',
-            key: 'user_id'
+            key: 'id'
         }
     },
     bank_name: {
@@ -32,34 +31,24 @@ const BankAccount = sequelize.define('BankAccount', {
         type: DataTypes.STRING,
         allowNull: false
     },
+    is_default: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false
+    },
     created_at: {
         type: DataTypes.DATE,
-        allowNull: false,
         defaultValue: DataTypes.NOW
     },
     updated_at: {
         type: DataTypes.DATE,
-        allowNull: false,
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'bank_accounts',
     timestamps: true,
     createdAt: 'created_at',
     updatedAt: 'updated_at',
-    indexes: [
-        {
-            fields: ['user_id']
-        },
-        {
-            unique: true,
-            fields: ['user_id', 'account_number']
-        }
-    ]
+    tableName: 'bank_accounts'
 });
-
-// Establish relationship
-User.hasMany(BankAccount, { foreignKey: 'user_id' });
-BankAccount.belongsTo(User, { foreignKey: 'user_id' });
 
 module.exports = BankAccount;

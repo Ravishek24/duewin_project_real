@@ -96,6 +96,53 @@ module.exports = {
         }
       });
 
+      // Create otp_requests table
+      await queryInterface.createTable('otp_requests', {
+        id: {
+          type: Sequelize.INTEGER,
+          primaryKey: true,
+          autoIncrement: true
+        },
+        user_id: {
+          type: Sequelize.INTEGER,
+          allowNull: false,
+          references: {
+            model: 'users',
+            key: 'user_id'
+          }
+        },
+        phone_no: {
+          type: Sequelize.STRING,
+          allowNull: false
+        },
+        otp_session_id: {
+          type: Sequelize.STRING,
+          allowNull: false
+        },
+        request_type: {
+          type: Sequelize.ENUM('forgot_password', 'phone_update', 'bank_account'),
+          allowNull: false
+        },
+        status: {
+          type: Sequelize.ENUM('pending', 'verified', 'expired'),
+          defaultValue: 'pending'
+        },
+        created_at: {
+          type: Sequelize.DATE,
+          allowNull: false,
+          defaultValue: Sequelize.fn('now')
+        },
+        updated_at: {
+          type: Sequelize.DATE,
+          allowNull: false,
+          defaultValue: Sequelize.fn('now')
+        }
+      });
+
+      // Add index for faster queries
+      await queryInterface.addIndex('otp_requests', ['user_id', 'created_at']);
+      await queryInterface.addIndex('otp_requests', ['phone_no', 'created_at']);
+
       // Create vip_levels table
       await queryInterface.createTable('vip_levels', {
         id: {
@@ -108,9 +155,30 @@ module.exports = {
           allowNull: false,
           unique: true
         },
-        required_exp: {
-          type: Sequelize.INTEGER,
-          allowNull: false
+        name: {
+          type: Sequelize.STRING,
+          allowNull: false,
+          comment: 'VIP level name (e.g., VIP 1, VIP 2)'
+        },
+        exp_required: {
+          type: Sequelize.BIGINT,
+          allowNull: false,
+          comment: 'Experience points required to reach this level'
+        },
+        bonus_amount: {
+          type: Sequelize.DECIMAL(15, 2),
+          allowNull: false,
+          comment: 'One-time bonus amount when reaching this level'
+        },
+        monthly_reward: {
+          type: Sequelize.DECIMAL(15, 2),
+          allowNull: false,
+          comment: 'Monthly reward amount for this level'
+        },
+        rebate_rate: {
+          type: Sequelize.DECIMAL(5, 2),
+          allowNull: false,
+          comment: 'Rebate rate for this level (percentage)'
         },
         created_at: {
           type: Sequelize.DATE,
@@ -1201,14 +1269,108 @@ module.exports = {
         updated_at: new Date()
       }]);
 
-      // Insert default VIP levels
+      // Insert VIP levels
       await queryInterface.bulkInsert('vip_levels', [
-        { level: 0, required_exp: 0, created_at: new Date(), updated_at: new Date() },
-        { level: 1, required_exp: 1000, created_at: new Date(), updated_at: new Date() },
-        { level: 2, required_exp: 5000, created_at: new Date(), updated_at: new Date() },
-        { level: 3, required_exp: 10000, created_at: new Date(), updated_at: new Date() },
-        { level: 4, required_exp: 50000, created_at: new Date(), updated_at: new Date() },
-        { level: 5, required_exp: 100000, created_at: new Date(), updated_at: new Date() }
+        { 
+          level: 1, 
+          name: 'VIP 1',
+          exp_required: 3000,
+          bonus_amount: 60,
+          monthly_reward: 30,
+          rebate_rate: 0.05,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 2, 
+          name: 'VIP 2',
+          exp_required: 30000,
+          bonus_amount: 180,
+          monthly_reward: 90,
+          rebate_rate: 0.05,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 3, 
+          name: 'VIP 3',
+          exp_required: 400000,
+          bonus_amount: 690,
+          monthly_reward: 290,
+          rebate_rate: 0.1,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 4, 
+          name: 'VIP 4',
+          exp_required: 4000000,
+          bonus_amount: 1890,
+          monthly_reward: 890,
+          rebate_rate: 0.1,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 5, 
+          name: 'VIP 5',
+          exp_required: 20000000,
+          bonus_amount: 6900,
+          monthly_reward: 1890,
+          rebate_rate: 0.1,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 6, 
+          name: 'VIP 6',
+          exp_required: 80000000,
+          bonus_amount: 16900,
+          monthly_reward: 6900,
+          rebate_rate: 0.15,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 7, 
+          name: 'VIP 7',
+          exp_required: 300000000,
+          bonus_amount: 69000,
+          monthly_reward: 16900,
+          rebate_rate: 0.15,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 8, 
+          name: 'VIP 8',
+          exp_required: 1000000000,
+          bonus_amount: 169000,
+          monthly_reward: 69000,
+          rebate_rate: 0.15,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 9, 
+          name: 'VIP 9',
+          exp_required: 50000000000,
+          bonus_amount: 690000,
+          monthly_reward: 169000,
+          rebate_rate: 0.3,
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        { 
+          level: 10, 
+          name: 'VIP 10',
+          exp_required: 999999999,
+          bonus_amount: 1690000,
+          monthly_reward: 690000,
+          rebate_rate: 0.3,
+          created_at: new Date(),
+          updated_at: new Date()
+        }
       ]);
 
       // Insert default rebate levels
@@ -1255,6 +1417,7 @@ module.exports = {
       await queryInterface.dropTable('rebate_levels');
       await queryInterface.dropTable('payment_gateways');
       await queryInterface.dropTable('vip_levels');
+      await queryInterface.dropTable('otp_requests');
       await queryInterface.dropTable('users');
     } catch (error) {
       console.error('Error in migration:', error.message);

@@ -1,32 +1,34 @@
 // Backend/models/BetResultK3.js
-const { DataTypes } = require('sequelize');
-const { sequelize } = require('../config/db');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/db').sequelize;
 
-const BetResultK3 = sequelize.define('BetResultK3', {
+class BetResultK3 extends Model {}
+
+BetResultK3.init({
     bet_id: {
         type: DataTypes.INTEGER,
-        primaryKey: true,
-        autoIncrement: true
+        autoIncrement: true,
+        primaryKey: true
     },
     bet_number: {
-        type: DataTypes.STRING, // This holds the period ID
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true
     },
     dice_1: {
-        type: DataTypes.INTEGER, // 1-6
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     dice_2: {
-        type: DataTypes.INTEGER, // 1-6
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     dice_3: {
-        type: DataTypes.INTEGER, // 1-6
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     sum: {
-        type: DataTypes.INTEGER, // 3-18 (sum of three dice)
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     has_pair: {
@@ -39,20 +41,18 @@ const BetResultK3 = sequelize.define('BetResultK3', {
     },
     is_straight: {
         type: DataTypes.BOOLEAN,
-        allowNull: false,
-        comment: 'Three consecutive numbers'
+        allowNull: false
     },
     sum_size: {
         type: DataTypes.ENUM('big', 'small'),
-        allowNull: false,
-        comment: 'Sum ≥ 11 is big, otherwise small'
+        allowNull: false
     },
     sum_parity: {
         type: DataTypes.ENUM('odd', 'even'),
         allowNull: false
     },
     time: {
-        type: DataTypes.INTEGER, // Duration of the game in seconds
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     created_at: {
@@ -60,17 +60,12 @@ const BetResultK3 = sequelize.define('BetResultK3', {
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'bet_result_k3',
-    timestamps: false,
-    indexes: [
-        {
-            unique: true,
-            fields: ['bet_number']
-        },
-        {
-            fields: ['created_at']
-        }
-    ]
+    sequelize,
+    modelName: 'BetResultK3',
+    tableName: 'bet_result_k3s',
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: false
 });
 
 module.exports = BetResultK3;

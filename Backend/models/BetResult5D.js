@@ -1,44 +1,46 @@
 // Backend/models/BetResult5D.js
-const { DataTypes } = require('sequelize');
-const { sequelize } = require('../config/db');
+const { Model, DataTypes } = require('sequelize');
+const sequelize = require('../config/db').sequelize;
 
-const BetResult5D = sequelize.define('BetResult5D', {
+class BetResult5D extends Model {}
+
+BetResult5D.init({
     bet_id: {
         type: DataTypes.INTEGER,
-        primaryKey: true,
-        autoIncrement: true
+        autoIncrement: true,
+        primaryKey: true
     },
     bet_number: {
-        type: DataTypes.STRING, // This holds the period ID
+        type: DataTypes.STRING,
         allowNull: false,
         unique: true
     },
     result_a: {
-        type: DataTypes.INTEGER, // 0-9
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     result_b: {
-        type: DataTypes.INTEGER, // 0-9
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     result_c: {
-        type: DataTypes.INTEGER, // 0-9
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     result_d: {
-        type: DataTypes.INTEGER, // 0-9
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     result_e: {
-        type: DataTypes.INTEGER, // 0-9
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     total_sum: {
-        type: DataTypes.INTEGER, // Sum of all 5 numbers
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     time: {
-        type: DataTypes.INTEGER, // Duration of the game in seconds
+        type: DataTypes.INTEGER,
         allowNull: false
     },
     created_at: {
@@ -46,17 +48,12 @@ const BetResult5D = sequelize.define('BetResult5D', {
         defaultValue: DataTypes.NOW
     }
 }, {
-    tableName: 'bet_result_5d',
-    timestamps: false,
-    indexes: [
-        {
-            unique: true,
-            fields: ['bet_number']
-        },
-        {
-            fields: ['created_at']
-        }
-    ]
+    sequelize,
+    modelName: 'BetResult5D',
+    tableName: 'bet_result_5ds',
+    timestamps: true,
+    createdAt: 'created_at',
+    updatedAt: false
 });
 
 module.exports = BetResult5D;

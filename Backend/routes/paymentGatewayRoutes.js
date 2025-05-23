@@ -8,19 +8,18 @@ const {
   toggleGatewayStatusController,
   initializeDefaultGatewaysController
 } = require('../controllers/paymentGatewayController');
-const { auth } = require('../middlewares/authMiddleware');
-const { isAdmin } = require('../middlewares/adminMiddleware');
+const { auth, authenticateAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
 // Public routes (available to logged in users)
 router.get('/active', auth, getActiveGatewaysController);
+router.get('/initialize', auth, authenticateAdmin, initializeDefaultGatewaysController);
 router.get('/:code', auth, getGatewayByCodeController);
 
 // Admin-only routes
-router.post('/', auth, isAdmin, createGatewayController);
-router.put('/:id', auth, isAdmin, updateGatewayController);
-router.patch('/:id/toggle', auth, isAdmin, toggleGatewayStatusController);
-router.post('/initialize', auth, isAdmin, initializeDefaultGatewaysController);
+router.post('/', auth, authenticateAdmin, createGatewayController);
+router.put('/:id', auth, authenticateAdmin, updateGatewayController);
+router.patch('/:id/toggle', auth, authenticateAdmin, toggleGatewayStatusController);
 
 module.exports = router;

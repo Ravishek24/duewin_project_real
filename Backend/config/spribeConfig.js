@@ -14,8 +14,8 @@ const spribeConfig = {  // Changed from spriteConfig
   clientSecret: process.env.SPRIBE_CLIENT_SECRET,  // Changed from SPRITE_CLIENT_SECRET
   operatorKey: process.env.SPRIBE_OPERATOR_KEY,  // Changed from SPRITE_OPERATOR_KEY
   
-  // Rest of config remains the same
-
+  // Callback URL - This is the URL that Spribe will call for all operations
+  callbackUrl: process.env.SPRIBE_CALLBACK_URL || 'https://strike.atsproduct.in/api/spribe/callback',
   
   // Default settings
   defaultLanguage: 'en',

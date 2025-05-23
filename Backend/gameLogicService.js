@@ -1,0 +1,1 @@
+const BetResultWingo = require('../models/BetResultTrxWix'); 

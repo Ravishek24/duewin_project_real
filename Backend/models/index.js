@@ -1,5 +1,6 @@
 // Backend/models/index.js
-const { sequelize } = require('../config/db');
+const { sequelize, connectDB } = require('../config/db');
+const { DataTypes } = require('sequelize');
 
 // Import all models
 const User = require('./User');
@@ -28,145 +29,154 @@ const BetRecord5D = require('./BetRecord5D');
 const BetResult5D = require('./BetResult5D');
 const BetRecordK3 = require('./BetRecordK3');
 const BetResultK3 = require('./BetResultK3');
+const VipReward = require('./VipReward');
+const Transaction = require('./Transaction');
+const GiftCode = require('./GiftCode');
+const GiftCodeClaim = require('./GiftCodeClaim');
+const BetRecordTrxWix = require('./BetRecordTrxWix');
+const BetResultTrxWix = require('./BetResultTrxWix');
+const RateLimitViolation = require('./RateLimitViolation')(sequelize, DataTypes);
+const UserSession = require('./UserSession');
+const RefreshToken = require('./RefreshToken');
+const OtpRequest = require('./OtpRequest');
+const PaymentGatewaySettings = require('./PaymentGatewaySettings');
 
 // Function to set up all model associations
 const setupAssociations = () => {
-    // Basic user relationships
-    User.hasMany(BankAccount, { foreignKey: 'user_id' });
-    BankAccount.belongsTo(User, { foreignKey: 'user_id' });
+    try {
+        // Basic user relationships
+        User.hasMany(BankAccount, { foreignKey: 'user_id', as: 'bankAccounts' });
+        BankAccount.belongsTo(User, { foreignKey: 'user_id', as: 'bankAccountUser' });
 
-    User.hasMany(UsdtAccount, { foreignKey: 'user_id' });
-    UsdtAccount.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(UsdtAccount, { foreignKey: 'user_id', as: 'usdtAccounts' });
+        UsdtAccount.belongsTo(User, { foreignKey: 'user_id', as: 'usdtAccountUser' });
 
-    User.hasMany(WalletRecharge, { foreignKey: 'user_id' });
-    WalletRecharge.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(WalletRecharge, { foreignKey: 'user_id', as: 'recharges' });
+        WalletRecharge.belongsTo(User, { foreignKey: 'user_id', as: 'rechargeUser' });
+        WalletRecharge.belongsTo(PaymentGateway, { foreignKey: 'payment_gateway_id', as: 'paymentGateway' });
 
-    User.hasMany(WalletWithdrawal, { foreignKey: 'user_id' });
-    WalletWithdrawal.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(WalletWithdrawal, { foreignKey: 'user_id', as: 'withdrawals' });
+        WalletWithdrawal.belongsTo(User, { foreignKey: 'user_id', as: 'withdrawalUser' });
+        WalletWithdrawal.belongsTo(BankAccount, { foreignKey: 'bank_account_id', as: 'bankAccount' });
+        WalletWithdrawal.belongsTo(UsdtAccount, { foreignKey: 'usdt_account_id', as: 'usdtAccount' });
+        WalletWithdrawal.belongsTo(User, { foreignKey: 'admin_id', as: 'adminUser' });
 
-    // Referrals
-    User.hasOne(ReferralTree, { foreignKey: 'user_id' });
-    ReferralTree.belongsTo(User, { foreignKey: 'user_id' });
+        // Referrals
+        User.hasMany(ReferralTree, { foreignKey: 'user_id', as: 'referralTrees' });
+        ReferralTree.belongsTo(User, { foreignKey: 'user_id', as: 'referredUser', targetKey: 'user_id' });
+        ReferralTree.belongsTo(User, { foreignKey: 'referrer_id', as: 'referrer', targetKey: 'user_id' });
 
-    // Referral Commissions - using unique aliases and scopes
-    User.hasMany(ReferralCommission, { 
-        foreignKey: 'user_id',
-        as: 'EarnedCommissions',
-        scope: { type: 'earned' }
-    });
+        User.hasMany(ReferralTree, { foreignKey: 'referrer_id', as: 'referredUsers', targetKey: 'user_id' });
 
-    User.hasMany(ReferralCommission, { 
-        foreignKey: 'referred_user_id',
-        as: 'GeneratedCommissions',
-        scope: { type: 'generated' }
-    });
+        User.hasMany(ReferralCommission, { foreignKey: 'user_id', as: 'earnedCommissions' });
+        User.hasMany(ReferralCommission, { foreignKey: 'referred_user_id', as: 'generatedCommissions' });
+        ReferralCommission.belongsTo(User, { foreignKey: 'user_id', as: 'commissionEarner' });
+        ReferralCommission.belongsTo(User, { foreignKey: 'referred_user_id', as: 'commissionSource' });
 
-    // Single belongsTo association for ReferralCommission
-    ReferralCommission.belongsTo(User, { 
-        foreignKey: 'user_id',
-        as: 'Earner'
-    });
+        User.hasMany(ValidReferral, { foreignKey: 'referrer_id', as: 'validReferrals' });
+        ValidReferral.belongsTo(User, { foreignKey: 'referrer_id', as: 'validReferralReferrer' });
+        ValidReferral.belongsTo(User, { foreignKey: 'referred_id', as: 'validReferralReferred' });
 
-    // VIP and Rebate relationships
-    User.hasOne(UserRebateLevel, { foreignKey: 'user_id' });
-    UserRebateLevel.belongsTo(User, { foreignKey: 'user_id' });
+        // VIP and Rebate relationships
+        User.hasOne(UserRebateLevel, { foreignKey: 'user_id', as: 'rebateLevel' });
+        UserRebateLevel.belongsTo(User, { foreignKey: 'user_id', as: 'rebateLevelUser' });
+        UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level', targetKey: 'level', as: 'rebateLevel' });
 
-    RebateLevel.hasMany(UserRebateLevel, { foreignKey: 'rebate_level_id' });
-    UserRebateLevel.belongsTo(RebateLevel, { foreignKey: 'rebate_level_id', targetKey: 'id' });
+        User.hasMany(VipReward, { foreignKey: 'user_id', as: 'vipRewards' });
+        VipReward.belongsTo(User, { foreignKey: 'user_id', as: 'vipRewardUser' });
+        VipReward.belongsTo(VipLevel, { foreignKey: 'level', targetKey: 'level', as: 'vipLevel' });
 
-    // Game relationships
-    User.hasMany(GameSession, { foreignKey: 'user_id' });
-    GameSession.belongsTo(User, { foreignKey: 'user_id' });
+        // Game relationships
+        User.hasMany(GameSession, { foreignKey: 'user_id', as: 'gameSessions' });
+        GameSession.belongsTo(User, { foreignKey: 'user_id', as: 'gameSessionUser' });
 
-    User.hasMany(GameTransaction, { foreignKey: 'user_id' });
-    GameTransaction.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(GameTransaction, { foreignKey: 'user_id', as: 'gameTransactions' });
+        GameTransaction.belongsTo(User, { foreignKey: 'user_id', as: 'gameTransactionUser' });
 
-    User.hasMany(SeamlessGameSession, { foreignKey: 'user_id' });
-    SeamlessGameSession.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(SeamlessGameSession, { foreignKey: 'user_id', as: 'seamlessGameSessions' });
+        SeamlessGameSession.belongsTo(User, { foreignKey: 'user_id', as: 'seamlessGameSessionUser' });
 
-    User.hasMany(SeamlessTransaction, { foreignKey: 'user_id' });
-    SeamlessTransaction.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(SeamlessTransaction, { foreignKey: 'user_id', as: 'seamlessTransactions' });
+        SeamlessTransaction.belongsTo(User, { foreignKey: 'user_id', as: 'seamlessTransactionUser' });
+        SeamlessTransaction.belongsTo(SeamlessGameSession, { foreignKey: 'session_id', as: 'session' });
 
-    // Betting relationships
-    User.hasMany(BetRecordWingo, { foreignKey: 'user_id' });
-    BetRecordWingo.belongsTo(User, { foreignKey: 'user_id' });
+        // Betting relationships
+        User.hasMany(BetRecordWingo, { foreignKey: 'user_id', as: 'betRecordsWingo' });
+        BetRecordWingo.belongsTo(User, { foreignKey: 'user_id', as: 'betRecordWingoUser' });
+        BetResultWingo.belongsTo(BetRecordWingo, { foreignKey: 'bet_id', as: 'bet' });
+        // Betting relationships
 
-    User.hasMany(BetRecord5D, { foreignKey: 'user_id' });
-    BetRecord5D.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(BetRecord5D, { foreignKey: 'user_id', as: 'betRecords5D' });
+        BetRecord5D.belongsTo(User, { foreignKey: 'user_id', as: 'betRecord5DUser' });
+        BetResult5D.belongsTo(BetRecord5D, { foreignKey: 'bet_id', as: 'bet' });
 
-    User.hasMany(BetRecordK3, { foreignKey: 'user_id' });
-    BetRecordK3.belongsTo(User, { foreignKey: 'user_id' });
+        User.hasMany(BetRecordK3, { foreignKey: 'user_id', as: 'betRecordsK3' });
+        BetRecordK3.belongsTo(User, { foreignKey: 'user_id', as: 'betRecordK3User' });
+        BetResultK3.belongsTo(BetRecordK3, { foreignKey: 'bet_id', as: 'bet' });
+
+        // Transaction relationships
+        User.hasMany(Transaction, { foreignKey: 'user_id', as: 'transactions' });
+        Transaction.belongsTo(User, { foreignKey: 'user_id', as: 'transactionUser' });
+        Transaction.belongsTo(User, { foreignKey: 'created_by', as: 'createdByAdmin' });
+
+        // GiftCode relationships
+        User.hasMany(GiftCode, { foreignKey: 'user_id', as: 'giftCodes' });
+        GiftCode.belongsTo(User, { foreignKey: 'user_id', as: 'giftCodeUser' });
+
+        User.hasMany(GiftCodeClaim, { foreignKey: 'user_id', as: 'giftCodeClaims' });
+        GiftCodeClaim.belongsTo(User, { foreignKey: 'user_id', as: 'giftCodeClaimUser' });
+        GiftCodeClaim.belongsTo(GiftCode, { foreignKey: 'gift_code_id' });
+
+        // Rate limit relationships
+        User.hasMany(RateLimitViolation, { 
+            foreignKey: 'user_id', 
+            as: 'rateLimitViolations',
+            onDelete: 'SET NULL',
+            onUpdate: 'CASCADE'
+        });
+        RateLimitViolation.belongsTo(User, { 
+            foreignKey: 'user_id', 
+            as: 'user',
+            onDelete: 'SET NULL',
+            onUpdate: 'CASCADE'
+        });
+        RateLimitViolation.belongsTo(User, { 
+            foreignKey: 'unblocked_by', 
+            as: 'unblocker',
+            onDelete: 'SET NULL',
+            onUpdate: 'CASCADE'
+        });
+
+        console.log('✅ Model associations set up successfully');
+    } catch (error) {
+        console.error('❌ Error setting up model associations:', error);
+        throw error;
+    }
 };
-
-// Set up associations
-setupAssociations();
 
 // Function to initialize all models
 const initializeModels = async () => {
     try {
-        // First verify the connection
-        await sequelize.authenticate();
+        // First connect to the database
+        await connectDB();
         console.log('✅ Database connection established successfully');
         
-        // Don't sync automatically - use migrations instead
-        // await sequelize.sync({ alter: true });
+        // Wait for Sequelize to be fully initialized
+        await new Promise(resolve => setTimeout(resolve, 2000));
         
-        // Disable any auto-sync completely
-        sequelize.sync = function() {
-            console.log('⚠️ Attempted automatic sync operation blocked');
-            return Promise.resolve();
-        };
+        // Set up associations before any model operations
+        setupAssociations();
         
-        // Aggressive fix to drop any newly added session_id column
+        // Wait for associations to be fully set up
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Verify that models are properly initialized
         try {
-            await sequelize.query('SET FOREIGN_KEY_CHECKS = 0;');
-            
-            // Check if session_id exists in game_transactions
-            const [hasGameSessionId] = await sequelize.query(`
-                SELECT COUNT(*) as count 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_SCHEMA = DATABASE() 
-                AND TABLE_NAME = 'game_transactions' 
-                AND COLUMN_NAME = 'session_id'
-            `);
-            
-            if (hasGameSessionId[0].count > 0) {
-                console.log('Found session_id in game_transactions, removing it');
-                await sequelize.query(`
-                    ALTER TABLE game_transactions 
-                    DROP FOREIGN KEY IF EXISTS game_transactions_session_id_foreign_idx;
-                `).catch(() => {});
-                
-                await sequelize.query(`
-                    ALTER TABLE game_transactions DROP COLUMN session_id;
-                `).catch(() => {});
-            }
-            
-            // Check if session_id exists in seamless_transactions
-            const [hasSeamlessSessionId] = await sequelize.query(`
-                SELECT COUNT(*) as count 
-                FROM INFORMATION_SCHEMA.COLUMNS 
-                WHERE TABLE_SCHEMA = DATABASE() 
-                AND TABLE_NAME = 'seamless_transactions' 
-                AND COLUMN_NAME = 'session_id'
-            `);
-            
-            if (hasSeamlessSessionId[0].count > 0) {
-                console.log('Found session_id in seamless_transactions, removing it');
-                await sequelize.query(`
-                    ALTER TABLE seamless_transactions 
-                    DROP FOREIGN KEY IF EXISTS seamless_transactions_session_id_foreign_idx;
-                `).catch(() => {});
-                
-                await sequelize.query(`
-                    ALTER TABLE seamless_transactions DROP COLUMN session_id;
-                `).catch(() => {});
-            }
-            
-            await sequelize.query('SET FOREIGN_KEY_CHECKS = 1;');
+            await User.findOne({ limit: 1 });
+            console.log('✅ User model verified');
         } catch (error) {
-            console.error('Error fixing database schema:', error);
-            // Continue execution even if there's an error
+            console.error('❌ Error verifying User model:', error);
+            throw error;
         }
         
         console.log('✅ All models loaded successfully');
@@ -205,6 +215,17 @@ module.exports = {
     BetResult5D,
     BetRecordK3,
     BetResultK3,
-    initializeModels
+    VipReward,
+    Transaction,
+    GiftCode,
+    GiftCodeClaim,
+    initializeModels,
+    BetRecordTrxWix,
+    BetResultTrxWix,
+    RateLimitViolation,
+    UserSession,
+    RefreshToken,
+    OtpRequest,
+    PaymentGatewaySettings,
 };
 
