@@ -1,4 +1,4 @@
-// File: Backend/models/AttendanceRecord.js
+// Backend/models/AttendanceRecord.js
 const { Model, DataTypes } = require('sequelize');
 
 class AttendanceRecord extends Model {
@@ -14,7 +14,7 @@ class AttendanceRecord extends Model {
         allowNull: false,
         references: {
           model: 'users',
-          key: 'id'
+          key: 'user_id'  // Changed from 'id' to 'user_id' to match User model
         }
       },
       attendance_date: {
@@ -27,7 +27,6 @@ class AttendanceRecord extends Model {
         defaultValue: 1,
         comment: 'Current consecutive days streak'
       },
-      // New fields start here
       has_recharged: {
         type: DataTypes.BOOLEAN,
         allowNull: false,
@@ -89,10 +88,16 @@ class AttendanceRecord extends Model {
   }
 
   static associate(models) {
-    this.belongsTo(models.User, {
-      foreignKey: 'user_id',
-      as: 'user'
-    });
+    // Only set up association if User model exists and is properly initialized
+    if (models.User && typeof models.User === 'function') {
+      this.belongsTo(models.User, {
+        foreignKey: 'user_id',
+        targetKey: 'user_id',  // Specify the target key explicitly
+        as: 'user'
+      });
+    } else {
+      console.warn('User model not found or not properly initialized for AttendanceRecord association');
+    }
   }
 }
 

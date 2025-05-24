@@ -1,7 +1,7 @@
 require('dotenv').config();
 
-// Debug logging
-console.log('Environment Variables:', {
+// Debug logging for environment variables
+console.log('Database Configuration Debug:', {
     DB_HOST: process.env.DB_HOST,
     DB_PORT: process.env.DB_PORT,
     DB_NAME: process.env.DB_NAME,
@@ -25,15 +25,80 @@ const config = {
         database: process.env.DB_NAME || 'duewin_db',
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 3306,
-        dialect: 'mysql'
+        dialect: 'mysql',
+        logging: console.log,  // Enable logging for debugging
+        pool: {
+            max: 5,
+            min: 0,
+            acquire: 30000,
+            idle: 10000
+        },
+        retry: {
+            max: 3,
+            match: [
+                /SequelizeConnectionError/,
+                /SequelizeConnectionRefusedError/,
+                /SequelizeHostNotFoundError/,
+                /SequelizeHostNotReachableError/,
+                /SequelizeInvalidConnectionError/,
+                /SequelizeConnectionTimedOutError/,
+                /TimeoutError/
+            ]
+        },
+        define: {
+            underscored: true,
+            timestamps: true,
+            createdAt: 'created_at',
+            updatedAt: 'updated_at'
+        }
     },
     production: {
-        username: process.env.DB_USER,
-        password: process.env.DB_PASS,
-        database: process.env.DB_NAME,
-        host: process.env.DB_HOST,
-        port: process.env.DB_PORT,
-        dialect: 'mysql'
+        username: process.env.DB_USER || 'root',
+        password: process.env.DB_PASS || '',
+        database: process.env.DB_NAME || 'duewin_db',
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 3306,
+        dialect: 'mysql',
+        logging: false,  // Disable logging in production
+        pool: {
+            max: 10,
+            min: 0,
+            acquire: 30000,
+            idle: 10000
+        },
+        retry: {
+            max: 3,
+            match: [
+                /SequelizeConnectionError/,
+                /SequelizeConnectionRefusedError/,
+                /SequelizeHostNotFoundError/,
+                /SequelizeHostNotReachableError/,
+                /SequelizeInvalidConnectionError/,
+                /SequelizeConnectionTimedOutError/,
+                /TimeoutError/
+            ]
+        },
+        define: {
+            underscored: true,
+            timestamps: true,
+            createdAt: 'created_at',
+            updatedAt: 'updated_at'
+        }
+    },
+    test: {
+        username: process.env.DB_USER || 'root',
+        password: process.env.DB_PASS || '',
+        database: process.env.DB_NAME_TEST || 'duewin_db_test',
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 3306,
+        dialect: 'mysql',
+        logging: false,
+        pool: {
+            max: 5,
+            min: 0,
+            acquire: 30000,
+            idle: 10000
+        }
     },
     // Add JWT configuration
     jwtSecret,
@@ -42,4 +107,10 @@ const config = {
     jwtRefreshExpiration
 };
 
-module.exports = config; 
+// Log the final configuration (without password)
+console.log('Final Database Config:', {
+    ...config[env],
+    password: config[env].password ? '[HIDDEN]' : '[NOT SET]'
+});
+
+module.exports = config;

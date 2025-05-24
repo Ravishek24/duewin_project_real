@@ -1,4 +1,16 @@
 // Backend/models/gameModels.js
+const { Model, DataTypes } = require('sequelize');
+
+// This file exports multiple game-related models
+class GameModels extends Model {
+    static init(sequelize) {
+        // This is a utility class, not a database model
+        // So we don't actually initialize it as a Sequelize model
+        return null;
+    }
+}
+
+// Export individual model classes
 const BetRecordWingo = require('./BetRecordWingo');
 const BetResultWingo = require('./BetResultWingo');
 const BetRecord5D = require('./BetRecord5D');
@@ -37,28 +49,38 @@ const initializeGameConfigs = async () => {
 
 // Helper to create default config for a game type and duration
 const createDefaultConfigIfNotExists = async (gameType, duration) => {
-    const exists = await GameConfig.findOne({
-        where: { game_type: gameType, duration }
-    });
-    
-    if (!exists) {
-        await GameConfig.create({
-            game_type: gameType,
-            duration,
-            is_active: true,
-            payout_target: 60.00,
-            min_bet_amount: 10.00,
-            max_bet_amount: 10000.00,
-            max_win_amount: 100000.00,
-            platform_fee_percent: 2.00,
-            bet_close_seconds: 5,
-            payout_multipliers: GameConfig.getDefaultMultipliers(gameType)
+    try {
+        if (!GameConfig || typeof GameConfig.findOne !== 'function') {
+            console.warn('GameConfig model not available for initialization');
+            return;
+        }
+        
+        const exists = await GameConfig.findOne({
+            where: { game_type: gameType, duration }
         });
         
-        console.log(`Created default config for ${gameType} ${duration}s`);
+        if (!exists) {
+            await GameConfig.create({
+                game_type: gameType,
+                duration,
+                is_active: true,
+                payout_target: 60.00,
+                min_bet_amount: 10.00,
+                max_bet_amount: 10000.00,
+                max_win_amount: 100000.00,
+                platform_fee_percent: 2.00,
+                bet_close_seconds: 5,
+                payout_multipliers: GameConfig.getDefaultMultipliers ? GameConfig.getDefaultMultipliers(gameType) : '{}'
+            });
+            
+            console.log(`Created default config for ${gameType} ${duration}s`);
+        }
+    } catch (error) {
+        console.error(`Error creating default config for ${gameType} ${duration}s:`, error.message);
     }
 };
 
+// Export as individual models for the model loader
 module.exports = {
     BetRecordWingo,
     BetResultWingo,
