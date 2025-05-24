@@ -1,4 +1,3 @@
-// Backend/models/UsdtAccount.js
 const { Model, DataTypes } = require('sequelize');
 
 class UsdtAccount extends Model {
@@ -14,28 +13,29 @@ class UsdtAccount extends Model {
                 allowNull: false,
                 references: {
                     model: 'users',
-                    key: 'user_id'
+                    key: 'id'
                 }
             },
-            network: {
-                type: DataTypes.STRING,
-                allowNull: false
-            },
             address: {
-                type: DataTypes.STRING,
+                type: DataTypes.STRING(255),
                 allowNull: false
             },
-            is_default: {
-                type: DataTypes.BOOLEAN,
-                allowNull: false,
-                defaultValue: false
+            network: {
+                type: DataTypes.STRING(255),
+                allowNull: false
+            },
+            remark: {
+                type: DataTypes.STRING(255),
+                allowNull: true
             },
             created_at: {
                 type: DataTypes.DATE,
+                allowNull: false,
                 defaultValue: DataTypes.NOW
             },
             updated_at: {
                 type: DataTypes.DATE,
+                allowNull: false,
                 defaultValue: DataTypes.NOW
             }
         }, {
@@ -52,11 +52,10 @@ class UsdtAccount extends Model {
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
-                targetKey: 'user_id',
                 as: 'user'
             });
         }
     }
 }
 
-module.exports = UsdtAccount;
+module.exports = UsdtAccount; 

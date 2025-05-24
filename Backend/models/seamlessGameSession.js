@@ -1,4 +1,3 @@
-// Backend/models/seamlessGameSession.js
 const { Model, DataTypes } = require('sequelize');
 
 class SeamlessGameSession extends Model {
@@ -31,6 +30,21 @@ class SeamlessGameSession extends Model {
                 allowNull: false,
                 defaultValue: 'active'
             },
+            provider: {
+                type: DataTypes.STRING,
+                allowNull: false,
+                comment: 'Third-party game provider name'
+            },
+            provider_session_id: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Session ID from the third-party provider'
+            },
+            metadata: {
+                type: DataTypes.JSON,
+                allowNull: true,
+                comment: 'Additional provider-specific data'
+            },
             created_at: {
                 type: DataTypes.DATE,
                 defaultValue: DataTypes.NOW
@@ -50,7 +64,6 @@ class SeamlessGameSession extends Model {
     }
 
     static associate(models) {
-        // Only set up associations if models exist
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
@@ -68,4 +81,4 @@ class SeamlessGameSession extends Model {
     }
 }
 
-module.exports = SeamlessGameSession;
+module.exports = SeamlessGameSession; 

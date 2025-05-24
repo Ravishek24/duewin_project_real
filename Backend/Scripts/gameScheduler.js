@@ -20,14 +20,27 @@ const { initializeModels } = models;
 // Initialize function to connect to the database
 async function initialize() {
   try {
+    console.log('🔄 Starting initialization...');
+    
+    // Step 1: Connect to database
     await sequelize.authenticate();
     console.log('✅ Database connected for game scheduler');
     
-    // Initialize models
+    // Step 2: Initialize models
+    console.log('🔄 Initializing models...');
     await initializeModels();
     console.log('✅ Models initialized for game scheduler');
     
-    // Initialize TRON hash collection
+    // Step 3: Initialize Redis
+    if (!redis.status === 'ready') {
+      console.log('🔄 Waiting for Redis to be ready...');
+      await new Promise((resolve) => {
+        redis.on('ready', resolve);
+      });
+    }
+    console.log('✅ Redis connection verified');
+    
+    // Step 4: Initialize TRON hash collection
     try {
       console.log('🔄 Starting TRON hash collection...');
       await tronHashService.startHashCollection();
@@ -36,8 +49,15 @@ async function initialize() {
       console.error('❌ Error initializing TRON hash collection:', error);
       console.log('⚠️ Game results will use fallback hash generation');
     }
+    
+    // Step 5: Initialize game periods
+    console.log('🔄 Initializing game periods...');
+    await initializeGamePeriods();
+    console.log('✅ Game periods initialized');
+    
+    console.log('✅ Initialization completed successfully');
   } catch (error) {
-    console.error('❌ Failed to connect to database:', error);
+    console.error('❌ Failed to initialize:', error);
     process.exit(1);
   }
 }
@@ -100,40 +120,51 @@ const initializeGamePeriods = async () => {
         console.log('Initializing game periods...');
         for (const [gameType, durations] of Object.entries(GAME_CONFIGS)) {
             for (const duration of durations) {
-                console.log(`Initializing ${gameType} ${duration}s period...`);
-                // Initialize current period
-                const currentPeriod = await periodService.generatePeriodId(gameType, duration, new Date());
-                console.log(`Generated period ID for ${gameType} ${duration}s: ${currentPeriod}`);
-                await periodService.initializePeriod(gameType, duration, currentPeriod);
-                
-                // Schedule period processing using cron
-                const cronExpression = getCronExpression(duration);
-                cron.schedule(cronExpression, async () => {
-                    try {
-                        console.log(`Processing ${gameType} ${duration}s period...`);
-                        await processPeriod(gameType, duration);
-                    } catch (error) {
-                        console.error(`Error in cron period processing for ${gameType} ${duration}s:`, error);
-                        logger.error('Error in cron period processing:', {
-                            error: error.message,
-                            stack: error.stack,
-                            gameType,
-                            duration
-                        });
-                    }
-                }, {
-                    timezone: "Asia/Kolkata" // IST timezone
-                });
-                
-                console.log(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
-                logger.info(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
+                try {
+                    console.log(`Initializing ${gameType} ${duration}s period...`);
+                    // Initialize current period
+                    const currentPeriod = await periodService.generatePeriodId(gameType, duration, new Date());
+                    console.log(`Generated period ID for ${gameType} ${duration}s: ${currentPeriod}`);
+                    await periodService.initializePeriod(gameType, duration, currentPeriod);
+                    
+                    // Schedule period processing using cron
+                    const cronExpression = getCronExpression(duration);
+                    cron.schedule(cronExpression, async () => {
+                        try {
+                            console.log(`Processing ${gameType} ${duration}s period...`);
+                            await processPeriod(gameType, duration);
+                        } catch (error) {
+                            console.error(`Error in cron period processing for ${gameType} ${duration}s:`, error);
+                            logger.error('Error in cron period processing:', {
+                                error: error.message,
+                                stack: error.stack,
+                                gameType,
+                                duration
+                            });
+                        }
+                    }, {
+                        timezone: "Asia/Kolkata" // IST timezone
+                    });
+                    
+                    console.log(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
+                    logger.info(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
+                } catch (error) {
+                    console.error(`Error initializing ${gameType} ${duration}s period:`, error);
+                    logger.error(`Error initializing game period:`, {
+                        error: error.message,
+                        stack: error.stack,
+                        gameType,
+                        duration
+                    });
+                }
             }
         }
-        console.log('All game schedules initialized');
-        logger.info('All game schedules initialized');
+        console.log('✅ All game schedules initialized');
+        logger.info('✅ All game schedules initialized');
     } catch (error) {
-        console.error('Error initializing game periods:', error);
-        logger.error('Error initializing game periods:', error);
+        console.error('❌ Error initializing game periods:', error);
+        logger.error('❌ Error initializing game periods:', error);
+        throw error; // Re-throw to be caught by the main initialization
     }
 };
 
@@ -299,19 +330,11 @@ async function processPeriod(gameType, duration) {
 
 // Get cron expression based on duration
 const getCronExpression = (duration) => {
-    switch (duration) {
-        case 30:
-            return '*/30 * * * * *';  // Every 30 seconds
-        case 60:
-            return '0 * * * * *';     // Every minute
-        case 180:
-            return '0 */3 * * * *';   // Every 3 minutes
-        case 300:
-            return '0 */5 * * * *';   // Every 5 minutes
-        case 600:
-            return '0 */10 * * * *';  // Every 10 minutes
-        default:
-            throw new Error(`Invalid duration: ${duration}`);
+    if (duration <= 60) {
+        return `*/${duration} * * * * *`; // Every X seconds
+    } else {
+        const minutes = duration / 60;
+        return `0 */${minutes} * * * *`; // Every X minutes
     }
 };
 
@@ -319,11 +342,10 @@ const getCronExpression = (duration) => {
 const startGameScheduler = async () => {
     try {
         await initialize();
-        await initializeGamePeriods();
         logger.info('Game scheduler running. Press Ctrl+C to stop.');
         logger.info('✅ Game scheduler started successfully');
     } catch (error) {
-        logger.error('Error starting game scheduler:', error);
+        logger.error('❌ Error starting game scheduler:', error);
         process.exit(1);
     }
 };
@@ -338,3 +360,9 @@ process.on('SIGINT', () => {
 module.exports = {
     startGameScheduler
 };
+
+// Start the game scheduler
+startGameScheduler().catch(error => {
+    console.error('Failed to start game scheduler:', error);
+    process.exit(1);
+});

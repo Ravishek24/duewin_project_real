@@ -136,6 +136,19 @@ class User extends Model {
             timestamps: true,
             createdAt: 'created_at',
             updatedAt: 'updated_at',
+            // Define scopes here in the options
+            scopes: {
+                defaultScope: {
+                    attributes: {
+                        exclude: ['password', 'reset_token', 'reset_token_expiry', 'phone_otp_session_id']
+                    }
+                },
+                withPassword: {
+                    attributes: {
+                        include: ['password']
+                    }
+                }
+            },
             hooks: {
                 beforeCreate: async (user) => {
                     if (user.password) {
@@ -177,18 +190,5 @@ class User extends Model {
         return bcrypt.compare(password, this.password);
     }
 }
-
-// Define scopes
-User.addScope('defaultScope', {
-    attributes: {
-        exclude: ['password', 'reset_token', 'reset_token_expiry', 'phone_otp_session_id']
-    }
-}, { override: true });
-
-User.addScope('withPassword', {
-    attributes: {
-        include: ['password']
-    }
-});
 
 module.exports = User;

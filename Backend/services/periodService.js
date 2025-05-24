@@ -1,9 +1,27 @@
 const redisClient = require('../config/redisConfig').redis;
-const { sequelize } = require('../config/db');
+const { sequelize, GamePeriod } = require('../models');
+const { Op } = require('sequelize');
 const moment = require('moment-timezone');
 const winston = require('winston');
 const path = require('path');
 const models = require('../models');
+const { initializeModels } = models;
+const crypto = require('crypto');
+const config = require('../config/config.js')[process.env.NODE_ENV || 'development'];
+
+// Initialize models before using them
+(async () => {
+    try {
+        await initializeModels();
+        if (!GamePeriod) {
+            throw new Error('GamePeriod model not found after initialization');
+        }
+        console.log('✅ GamePeriod model initialized successfully');
+    } catch (error) {
+        console.error('❌ Failed to initialize models in period service:', error);
+        process.exit(1);
+    }
+})();
 
 // Configure Winston logger
 const logger = winston.createLogger({
@@ -42,6 +60,32 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
         console.log(`Duration: ${duration}s`);
         console.log(`Timestamp: ${timestamp.toISOString()}`);
         
+        if (!GamePeriod) {
+            throw new Error('GamePeriod model not initialized');
+        }
+
+        const now = moment();
+        const startTime = now.clone().startOf('day');
+        const endTime = now.clone().endOf('day');
+
+        // Find the last period for today
+        const lastPeriod = await GamePeriod.findOne({
+            where: {
+                game_type: gameType,
+                duration: duration,
+                start_time: {
+                    [Op.between]: [startTime.toDate(), endTime.toDate()]
+                }
+            },
+            order: [['period_id', 'DESC']]
+        });
+        
+        let sequence = 1;
+        if (lastPeriod) {
+            const lastSequence = parseInt(lastPeriod.period_id.split('-')[3]) || 0;
+            sequence = lastSequence + 1;
+        }
+        
         // Get game type prefix (first letter of each word)
         const gameTypePrefix = gameType.split('_')
             .map(word => word.charAt(0).toUpperCase())
@@ -58,21 +102,6 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
             .replace(/[-T:]/g, '')
             .slice(0, 12);
             
-        // Get sequence number for this game type and duration
-        const lastPeriod = await models.GamePeriod.findOne({
-            where: {
-                game_type: gameType,
-                duration: duration
-            },
-            order: [['created_at', 'DESC']]
-        });
-        
-        let sequence = 1;
-        if (lastPeriod) {
-            const lastSequence = parseInt(lastPeriod.period_id.split('-')[3]) || 0;
-            sequence = lastSequence + 1;
-        }
-        
         // Format: YYYYMMDDHHMM-GAME-DURATION-SEQ
         const periodId = `${basePeriodId}-${gameTypePrefix}-${durationPrefix}-${sequence.toString().padStart(3, '0')}`;
         
@@ -283,7 +312,7 @@ const initializePeriod = async (gameType, duration, periodId) => {
         // Also store in database for persistence
         try {
             // Check if period already exists
-            const existingPeriod = await models.GamePeriod.findOne({
+            const existingPeriod = await GamePeriod.findOne({
                 where: {
                     period_id: periodId,
                     game_type: gameType,
@@ -292,7 +321,7 @@ const initializePeriod = async (gameType, duration, periodId) => {
             });
 
             if (!existingPeriod) {
-                await models.GamePeriod.create({
+                await GamePeriod.create({
                     period_id: periodId,
                     game_type: gameType,
                     duration: duration,

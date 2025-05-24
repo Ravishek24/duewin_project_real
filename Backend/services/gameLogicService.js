@@ -344,7 +344,7 @@ const validateFallbackResult = async (result, gameType) => {
         case 'wingo':
             if (typeof result.number !== 'number') {
                 warnings.push('Invalid number in result');
-            }
+                }
             if (!['big', 'small'].includes(result.size)) {
                 warnings.push('Invalid size in result');
             }
@@ -356,7 +356,7 @@ const validateFallbackResult = async (result, gameType) => {
         case 'trx_wix':
             if (typeof result.number !== 'number') {
                 warnings.push('Invalid number in result');
-            }
+                }
             if (!['big', 'small'].includes(result.size)) {
                 warnings.push('Invalid size in result');
             }
@@ -709,7 +709,7 @@ const generateAllPossibleResults = async (gameType) => {
                 const hash = Math.random().toString(36).substring(2, 15);
                 
                 trxWixResults.push({ number: i, color, size, hash });
-            }
+      }
             return trxWixResults;
     
     case 'fiveD':
@@ -824,7 +824,7 @@ const calculateExpectedPayout = async (gameType, durationKey, periodId, result) 
             const trxWixParity = result.number % 2 === 0 ? 'even' : 'odd';
             const trxWixParityBetAmount = parseFloat(
                 await redisClient.get(`trx_wix:${durationKey}:${periodId}:parity:${trxWixParity}`) || 0
-            );
+      );
             totalPayout += trxWixParityBetAmount * 2; // 2x for odd/even
       break;
       
@@ -2060,7 +2060,7 @@ const endRound = async (gameType, duration, periodId) => {
         if (!processResult.success) {
             throw new Error('Failed to process game results');
         }
-
+        
         // Store the result with verification in Redis
         await storeTemporaryResult(gameType, duration, periodId, resultWithVerification);
         
@@ -2425,7 +2425,7 @@ const processGameResults = async (gameType, duration, periodId) => {
     });
     
     const t = await sequelize.transaction();
-    
+        
     try {
         logger.info(`Processing game results for period ${periodId}`, {
                 gameType, 
@@ -2491,7 +2491,7 @@ const processGameResults = async (gameType, duration, periodId) => {
             default:
                 throw new Error(`Unsupported game type: ${gameType}`);
         }
-
+        
         logger.info(`Saved result for period ${periodId}`, {
             resultId: savedResult.id,
             gameType

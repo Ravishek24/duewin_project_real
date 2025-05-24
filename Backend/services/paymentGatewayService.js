@@ -1,11 +1,32 @@
 // services/paymentGatewayService.js
-const PaymentGateway = require('../models/PaymentGateway');
 const { sequelize } = require('../config/db');
-const PaymentGatewaySettings = require('../models/PaymentGatewaySettings');
-const WalletRecharge = require('../models/WalletRecharge');
-const WalletWithdrawal = require('../models/WalletWithdrawal');
 const moment = require('moment-timezone');
 const { Op } = require('sequelize');
+
+// Initialize models
+let PaymentGateway;
+let PaymentGatewaySettings;
+let WalletRecharge;
+let WalletWithdrawal;
+
+const initializeModels = async () => {
+  try {
+    PaymentGateway = require('../models/PaymentGateway');
+    PaymentGatewaySettings = require('../models/PaymentGatewaySettings');
+    WalletRecharge = require('../models/WalletRecharge');
+    WalletWithdrawal = require('../models/WalletWithdrawal');
+    
+    // Verify models are properly initialized
+    if (!PaymentGateway || !PaymentGatewaySettings) {
+      throw new Error('Required models not initialized');
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error initializing payment gateway models:', error);
+    throw error;
+  }
+};
 
 /**
  * Get all active payment gateways
@@ -14,6 +35,8 @@ const { Op } = require('sequelize');
  */
 const getActivePaymentGateways = async (forDeposit = true) => {
   try {
+    await initializeModels();
+    
     const gateways = await PaymentGateway.findAll({
       where: {
         is_active: true,
@@ -42,6 +65,8 @@ const getActivePaymentGateways = async (forDeposit = true) => {
  */
 const getPaymentGatewayByCode = async (code) => {
   try {
+    await initializeModels();
+    
     const gateway = await PaymentGateway.findOne({
       where: { code }
     });
@@ -75,6 +100,8 @@ const createPaymentGateway = async (gatewayData) => {
   const t = await sequelize.transaction();
   
   try {
+    await initializeModels();
+    
     // Check if gateway with same code already exists
     const existingGateway = await PaymentGateway.findOne({
       where: { code: gatewayData.code },
@@ -119,6 +146,8 @@ const updatePaymentGateway = async (gatewayId, gatewayData) => {
   const t = await sequelize.transaction();
   
   try {
+    await initializeModels();
+    
     // Check if gateway exists
     const gateway = await PaymentGateway.findByPk(gatewayId, { transaction: t });
     
@@ -175,6 +204,8 @@ const togglePaymentGatewayStatus = async (gatewayId) => {
   const t = await sequelize.transaction();
   
   try {
+    await initializeModels();
+    
     // Check if gateway exists
     const gateway = await PaymentGateway.findByPk(gatewayId, { transaction: t });
     
@@ -211,74 +242,80 @@ const togglePaymentGatewayStatus = async (gatewayId) => {
  * @returns {Object} - Result
  */
 const initializeDefaultGateways = async () => {
-  const t = await sequelize.transaction();
-  
   try {
-    // Check if gateways already exist
-    const existingCount = await PaymentGateway.count({ transaction: t });
+    await initializeModels();
     
-    if (existingCount > 0) {
-      await t.rollback();
+    const t = await sequelize.transaction();
+    
+    try {
+      // Check if gateways already exist
+      const existingCount = await PaymentGateway.count({ transaction: t });
+      
+      if (existingCount > 0) {
+        await t.rollback();
+        return {
+          success: true,
+          message: 'Payment gateways already initialized'
+        };
+      }
+      
+      // Create default gateways
+      await PaymentGateway.bulkCreate([
+        {
+          name: 'OKPAY',
+          code: 'OKPAY',
+          description: 'Original payment gateway integration',
+          logo_url: '/assets/images/payment/okpay.png',
+          is_active: true,
+          supports_deposit: true,
+          supports_withdrawal: true,
+          min_deposit: 100.00,
+          max_deposit: 100000.00,
+          min_withdrawal: 500.00,
+          max_withdrawal: 50000.00,
+          display_order: 1
+        },
+        {
+          name: 'WePayGlobal',
+          code: 'WEPAY',
+          description: 'International payment gateway with multiple options',
+          logo_url: '/assets/images/payment/wepay.png',
+          is_active: true,
+          supports_deposit: true,
+          supports_withdrawal: true,
+          min_deposit: 100.00,
+          max_deposit: 100000.00,
+          min_withdrawal: 500.00,
+          max_withdrawal: 50000.00,
+          display_order: 2
+        },
+        {
+          name: 'MxPay',
+          code: 'MXPAY',
+          description: 'Secure payment gateway for deposits and withdrawals',
+          logo_url: '/assets/images/payment/mxpay.png',
+          is_active: true,
+          supports_deposit: true,
+          supports_withdrawal: true,
+          min_deposit: 100.00,
+          max_deposit: 100000.00,
+          min_withdrawal: 500.00,
+          max_withdrawal: 50000.00,
+          display_order: 3
+        }
+      ], { transaction: t });
+      
+      await t.commit();
+      
       return {
         success: true,
-        message: 'Payment gateways already initialized'
+        message: 'Default payment gateways initialized successfully'
       };
+    } catch (error) {
+      await t.rollback();
+      throw error;
     }
-    
-    // Create default gateways
-    await PaymentGateway.bulkCreate([
-      {
-        name: 'OKPAY',
-        code: 'OKPAY',
-        description: 'Original payment gateway integration',
-        logo_url: '/assets/images/payment/okpay.png',
-        is_active: true,
-        supports_deposit: true,
-        supports_withdrawal: true,
-        min_deposit: 100.00,
-        max_deposit: 100000.00,
-        min_withdrawal: 500.00,
-        max_withdrawal: 50000.00,
-        display_order: 1
-      },
-      {
-        name: 'WePayGlobal',
-        code: 'WEPAY',
-        description: 'International payment gateway with multiple options',
-        logo_url: '/assets/images/payment/wepay.png',
-        is_active: true,
-        supports_deposit: true,
-        supports_withdrawal: true,
-        min_deposit: 100.00,
-        max_deposit: 100000.00,
-        min_withdrawal: 500.00,
-        max_withdrawal: 50000.00,
-        display_order: 2
-      },
-      {
-        name: 'MxPay',
-        code: 'MXPAY',
-        description: 'Secure payment gateway for deposits and withdrawals',
-        logo_url: '/assets/images/payment/mxpay.png',
-        is_active: true,
-        supports_deposit: true,
-        supports_withdrawal: true,
-        min_deposit: 100.00,
-        max_deposit: 100000.00,
-        min_withdrawal: 500.00,
-        max_withdrawal: 50000.00,
-        display_order: 3
-      }
-    ], { transaction: t });
-    
-    await t.commit();
-    
-    return {
-      success: true,
-      message: 'Default payment gateways initialized successfully'
-    };
   } catch (error) {
-    await t.rollback();
     console.error('Error initializing default payment gateways:', error);
     return {
       success: false,
@@ -294,6 +331,8 @@ const initializeDefaultGateways = async () => {
  */
 const getAllPaymentGateways = async (isAdmin = false) => {
   try {
+    await initializeModels();
+    
     const whereClause = isAdmin ? {} : { is_active: true };
     
     const gateways = await PaymentGatewaySettings.findAll({
@@ -328,6 +367,8 @@ const getAllPaymentGateways = async (isAdmin = false) => {
  */
 const getAvailableDepositGateways = async () => {
   try {
+    await initializeModels();
+    
     const gateways = await PaymentGatewaySettings.findAll({
       where: {
         is_active: true,
@@ -359,6 +400,8 @@ const getAvailableDepositGateways = async () => {
  */
 const getAvailableWithdrawalGateways = async () => {
   try {
+    await initializeModels();
+    
     const gateways = await PaymentGatewaySettings.findAll({
       where: {
         is_active: true,
@@ -389,6 +432,8 @@ const getAvailableWithdrawalGateways = async () => {
  */
 const toggleDepositStatus = async (gatewayId) => {
   try {
+    await initializeModels();
+    
     const gateway = await PaymentGatewaySettings.findByPk(gatewayId);
     
     if (!gateway) {
@@ -427,6 +472,8 @@ const toggleDepositStatus = async (gatewayId) => {
  */
 const toggleWithdrawalStatus = async (gatewayId) => {
   try {
+    await initializeModels();
+    
     const gateway = await PaymentGatewaySettings.findByPk(gatewayId);
     
     if (!gateway) {
@@ -466,6 +513,8 @@ const toggleWithdrawalStatus = async (gatewayId) => {
  */
 const updateDepositLimits = async (gatewayId, limits) => {
   try {
+    await initializeModels();
+    
     const gateway = await PaymentGatewaySettings.findByPk(gatewayId);
     
     if (!gateway) {
@@ -513,6 +562,8 @@ const updateDepositLimits = async (gatewayId, limits) => {
  */
 const getPaymentGatewayStats = async () => {
   try {
+    await initializeModels();
+    
     const todayIST = moment().tz('Asia/Kolkata').startOf('day');
     
     // Get all active payment gateways

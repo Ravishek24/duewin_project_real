@@ -3,46 +3,27 @@
  * These should be replaced with proper solutions in the future
  */
 
-const installHackFix = (sequelize) => {
+const installHackFix = async (sequelize) => {
     try {
+        // Verify Sequelize is properly initialized
+        if (!sequelize || !sequelize.constructor || !sequelize.constructor.Query || !sequelize.constructor.Query.prototype) {
+            console.warn('⚠️ Sequelize not properly initialized, cannot install hack fixes');
+            return false;
+        }
+
         // Fix for Sequelize's session_id issue
-        if (sequelize && sequelize.constructor && sequelize.constructor.Query && sequelize.constructor.Query.prototype) {
-            const originalQuery = sequelize.constructor.Query.prototype.run;
-            // Only install the fix if it hasn't been installed already
-            if (!sequelize.constructor.Query.prototype._hackFixInstalled) {
-                sequelize.constructor.Query.prototype.run = function(sql, parameters) {
-                    if (sql && sql.includes('session_id')) {
-                        return Promise.resolve([]);
-                    }
-                    return originalQuery.call(this, sql, parameters);
-                };
-                sequelize.constructor.Query.prototype._hackFixInstalled = true;
-                console.log('✅ Sequelize hack fix installed');
-            }
-        } else {
-            // Only log once if Sequelize is not initialized
-            if (!global._hackFixWarningLogged) {
-                console.warn('⚠️ Sequelize not fully initialized, skipping session_id fix');
-                global._hackFixWarningLogged = true;
-            }
-            
-            // Single retry with increased delay
-            setTimeout(() => {
-                if (sequelize && sequelize.constructor && sequelize.constructor.Query && sequelize.constructor.Query.prototype) {
-                    const originalQuery = sequelize.constructor.Query.prototype.run;
-                    // Only install the fix if it hasn't been installed already
-                    if (!sequelize.constructor.Query.prototype._hackFixInstalled) {
-                        sequelize.constructor.Query.prototype.run = function(sql, parameters) {
-                            if (sql && sql.includes('session_id')) {
-                                return Promise.resolve([]);
-                            }
-                            return originalQuery.call(this, sql, parameters);
-                        };
-                        sequelize.constructor.Query.prototype._hackFixInstalled = true;
-                        console.log('✅ Sequelize hack fix installed after delay');
-                    }
+        const originalQuery = sequelize.constructor.Query.prototype.run;
+        if (!sequelize.constructor.Query.prototype._hackFixInstalled) {
+            sequelize.constructor.Query.prototype.run = function(sql, parameters) {
+                if (sql && sql.includes('session_id')) {
+                    return Promise.resolve([]);
                 }
-            }, 3000); // Increased delay to 3 seconds for a single retry
+                return originalQuery.call(this, sql, parameters);
+            };
+            sequelize.constructor.Query.prototype._hackFixInstalled = true;
+            console.log('✅ Sequelize session_id fix installed successfully');
+        } else {
+            console.log('ℹ️ Sequelize session_id fix already installed');
         }
 
         // Fix for Node.js memory leak in HTTP parser
@@ -63,7 +44,7 @@ const installHackFix = (sequelize) => {
 
         return true;
     } catch (error) {
-        console.error('Failed to install hack fixes:', error);
+        console.error('❌ Failed to install hack fixes:', error);
         return false;
     }
 };
