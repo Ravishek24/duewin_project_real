@@ -3,11 +3,16 @@
 
 require('dotenv').config();
 const { sequelize } = require('./config/db');
-const BetResultWingo = require('./models/BetResultWingo');
-const BetResult5D = require('./models/BetResult5D');
-const BetResultK3 = require('./models/BetResultK3');
-const BetResultTrxWix = require('./models/BetResultTrxWix');
+const models = require('./models');
 const { v4: uuidv4 } = require('uuid');
+
+// Destructure models
+const {
+    BetResultWingo,
+    BetResult5D,
+    BetResultK3,
+    BetResultTrxWix
+} = models;
 
 // Get current date in YYYYMMDD format
 const today = new Date();

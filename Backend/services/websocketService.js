@@ -17,6 +17,7 @@ const {
 } = require('./gameLogicService.js');
 const WebSocket = require('ws');
 const User = require('../models/User');
+const { getIo } = require('../config/socketConfig');
 
 // Constants
 const MAX_ROOM_SIZE = 1000;
@@ -1024,25 +1025,47 @@ const getNextPeriodId = (currentPeriodId) => {
 };
 
 /**
- * Broadcast an event to a specific game room
- * @param {string} gameType - Game type
- * @param {number} duration - Duration in seconds
- * @param {string} event - Event name
- * @param {Object} data - Event data
+ * Broadcast data to a specific game channel
+ * @param {string} gameType - The type of game (e.g., 'wingo', 'trx_wix')
+ * @param {number|Object} durationOrData - Duration in seconds or data object
+ * @param {string} [event] - Event name (optional)
+ * @param {Object} [data] - Event data (optional)
+ * @returns {Promise<void>}
  */
-const broadcastToGame = (gameType, duration, event, data) => {
+const broadcastToGame = async (gameType, durationOrData, event, data) => {
   try {
-    // Check if io is initialized
+        const io = getIo();
     if (!io) {
-      console.warn(`WebSocket io not initialized yet, cannot broadcast ${event} to ${gameType}_${duration}`);
+            logger.warn('WebSocket not initialized, skipping broadcast:', {
+                gameType,
+                data: durationOrData
+            });
       return;
     }
     
-    const roomId = `${gameType}_${duration}`;
+        // Handle both function signatures
+        if (typeof durationOrData === 'number') {
+            // Original signature: (gameType, duration, event, data)
+            const roomId = `${gameType}_${durationOrData}`;
     io.to(roomId).emit(event, data);
-    console.log(`Broadcast ${event} to ${roomId} successful`);
+            logger.info(`Broadcast ${event} to ${roomId} successful`);
+        } else {
+            // New signature: (gameType, data)
+            const channel = `${gameType}_channel`;
+            io.to(channel).emit('game_update', durationOrData);
+            logger.info('Broadcast successful:', {
+                gameType,
+                channel,
+                data: durationOrData
+            });
+        }
   } catch (error) {
-    console.error(`Error broadcasting to game ${gameType}_${duration}:`, error.message);
+        logger.error('Error broadcasting to game:', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            data: durationOrData
+        });
   }
 };
 
@@ -1066,9 +1089,93 @@ const broadcastToAll = (event, data) => {
   }
 };
 
+/**
+ * Join a game channel
+ * @param {string} socketId - The socket ID
+ * @param {string} gameType - The type of game
+ * @returns {Promise<void>}
+ */
+const joinGameChannel = async (socketId, gameType) => {
+    try {
+        const io = getIo();
+        if (!io) {
+            logger.warn('WebSocket not initialized, skipping channel join:', {
+                socketId,
+                gameType
+            });
+            return;
+        }
+
+        const socket = io.sockets.sockets.get(socketId);
+        if (!socket) {
+            logger.warn('Socket not found:', { socketId });
+            return;
+        }
+
+        const channel = `${gameType}_channel`;
+        await socket.join(channel);
+        
+        logger.info('Joined game channel:', {
+            socketId,
+            gameType,
+            channel
+        });
+    } catch (error) {
+        logger.error('Error joining game channel:', {
+            error: error.message,
+            stack: error.stack,
+            socketId,
+            gameType
+        });
+    }
+};
+
+/**
+ * Leave a game channel
+ * @param {string} socketId - The socket ID
+ * @param {string} gameType - The type of game
+ * @returns {Promise<void>}
+ */
+const leaveGameChannel = async (socketId, gameType) => {
+    try {
+        const io = getIo();
+        if (!io) {
+            logger.warn('WebSocket not initialized, skipping channel leave:', {
+                socketId,
+                gameType
+            });
+            return;
+        }
+
+        const socket = io.sockets.sockets.get(socketId);
+        if (!socket) {
+            logger.warn('Socket not found:', { socketId });
+            return;
+        }
+
+        const channel = `${gameType}_channel`;
+        await socket.leave(channel);
+        
+        logger.info('Left game channel:', {
+            socketId,
+            gameType,
+            channel
+        });
+    } catch (error) {
+        logger.error('Error leaving game channel:', {
+            error: error.message,
+            stack: error.stack,
+            socketId,
+            gameType
+        });
+  }
+};
+
 module.exports = {
   initializeWebSocket,
   broadcastToGame,
   broadcastToAll,
-  WebSocketService
+  WebSocketService,
+  joinGameChannel,
+  leaveGameChannel
 };

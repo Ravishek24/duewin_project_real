@@ -3,6 +3,7 @@ const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http');
+const socketIo = require('socket.io');
 const { sequelize } = require('./config/db');
 const { initializeModels } = require('./models');
 const { installHackFix } = require('./config/hackFix');
@@ -19,6 +20,7 @@ const { auth, authenticateAdmin } = require('./middleware/auth');
 const { globalLimiter } = require('./middleware/rateLimiter');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const { setIo } = require('./config/socketConfig');
 
 // Load environment variables early
 dotenv.config();
@@ -38,7 +40,29 @@ const PORT = process.env.SERVER_PORT || 8000;
 // Create HTTP server (needed for Socket.io)
 const server = http.createServer(app);
 
-// Middleware
+// Initialize Socket.IO
+const io = socketIo(server, {
+    cors: {
+        origin: process.env.CORS_ORIGIN || '*',
+        methods: ['GET', 'POST']
+    }
+});
+
+// Set io instance in socketConfig
+setIo(io);
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+    logger.info('New client connected:', { socketId: socket.id });
+
+    socket.on('disconnect', () => {
+        logger.info('Client disconnected:', { socketId: socket.id });
+    });
+
+    // Add other socket event handlers here
+});
+
+// Basic middleware
 app.use(cors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -51,7 +75,13 @@ app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(globalLimiter);
+
+// Global rate limiter
+if (typeof globalLimiter === 'function') {
+    app.use(globalLimiter);
+} else {
+    console.warn('⚠️ Global rate limiter is not a function, skipping...');
+}
 
 // Initialize models before starting the server
 const startServer = async () => {
@@ -120,8 +150,11 @@ const startServer = async () => {
             res.json({ status: 'ok' });
         });
 
-        // Error handling middleware (must be after all routes)
-        app.use((err, req, res, next) => errorHandler(err, req, res, next));
+        // Error handling middleware (must be after routes)
+        app.use((err, req, res, next) => {
+            console.error('Error in middleware:', err);
+            errorHandler(err, req, res, next);
+        });
 
         // Start the server
         server.listen(PORT, () => {

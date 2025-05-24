@@ -3,14 +3,19 @@ const express = require('express');
 const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 const { isAdmin } = require('../middleware/authMiddleware');
 const gameLogicService = require('../services/gameLogicService');
-const BetRecordWingo = require('../models/BetRecordWingo');
-const BetRecord5D = require('../models/BetRecord5D');
-const BetRecordK3 = require('../models/BetRecordK3');
-const BetRecordTrxWix = require('../models/BetRecordTrxWix');
+const models = require('../models');
 const rateLimiters = require('../middleware/rateLimiter');
 const gameHistoryController = require('../controllers/gameHistoryController');
 
 const router = express.Router();
+
+// Destructure models
+const {
+    BetRecordWingo,
+    BetRecord5D,
+    BetRecordK3,
+    BetRecordTrxWix
+} = models;
 
 /**
  * Get active periods for a game

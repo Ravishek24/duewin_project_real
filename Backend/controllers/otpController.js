@@ -29,7 +29,7 @@ const sendOtpController = async (req, res) => {
         }
 
         // Send OTP
-        const result = await otpService.sendOtp(phone, purpose);
+        const result = await otpService.createOtpSession(phone, '91', '', {}, purpose);
 
         if (!result.success) {
             return res.status(400).json(result);
@@ -46,7 +46,7 @@ const sendOtpController = async (req, res) => {
 };
 
 /**
- * Controller to verify OTP for forgot password
+ * Controller to verify OTP
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */

@@ -4,20 +4,36 @@ const router = express.Router();
 const { auth } = require('../middleware/auth');
 const { validateInput } = require('../middleware/inputValidation');
 const { body } = require('express-validator');
-const { otp: otpLimiter } = require('../middleware/rateLimiter');
+const rateLimiters = require('../middleware/rateLimiter');
+
+// Import controllers with error handling
+let controllers;
+try {
+    controllers = require('../controllers/otpController');
+    if (!controllers.sendOtpController || !controllers.verifyOtpController || 
+        !controllers.verifyPhoneUpdateOtpController || !controllers.verifyBankAccountOtpController || 
+        !controllers.checkOtpStatusController) {
+        throw new Error('One or more controller functions are undefined');
+    }
+} catch (error) {
+    console.error('Error loading OTP controllers:', error);
+    process.exit(1);
+}
+
 const {
     sendOtpController,
     verifyOtpController,
     verifyPhoneUpdateOtpController,
     verifyBankAccountOtpController,
     checkOtpStatusController
-} = require('../controllers/otpController');
+} = controllers;
 
 // Send OTP
 router.post('/send',
-    otpLimiter,
+    rateLimiters.otp,
     [
-        body('phone_no').matches(/^\+?[1-9]\d{1,14}$/).withMessage('Invalid phone number format')
+        body('phone').matches(/^\+?[1-9]\d{1,14}$/).withMessage('Invalid phone number format'),
+        body('purpose').isIn(['registration', 'login', 'phone_update', 'bank_account', 'withdrawal']).withMessage('Invalid purpose')
     ],
     validateInput,
     sendOtpController
@@ -25,10 +41,9 @@ router.post('/send',
 
 // Verify OTP
 router.post('/verify',
-    otpLimiter,
+    rateLimiters.otp,
     [
-        body('phone_no').matches(/^\+?[1-9]\d{1,14}$/).withMessage('Invalid phone number format'),
-        body('otp').isLength({ min: 4, max: 6 }).withMessage('OTP must be 4-6 digits')
+        body('otp_session_id').notEmpty().withMessage('OTP session ID is required')
     ],
     validateInput,
     verifyOtpController
@@ -38,8 +53,8 @@ router.post('/verify',
 router.post('/verify-phone-update', 
     auth,
     [
-        body('phone_no').matches(/^\+?[1-9]\d{1,14}$/).withMessage('Invalid phone number format'),
-        body('otp').isLength({ min: 4, max: 6 }).withMessage('OTP must be 4-6 digits')
+        body('otp_session_id').notEmpty().withMessage('OTP session ID is required'),
+        body('new_phone').matches(/^\+?[1-9]\d{1,14}$/).withMessage('Invalid phone number format')
     ],
     validateInput,
     verifyPhoneUpdateOtpController
@@ -48,7 +63,7 @@ router.post('/verify-phone-update',
 router.post('/verify-bank-account', 
     auth,
     [
-        body('otp').isLength({ min: 4, max: 6 }).withMessage('OTP must be 4-6 digits')
+        body('otp_session_id').notEmpty().withMessage('OTP session ID is required')
     ],
     validateInput,
     verifyBankAccountOtpController

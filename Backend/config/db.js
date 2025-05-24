@@ -1,38 +1,18 @@
 // config/db.js
-require('dotenv').config();
-const { Sequelize } = require('sequelize');
+const { Sequelize, Op, DataTypes } = require('sequelize');
 const { SequelizeObserver } = require('./sequelizeObserver');
-
-// Get database configuration from environment variables
-const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    port: process.env.DB_PORT || 3306,
-    database: process.env.DB_NAME || 'duewin',
-    username: process.env.DB_USER || 'root',
-    password: process.env.DB_PASS || '',
-    dialect: 'mysql'
-};
-
-// Debug logging
-console.log('Database Configuration:', {
-    host: dbConfig.host,
-    port: dbConfig.port,
-    database: dbConfig.database,
-    username: dbConfig.username,
-    dialect: dbConfig.dialect,
-    hasPassword: !!dbConfig.password
-});
+const config = require('./config.js');
 
 // Create the Sequelize instance
 const sequelize = new Sequelize(
-    dbConfig.database,
-    dbConfig.username,
-    dbConfig.password,
+    config[process.env.NODE_ENV || 'development'].database,
+    config[process.env.NODE_ENV || 'development'].username,
+    config[process.env.NODE_ENV || 'development'].password,
     {
-        host: dbConfig.host,
-        dialect: dbConfig.dialect,
-        port: dbConfig.port,
-        logging: false,
+        host: config[process.env.NODE_ENV || 'development'].host,
+        port: config[process.env.NODE_ENV || 'development'].port,
+        dialect: config[process.env.NODE_ENV || 'development'].dialect,
+        logging: process.env.NODE_ENV === 'development' ? console.log : false,
         define: {
             underscored: true,
             timestamps: true,
@@ -75,6 +55,22 @@ const connectDB = async () => {
             await sequelize.authenticate();
             console.log('✅ Database connection established successfully');
             
+            // Verify tables exist
+            try {
+                const tables = await sequelize.query('SHOW TABLES');
+                console.log('Available tables:', tables[0].map(t => Object.values(t)[0]));
+                
+                // Check specifically for bet_result_wingos table
+                const wingoTable = tables[0].find(t => Object.values(t)[0] === 'bet_result_wingos');
+                if (!wingoTable) {
+                    console.error('❌ bet_result_wingos table not found in database!');
+                } else {
+                    console.log('✅ bet_result_wingos table exists');
+                }
+            } catch (error) {
+                console.error('Error checking tables:', error);
+            }
+            
             // Install the query interceptor after successful connection
             try {
                 const observer = new SequelizeObserver(sequelize);
@@ -101,5 +97,7 @@ const connectDB = async () => {
 // Export the sequelize instance and connectDB function
 module.exports = {
     sequelize,
-    connectDB
+    connectDB,
+    Op,
+    DataTypes
 };

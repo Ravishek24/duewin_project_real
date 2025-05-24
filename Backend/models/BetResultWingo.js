@@ -1,54 +1,65 @@
 // Backend/models/BetResultWingo.js
+'use strict';
 const { Model, DataTypes } = require('sequelize');
-const sequelize = require('../config/db').sequelize;
 
-class BetResultWingo extends Model {}
-
-BetResultWingo.init({
-    bet_id: {
+class BetResultWingo extends Model {
+  static init(sequelize) {
+    return super.init({
+      bet_id: {
         type: DataTypes.INTEGER,
-        autoIncrement: true,
-        primaryKey: true
-    },
-    bet_number: {
+        primaryKey: true,
+        autoIncrement: true
+      },
+      bet_number: {
         type: DataTypes.STRING,
-        allowNull: false,
-        unique: true
-    },
-    result_of_number: {
+        allowNull: false
+      },
+      result_of_number: {
         type: DataTypes.INTEGER,
         allowNull: false
-    },
-    result_of_size: {
+      },
+      result_of_size: {
         type: DataTypes.ENUM('Big', 'Small'),
         allowNull: false
-    },
-    result_of_color: {
+      },
+      result_of_color: {
         type: DataTypes.STRING,
         allowNull: false
-    },
-    duration: {
-        type: DataTypes.INTEGER,
+      },
+      created_at: {
+        type: DataTypes.DATE,
         allowNull: false,
-        comment: 'Duration in seconds (30, 60, 180, 300)'
-    },
-    timeline: {
+        defaultValue: DataTypes.NOW
+      },
+      timeline: {
         type: DataTypes.STRING,
         allowNull: false,
-        defaultValue: 'default',
-        comment: 'Timeline identifier (30s, 1m, 3m, 5m)'
-    },
-    created_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
-    }
-}, {
-    sequelize,
-    modelName: 'BetResultWingo',
-    tableName: 'bet_result_wingos',
-    timestamps: true,
-    createdAt: 'created_at',
-    updatedAt: false
-});
+        defaultValue: 'default'
+      },
+      duration: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 30,
+        comment: 'Duration in seconds (30, 60, 180, 300)'
+      }
+    }, {
+      sequelize,
+      modelName: 'BetResultWingo',
+      tableName: 'bet_result_wingos',
+      timestamps: false,
+      indexes: [
+        {
+          unique: true,
+          fields: ['bet_number', 'duration'],
+          name: 'bet_result_wingos_bet_number_duration_unique'
+        }
+      ]
+    });
+  }
+
+  static associate(models) {
+    // define associations here
+  }
+}
 
 module.exports = BetResultWingo;

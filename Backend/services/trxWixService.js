@@ -251,8 +251,9 @@ const endRound = async (duration, periodId) => {
     }
 };
 
+// Export functions
 module.exports = {
     processBet,
-    calculateResultWithVerification,
+    calculateResultWithVerification: gameLogicService.calculateResultWithVerification,
     endRound
 }; 

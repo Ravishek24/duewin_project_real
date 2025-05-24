@@ -1,59 +1,80 @@
 // Backend/models/BetResult5D.js
-const { Model, DataTypes } = require('sequelize');
-const sequelize = require('../config/db').sequelize;
+'use strict';
+const { Model } = require('sequelize');
 
-class BetResult5D extends Model {}
-
-BetResult5D.init({
+module.exports = (sequelize, DataTypes) => {
+  class BetResult5D extends Model {
+    static associate(models) {
+      // define associations here
+    }
+  }
+  BetResult5D.init({
     bet_id: {
-        type: DataTypes.INTEGER,
-        autoIncrement: true,
-        primaryKey: true
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true
     },
     bet_number: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        unique: true
+      type: DataTypes.STRING,
+      allowNull: false
     },
     result_a: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     result_b: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     result_c: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     result_d: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     result_e: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     total_sum: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      type: DataTypes.INTEGER,
+      allowNull: false
     },
     time: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW
     },
     created_at: {
-        type: DataTypes.DATE,
-        defaultValue: DataTypes.NOW
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW
+    },
+    timeline: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'default'
+    },
+    duration: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 60,
+      comment: 'Duration in seconds (60, 180, 300, 600)'
     }
-}, {
+  }, {
     sequelize,
     modelName: 'BetResult5D',
     tableName: 'bet_result_5ds',
-    timestamps: true,
-    createdAt: 'created_at',
-    updatedAt: false
-});
-
-module.exports = BetResult5D;
+    timestamps: false,
+    indexes: [
+      {
+        unique: true,
+        fields: ['bet_number', 'duration'],
+        name: 'bet_result_5ds_bet_number_duration_unique'
+      }
+    ]
+  });
+  return BetResult5D;
+};

@@ -1,10 +1,8 @@
 // Backend/models/BetRecordWingo.js
-const { Model, DataTypes } = require('sequelize');
-const sequelize = require('../config/db').sequelize;
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
 
-class BetRecordWingo extends Model {}
-
-BetRecordWingo.init({
+const BetRecordWingo = sequelize.define('BetRecordWingo', {
     bet_id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
@@ -50,5 +48,29 @@ BetRecordWingo.init({
     createdAt: 'created_at',
     updatedAt: 'updated_at'
 });
+
+// Add error handling for model operations
+BetRecordWingo.create = async function(data, options = {}) {
+    try {
+        return await sequelize.models.BetRecordWingo.create(data, options);
+    } catch (error) {
+        console.error('Error creating bet record:', {
+            error: error.message,
+            data,
+            options
+        });
+        throw error;
+    }
+};
+
+// Add associations
+BetRecordWingo.associate = function(models) {
+    if (models.User) {
+        BetRecordWingo.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+};
 
 module.exports = BetRecordWingo;

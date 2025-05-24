@@ -163,8 +163,10 @@ const checkOtpSession = async (otpSessionId) => {
     }
 };
 
+// Export all functions
 module.exports = {
+    generateOTP,
+    checkOtpLimit,
     createOtpSession,
-    checkOtpSession,
-    checkOtpLimit
+    checkOtpSession
 };

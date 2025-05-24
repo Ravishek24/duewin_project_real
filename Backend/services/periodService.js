@@ -3,6 +3,7 @@ const { sequelize } = require('../config/db');
 const moment = require('moment-timezone');
 const winston = require('winston');
 const path = require('path');
+const models = require('../models');
 
 // Configure Winston logger
 const logger = winston.createLogger({
@@ -11,6 +12,12 @@ const logger = winston.createLogger({
         winston.format.json()
     ),
     transports: [
+        new winston.transports.Console({
+            format: winston.format.combine(
+                winston.format.colorize(),
+                winston.format.simple()
+            )
+        }),
         new winston.transports.File({ 
             filename: path.join('logs', 'period-service.log') 
         }),
@@ -25,98 +32,58 @@ const logger = winston.createLogger({
  * Generate period ID based on game type, duration, and current time
  * @param {string} gameType - Game type (wingo, fiveD, k3, trx_wix)
  * @param {number} duration - Period duration in seconds
- * @param {Date} now - Current date/time
+ * @param {Date} timestamp - Current date/time
  * @returns {string} - Period ID
  */
-const generatePeriodId = async (gameType, duration, now = new Date()) => {
+const generatePeriodId = async (gameType, duration, timestamp) => {
     try {
-        // Format date as YYYYMMDD
-        const dateStr = now.toISOString().split('T')[0].replace(/-/g, '');
+        console.log('\n=== GENERATING PERIOD ID ===');
+        console.log(`Game Type: ${gameType}`);
+        console.log(`Duration: ${duration}s`);
+        console.log(`Timestamp: ${timestamp.toISOString()}`);
         
-        // Get redis key for this game type and duration
-        const durationKey = duration === 30 ? '30s' : 
-                          duration === 60 ? '1m' : 
-                          duration === 180 ? '3m' : 
-                          duration === 300 ? '5m' : '10m';
-        
-        const lastPeriodKey = `${gameType}:${durationKey}:lastPeriod`;
-        
-        // Get the last period ID for this game type and duration
-        let lastPeriodId = await redisClient.get(lastPeriodKey);
-        
-        // If no last period exists, create the first one with 9 zeros
-        if (!lastPeriodId) {
-            lastPeriodId = `${dateStr}000000000`;
-            logger.info('No last period found, creating first period', {
-                gameType,
-                duration: durationKey,
-                periodId: lastPeriodId
-            });
-        }
-        
-        // Check if we're on a new day
-        const lastPeriodDate = lastPeriodId.substring(0, 8);
-        if (lastPeriodDate !== dateStr) {
-            // Reset for new day
-            lastPeriodId = `${dateStr}000000000`;
-            logger.info('New day detected, resetting period counter', {
-                lastPeriodDate,
-                currentDate: dateStr,
-                newPeriodId: lastPeriodId
-            });
-        }
-        
-        // Extract the sequence number from the last 9 digits
-        const sequenceNumber = parseInt(lastPeriodId.substring(8), 10);
-        
-        // Calculate time elapsed since the start of the last period
-        const lastPeriodTime = calculatePeriodStartTime(lastPeriodId, duration);
-        const elapsedSeconds = Math.floor((now - lastPeriodTime) / 1000);
-        
-        // Check if enough time has passed for a new period based on duration
-        if (elapsedSeconds >= duration) {
-            // Calculate how many periods have passed
-            const periodsElapsed = Math.floor(elapsedSeconds / duration);
+        // Get game type prefix (first letter of each word)
+        const gameTypePrefix = gameType.split('_')
+            .map(word => word.charAt(0).toUpperCase())
+            .join('');
             
-            // Generate new period ID by incrementing the sequence number
-            const newSequenceNumber = sequenceNumber + periodsElapsed;
-            const periodId = `${dateStr}${newSequenceNumber.toString().padStart(9, '0')}`;
-            
-            // Store this as the last period ID
-            await redisClient.set(lastPeriodKey, periodId);
-            
-            // Initialize the new period
-            await initializePeriod(gameType, duration, periodId);
-            
-            logger.info('Generated new period ID', {
-                gameType,
-                duration: durationKey,
-                periodId,
-                lastPeriodId,
-                periodsElapsed,
-                elapsedSeconds
-            });
-            
-            return periodId;
-        }
+        // Get duration prefix
+        const durationPrefix = duration === 30 ? '30' :
+                             duration === 60 ? '60' :
+                             duration === 180 ? '180' :
+                             duration === 300 ? '300' : '600';
         
-        // If not enough time has passed, return the last period ID
-        logger.info('Using existing period ID', {
-            gameType,
-            duration: durationKey,
-            periodId: lastPeriodId,
-            elapsedSeconds,
-            timeRemaining: duration - elapsedSeconds
+        // Get base period ID (YYYYMMDDHHMM)
+        const basePeriodId = timestamp.toISOString()
+            .replace(/[-T:]/g, '')
+            .slice(0, 12);
+            
+        // Get sequence number for this game type and duration
+        const lastPeriod = await models.GamePeriod.findOne({
+            where: {
+                game_type: gameType,
+                duration: duration
+            },
+            order: [['created_at', 'DESC']]
         });
         
-        return lastPeriodId;
+        let sequence = 1;
+        if (lastPeriod) {
+            const lastSequence = parseInt(lastPeriod.period_id.split('-')[3]) || 0;
+            sequence = lastSequence + 1;
+        }
+        
+        // Format: YYYYMMDDHHMM-GAME-DURATION-SEQ
+        const periodId = `${basePeriodId}-${gameTypePrefix}-${durationPrefix}-${sequence.toString().padStart(3, '0')}`;
+        
+        console.log(`Generated period ID: ${periodId}`);
+        console.log('=== PERIOD ID GENERATION COMPLETE ===\n');
+        
+        return periodId;
     } catch (error) {
-        logger.error('Error generating period ID:', {
-            error: error.message,
-            stack: error.stack,
-            gameType,
-            duration
-        });
+        console.error('\n=== PERIOD ID GENERATION ERROR ===');
+        console.error('Error details:', error.message);
+        console.error('Stack trace:', error.stack);
         throw error;
     }
 };
@@ -129,22 +96,26 @@ const generatePeriodId = async (gameType, duration, now = new Date()) => {
  */
 const calculatePeriodStartTime = (periodId, duration) => {
     try {
-        // Extract date from period ID (first 8 characters)
-        const dateStr = periodId.substring(0, 8);
-        const year = parseInt(dateStr.substring(0, 4), 10);
-        const month = parseInt(dateStr.substring(4, 6), 10) - 1; // Months are 0-indexed
-        const day = parseInt(dateStr.substring(6, 8), 10);
+        // Extract date and time from period ID (first 12 characters)
+        const dateTimeStr = periodId.substring(0, 12);
+        const year = parseInt(dateTimeStr.substring(0, 4), 10);
+        const month = parseInt(dateTimeStr.substring(4, 6), 10) - 1; // Months are 0-indexed
+        const day = parseInt(dateTimeStr.substring(6, 8), 10);
+        const hour = parseInt(dateTimeStr.substring(8, 10), 10);
+        const minute = parseInt(dateTimeStr.substring(10, 12), 10);
         
-        // Get sequence number from the last 9 digits
-        const sequenceNumber = parseInt(periodId.substring(8), 10);
+        // Create date in IST
+        const startTime = moment.tz([year, month, day, hour, minute], 'Asia/Kolkata');
         
-        // Create midnight for this date
-        const midnight = new Date(Date.UTC(year, month, day));
+        console.log('Calculated period start time:', {
+            periodId,
+            duration,
+            startTime: startTime.toISOString()
+        });
         
-        // Calculate start time: midnight + (sequenceNumber * duration)
-        return new Date(midnight.getTime() + sequenceNumber * duration * 1000);
+        return startTime.toDate();
     } catch (error) {
-        logger.error('Error calculating period start time:', {
+        console.error('Error calculating period start time:', {
             error: error.message,
             stack: error.stack,
             periodId,
@@ -155,16 +126,27 @@ const calculatePeriodStartTime = (periodId, duration) => {
 };
 
 /**
- * Calculate end time for a period
+ * Calculate period end time
  * @param {string} periodId - Period ID
  * @param {number} duration - Duration in seconds
- * @returns {Date} - End time
+ * @returns {Date} End time
  */
 const calculatePeriodEndTime = (periodId, duration) => {
     try {
-        // Get start time and add duration
+        // Get start time from period ID
         const startTime = calculatePeriodStartTime(periodId, duration);
-        return new Date(startTime.getTime() + duration * 1000);
+        
+        // Add duration in seconds
+        const endTime = moment(startTime).tz('Asia/Kolkata').add(duration, 'seconds');
+        
+        logger.debug('Calculated period end time:', {
+            periodId,
+            duration,
+            startTime: moment(startTime).tz('Asia/Kolkata').toISOString(),
+            endTime: endTime.toISOString()
+        });
+        
+        return endTime.toDate();
     } catch (error) {
         logger.error('Error calculating period end time:', {
             error: error.message,
@@ -246,16 +228,30 @@ const initializePeriod = async (gameType, duration, periodId) => {
         const betsKey = `${periodKey}:bets`;
         const resultKey = `${periodKey}:result`;
         
+        // Use current time as start time
+        const now = moment().tz('Asia/Kolkata');
+        const startTime = now.toDate();
+        const endTime = now.add(duration, 'seconds').toDate();
+        
+        console.log('Initializing period with times:', {
+            periodId,
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            duration,
+            currentTime: now.toISOString()
+        });
+        
         // Initialize period data
         const periodData = {
             gameType,
             duration,
             periodId,
-            startTime: new Date().toISOString(),
-            endTime: calculatePeriodEndTime(periodId, duration).toISOString(),
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
             status: 'active',
             totalBets: 0,
-            totalAmount: 0
+            totalAmount: 0,
+            initializedAt: now.toISOString()
         };
         
         // Store period data in Redis
@@ -270,13 +266,69 @@ const initializePeriod = async (gameType, duration, periodId) => {
         await redisClient.expire(betsKey, EXPIRY_SECONDS);
         await redisClient.expire(resultKey, EXPIRY_SECONDS);
         
-        logger.info('Period initialized:', {
+        console.log('Period initialized:', {
             gameType,
             duration,
-            periodId
+            periodId,
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            durationKey,
+            periodKey,
+            betsKey,
+            resultKey,
+            expirySeconds: EXPIRY_SECONDS,
+            initializedAt: periodData.initializedAt
         });
+        
+        // Also store in database for persistence
+        try {
+            // Check if period already exists
+            const existingPeriod = await models.GamePeriod.findOne({
+                where: {
+                    period_id: periodId,
+                    game_type: gameType,
+                    duration: duration
+                }
+            });
+
+            if (!existingPeriod) {
+                await models.GamePeriod.create({
+                    period_id: periodId,
+                    game_type: gameType,
+                    duration: duration,
+                    start_time: startTime,
+                    end_time: endTime,
+                    is_completed: false,
+                    total_bet_amount: 0,
+                    total_payout_amount: 0,
+                    unique_bettors: 0,
+                    created_at: now.toDate(),
+                    updated_at: now.toDate()
+                });
+                console.log('Period stored in database:', {
+                    gameType,
+                    duration,
+                    periodId
+                });
+            } else {
+                console.log('Period already exists in database:', {
+                    gameType,
+                    duration,
+                    periodId
+                });
+            }
+        } catch (dbError) {
+            console.error('Failed to store period in database:', {
+                error: dbError.message,
+                stack: dbError.stack,
+                gameType,
+                duration,
+                periodId
+            });
+            // Don't throw here - we still want the Redis initialization to succeed
+        }
     } catch (error) {
-        logger.error('Error initializing period:', {
+        console.error('Error initializing period:', {
             error: error.message,
             stack: error.stack,
             gameType,
