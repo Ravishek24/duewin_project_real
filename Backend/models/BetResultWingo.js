@@ -1,5 +1,4 @@
 // Backend/models/BetResultWingo.js
-'use strict';
 const { Model, DataTypes } = require('sequelize');
 
 class BetResultWingo extends Model {

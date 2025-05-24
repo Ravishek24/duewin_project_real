@@ -1,3 +1,4 @@
+// Backend/models/SeamlessGameSession.js
 const { Model, DataTypes } = require('sequelize');
 
 class SeamlessGameSession extends Model {
@@ -16,29 +17,64 @@ class SeamlessGameSession extends Model {
                     key: 'user_id'
                 }
             },
-            game_type: {
+            remote_id: {
                 type: DataTypes.STRING,
-                allowNull: false
-            },
-            session_id: {
-                type: DataTypes.STRING,
-                allowNull: false,
-                unique: true
-            },
-            status: {
-                type: DataTypes.STRING,
-                allowNull: false,
-                defaultValue: 'active'
+                allowNull: true,
+                comment: 'Remote player ID from the game provider'
             },
             provider: {
                 type: DataTypes.STRING,
                 allowNull: false,
                 comment: 'Third-party game provider name'
             },
-            provider_session_id: {
+            session_token: {
                 type: DataTypes.STRING,
                 allowNull: true,
-                comment: 'Session ID from the third-party provider'
+                comment: 'Session token from the provider'
+            },
+            game_id: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Game ID'
+            },
+            game_id_hash: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Game ID hash'
+            },
+            game_type: {
+                type: DataTypes.STRING,
+                allowNull: false,
+                comment: 'Type of game'
+            },
+            session_id: {
+                type: DataTypes.STRING,
+                allowNull: false,
+                unique: true,
+                comment: 'Unique session identifier'
+            },
+            status: {
+                type: DataTypes.STRING,
+                allowNull: false,
+                defaultValue: 'active'
+            },
+            is_active: {
+                type: DataTypes.BOOLEAN,
+                allowNull: false,
+                defaultValue: true
+            },
+            ip_address: {
+                type: DataTypes.STRING,
+                allowNull: true
+            },
+            last_activity: {
+                type: DataTypes.DATE,
+                allowNull: true,
+                defaultValue: DataTypes.NOW
+            },
+            closed_at: {
+                type: DataTypes.DATE,
+                allowNull: true
             },
             metadata: {
                 type: DataTypes.JSON,
@@ -64,12 +100,15 @@ class SeamlessGameSession extends Model {
     }
 
     static associate(models) {
-        if (models.User) {
+        // Only set up associations if User model exists and is properly initialized
+        if (models.User && typeof models.User === 'function') {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
                 targetKey: 'user_id',
-                as: 'user'
+                as: 'seamlessgamesessionuser'
             });
+        } else {
+            console.warn('User model not found or not properly initialized for SeamlessGameSession association');
         }
         
         if (models.SeamlessTransaction) {
@@ -81,4 +120,4 @@ class SeamlessGameSession extends Model {
     }
 }
 
-module.exports = SeamlessGameSession; 
+module.exports = SeamlessGameSession;

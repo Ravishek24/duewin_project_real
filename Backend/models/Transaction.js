@@ -167,7 +167,7 @@ class Transaction extends Model {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
                 targetKey: 'user_id',
-                as: 'user'
+                as: 'transactionuser'
             });
             
             this.belongsTo(models.User, {

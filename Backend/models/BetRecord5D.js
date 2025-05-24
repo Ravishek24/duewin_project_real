@@ -1,64 +1,81 @@
-// Backend/models/BetRecord5D.js
+// Backend/models/BetResult5D.js
 const { Model, DataTypes } = require('sequelize');
 
-class BetRecord5D extends Model {
-    static init(sequelize) {
-        return super.init({
-            id: {
-                type: DataTypes.INTEGER,
-                primaryKey: true,
-                autoIncrement: true
-            },
-            user_id: {
-                type: DataTypes.INTEGER,
-                allowNull: false,
-                references: {
-                    model: 'users',
-                    key: 'user_id'
-                }
-            },
-            period: {
-                type: DataTypes.STRING,
-                allowNull: false
-            },
-            bet_type: {
-                type: DataTypes.STRING,
-                allowNull: false
-            },
-            bet_amount: {
-                type: DataTypes.DECIMAL(10, 2),
-                allowNull: false
-            },
-            odds: {
-                type: DataTypes.DECIMAL(10, 2),
-                allowNull: false
-            },
-            status: {
-                type: DataTypes.ENUM('pending', 'won', 'lost'),
-                allowNull: false,
-                defaultValue: 'pending'
-            },
-            created_at: {
-                type: DataTypes.DATE,
-                defaultValue: DataTypes.NOW
-            },
-            updated_at: {
-                type: DataTypes.DATE,
-                defaultValue: DataTypes.NOW
-            }
-        }, {
-            sequelize,
-            modelName: 'BetRecord5D',
-            tableName: 'bet_record_5ds',
-            timestamps: true,
-            createdAt: 'created_at',
-            updatedAt: 'updated_at'
-        });
-    }
+class BetResult5D extends Model {
+  static init(sequelize) {
+    return super.init({
+      bet_id: {
+        type: DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+      },
+      bet_number: {
+        type: DataTypes.STRING,
+        allowNull: false
+      },
+      result_a: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+      },
+      result_b: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+      },
+      result_c: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+      },
+      result_d: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+      },
+      result_e: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+      },
+      total_sum: {
+        type: DataTypes.INTEGER,
+        allowNull: false
+      },
+      time: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW
+      },
+      created_at: {
+        type: DataTypes.DATE,
+        allowNull: false,
+        defaultValue: DataTypes.NOW
+      },
+      timeline: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        defaultValue: 'default'
+      },
+      duration: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 60,
+        comment: 'Duration in seconds (60, 180, 300, 600)'
+      }
+    }, {
+      sequelize,
+      modelName: 'BetResult5D',
+      tableName: 'bet_result_5ds',
+      timestamps: false,
+      indexes: [
+        {
+          unique: true,
+          fields: ['bet_number', 'duration'],
+          name: 'bet_result_5ds_bet_number_duration_unique'
+        }
+      ]
+    });
+  }
 
-    static associate(models) {
-        // Define associations here if needed
-    }
+  static associate(models) {
+    // define associations here
+  }
 }
 
-module.exports = BetRecord5D;
+module.exports = BetResult5D;

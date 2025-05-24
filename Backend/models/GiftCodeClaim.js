@@ -41,7 +41,7 @@ class GiftCodeClaim extends Model {
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
-                as: 'user'
+                as: 'giftcodeclaimuser'
             });
         }
         

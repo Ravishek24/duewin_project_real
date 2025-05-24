@@ -55,7 +55,7 @@ class GameTransaction extends Model {
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
-                as: 'user'
+                as: 'gametransactionuser'
             });
         }
         

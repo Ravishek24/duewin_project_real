@@ -1,50 +1,93 @@
 const redisClient = require('../config/redisConfig').redis;
-const { sequelize, GamePeriod } = require('../models');
+const { sequelize } = require('../config/db');
 const { Op } = require('sequelize');
 const moment = require('moment-timezone');
 const winston = require('winston');
 const path = require('path');
-const models = require('../models');
-const { initializeModels } = models;
 const crypto = require('crypto');
-const config = require('../config/config.js')[process.env.NODE_ENV || 'development'];
 
-// Initialize models before using them
-(async () => {
-    try {
-        await initializeModels();
-        if (!GamePeriod) {
-            throw new Error('GamePeriod model not found after initialization');
+// We'll get the models dynamically when needed instead of importing at module level
+let GamePeriod = null;
+let modelsInitialized = false;
+
+// Function to ensure models are loaded
+const ensureModelsLoaded = async () => {
+    if (!modelsInitialized || !GamePeriod) {
+        try {
+            console.log('🔄 Loading models in periodService...');
+            
+            // Try to get models from the index file
+            const models = require('../models');
+            
+            // If models has an initializeModels function, call it
+            if (models.initializeModels && typeof models.initializeModels === 'function') {
+                console.log('🔄 Calling initializeModels...');
+                const initializedModels = await models.initializeModels();
+                GamePeriod = initializedModels.GamePeriod;
+                console.log('✅ Models initialized via initializeModels');
+            } else if (models.GamePeriod) {
+                // Try to get GamePeriod directly from models
+                GamePeriod = models.GamePeriod;
+                console.log('✅ GamePeriod loaded directly from models');
+            } else if (models.sequelize) {
+                // Try to get from sequelize models
+                GamePeriod = models.sequelize.models.GamePeriod;
+                console.log('✅ GamePeriod loaded from sequelize.models');
+            }
+            
+            // If still not found, try importing directly
+            if (!GamePeriod) {
+                console.log('🔄 Trying to import GamePeriod directly...');
+                const GamePeriodModel = require('../models/GamePeriod');
+                if (GamePeriodModel.init && typeof GamePeriodModel.init === 'function') {
+                    GamePeriod = GamePeriodModel.init(sequelize);
+                    console.log('✅ GamePeriod initialized directly');
+                } else {
+                    GamePeriod = GamePeriodModel;
+                    console.log('✅ GamePeriod loaded directly');
+                }
+            }
+            
+            if (!GamePeriod) {
+                throw new Error('GamePeriod model not found after all attempts');
+            }
+            
+            modelsInitialized = true;
+            console.log('✅ GamePeriod model loaded successfully in periodService');
+        } catch (error) {
+            console.error('❌ Failed to load models in period service:', error);
+            throw error;
         }
-        console.log('✅ GamePeriod model initialized successfully');
-    } catch (error) {
-        console.error('❌ Failed to initialize models in period service:', error);
-        process.exit(1);
     }
-})();
+    return GamePeriod;
+};
 
-// Configure Winston logger
-const logger = winston.createLogger({
-    format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-    ),
-    transports: [
-        new winston.transports.Console({
-            format: winston.format.combine(
-                winston.format.colorize(),
-                winston.format.simple()
-            )
-        }),
-        new winston.transports.File({ 
-            filename: path.join('logs', 'period-service.log') 
-        }),
-        new winston.transports.File({ 
-            filename: path.join('logs', 'period-service-errors.log'),
-            level: 'error'
-        })
-    ]
-});
+// Configure Winston logger with better error handling
+let logger;
+try {
+    logger = winston.createLogger({
+        format: winston.format.combine(
+            winston.format.timestamp(),
+            winston.format.json()
+        ),
+        transports: [
+            new winston.transports.Console({
+                format: winston.format.combine(
+                    winston.format.colorize(),
+                    winston.format.simple()
+                )
+            })
+        ]
+    });
+} catch (error) {
+    // Fallback to console if winston fails
+    logger = {
+        error: console.error,
+        warn: console.warn,
+        info: console.log,
+        debug: console.log
+    };
+}
 
 /**
  * Generate period ID based on game type, duration, and current time
@@ -60,16 +103,15 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
         console.log(`Duration: ${duration}s`);
         console.log(`Timestamp: ${timestamp.toISOString()}`);
         
-        if (!GamePeriod) {
-            throw new Error('GamePeriod model not initialized');
-        }
+        // Ensure models are loaded
+        const LoadedGamePeriod = await ensureModelsLoaded();
 
         const now = moment();
         const startTime = now.clone().startOf('day');
         const endTime = now.clone().endOf('day');
 
         // Find the last period for today
-        const lastPeriod = await GamePeriod.findOne({
+        const lastPeriod = await LoadedGamePeriod.findOne({
             where: {
                 game_type: gameType,
                 duration: duration,
@@ -247,6 +289,9 @@ const getPeriodStatus = async (gameType, duration, periodId) => {
  */
 const initializePeriod = async (gameType, duration, periodId) => {
     try {
+        // Ensure models are loaded
+        const LoadedGamePeriod = await ensureModelsLoaded();
+        
         const durationKey = duration === 30 ? '30s' : 
                            duration === 60 ? '1m' : 
                            duration === 180 ? '3m' : 
@@ -312,7 +357,7 @@ const initializePeriod = async (gameType, duration, periodId) => {
         // Also store in database for persistence
         try {
             // Check if period already exists
-            const existingPeriod = await GamePeriod.findOne({
+            const existingPeriod = await LoadedGamePeriod.findOne({
                 where: {
                     period_id: periodId,
                     game_type: gameType,
@@ -321,7 +366,7 @@ const initializePeriod = async (gameType, duration, periodId) => {
             });
 
             if (!existingPeriod) {
-                await GamePeriod.create({
+                await LoadedGamePeriod.create({
                     period_id: periodId,
                     game_type: gameType,
                     duration: duration,
@@ -521,5 +566,6 @@ module.exports = {
     initializePeriod,
     getActivePeriods,
     generateNextPeriodId,
-    addPeriods
-}; 
+    addPeriods,
+    ensureModelsLoaded
+};

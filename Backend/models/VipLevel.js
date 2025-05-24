@@ -57,7 +57,7 @@ class VipLevel extends Model {
             this.hasMany(models.User, {
                 foreignKey: 'vip_level',
                 sourceKey: 'level',
-                as: 'users'
+                as: 'vipuser'
             });
         }
     }

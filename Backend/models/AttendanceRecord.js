@@ -90,10 +90,11 @@ class AttendanceRecord extends Model {
   static associate(models) {
     // Only set up association if User model exists and is properly initialized
     if (models.User && typeof models.User === 'function') {
+      // Use a single, unique association with a descriptive alias
       this.belongsTo(models.User, {
         foreignKey: 'user_id',
         targetKey: 'user_id',  // Specify the target key explicitly
-        as: 'user'
+        as: 'attendanceUser'   // Use unique alias to avoid conflicts
       });
     } else {
       console.warn('User model not found or not properly initialized for AttendanceRecord association');

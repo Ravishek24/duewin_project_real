@@ -3,316 +3,323 @@
 
 const fs = require('fs');
 const path = require('path');
-const Sequelize = require('sequelize');
-const process = require('process');
-const basename = path.basename(__filename);
-const env = process.env.NODE_ENV || 'development';
-const config = require(__dirname + '/../config/config.js')[env];
-const db = {};
+const { sequelize, connectDB } = require('../config/db');
 
-let sequelize;
-if (config.use_env_variable) {
-  sequelize = new Sequelize(process.env[config.use_env_variable], config);
-} else {
-  sequelize = new Sequelize(config.database, config.username, config.password, config);
-}
+// Initialize models object
+const models = {};
 
-// Initialize models function with comprehensive error handling
-const initializeModels = async () => {
-  try {
-    console.log('🔧 Starting model initialization...');
-    
-    // Verify sequelize instance is available
-    if (!sequelize) {
-      throw new Error('Sequelize instance is not available');
-    }
-    
-    // Test database connection before initializing models
-    await sequelize.authenticate();
-    console.log('✅ Database connection verified for model initialization');
-    
-    // Files to skip completely (problematic or non-model files)
-    const skipFiles = [
-      'gameModels.js', 
-      'index.js', 
-      '.DS_Store',
-      'Thumbs.db'
-    ];
-    
-    // Models that need special handling or are known to be problematic
-    const problematicModels = [
-      'OtpRequest.js',
-      'ThirdPartyWallet.js',
-      'PaymentGateway.js',
-      'WalletRecharge.js',
-      'WalletWithdrawal.js',
-      'BankAccount.js',
-      'GameSession.js',
-      'GameTransaction.js',
-      'SeamlessTransaction.js',
-      'RefreshToken.js',
-      'UserSession.js',
-      'PaymentGatewaySettings.js',
-      'GiftCode.js',
-      'GiftCodeClaim.js',
-      'VipReward.js',
-      'RebateLevel.js',
-      'ReferralCommission.js',
-      'ReferralTree.js',
-      'UserRebateLevel.js',
-      'ValidReferral.js',
-      'VipLevel.js',
-      'UsdtAccount.js',
-      'GamePeriod.js'
-    ];
-    
-    // Get all model files
-    const modelFiles = fs
-      .readdirSync(__dirname)
+// Read all model files
+const modelFiles = fs.readdirSync(__dirname)
       .filter(file => {
         return (
           file.indexOf('.') !== 0 &&
-          file !== basename &&
-          file.slice(-3) === '.js' &&
-          file.indexOf('.test.js') === -1 &&
-          !skipFiles.includes(file)
+            file !== 'index.js' &&
+            file.slice(-3) === '.js'
         );
-      })
-      // Normalize file names to prevent case sensitivity issues
-      .reduce((acc, file) => {
-        const normalizedName = file.toLowerCase();
-        if (!acc.some(f => f.toLowerCase() === normalizedName)) {
-          acc.push(file);
-        }
-        return acc;
-      }, []);
-
-    console.log(`📁 Found ${modelFiles.length} model files:`, modelFiles);
-
-    // Clear require cache for models to ensure fresh loading
-    modelFiles.forEach(file => {
-      const modelPath = path.join(__dirname, file);
-      if (require.cache[require.resolve(modelPath)]) {
-        delete require.cache[require.resolve(modelPath)];
-      }
     });
 
-    // Separate files into safe and problematic
-    const safeModels = modelFiles.filter(file => !problematicModels.includes(file));
-    const unsafeModels = modelFiles.filter(file => problematicModels.includes(file));
-    
-    console.log(`🟢 Safe models (${safeModels.length}):`, safeModels);
-    console.log(`🟡 Problematic models (${unsafeModels.length}) - will handle carefully:`, unsafeModels);
+// Import all models
+for (const file of modelFiles) {
+    const model = require(path.join(__dirname, file));
+    const modelName = model.name || file.split('.')[0];
+    models[modelName] = model;
+}
 
-    // Load PaymentGateway first if it exists
-    const paymentGatewayFile = unsafeModels.find(file => file === 'PaymentGateway.js');
-    if (paymentGatewayFile) {
-      try {
-        const modelPath = path.join(__dirname, paymentGatewayFile);
-        console.log(`📄 Loading PaymentGateway model first: ${paymentGatewayFile}`);
-        
-        const model = require(modelPath);
-        
-        if (typeof model === 'function' && typeof model.init === 'function') {
-          try {
-            console.log(`🔧 Initializing PaymentGateway model`);
-            const initializedModel = model.init(sequelize);
-            const finalModel = initializedModel || model;
-            
-            if (finalModel && (finalModel.name || finalModel.constructor.name)) {
-              const modelName = finalModel.name || finalModel.constructor.name;
-              db[modelName] = finalModel;
-              console.log(`✅ Successfully loaded PaymentGateway model`);
-            }
-          } catch (initError) {
-            console.error(`❌ Error initializing PaymentGateway model:`, initError.message);
-            throw initError; // Re-throw as this is critical
-          }
-        }
-      } catch (error) {
-        console.error(`❌ Error loading PaymentGateway model:`, error.message);
-        throw error; // Re-throw as this is critical
-      }
+// Define associations with unique aliases
+const defineAssociations = () => {
+    // User associations
+    if (models.User) {
+        // Attendance records
+        models.User.hasMany(models.AttendanceRecord, {
+            foreignKey: 'user_id',
+            as: 'attendanceRecords'
+        });
+
+        // Bank accounts
+        models.User.hasMany(models.BankAccount, {
+            foreignKey: 'user_id',
+            as: 'bankAccounts'
+        });
+
+        // Game sessions
+        models.User.hasMany(models.GameSession, {
+            foreignKey: 'user_id',
+            as: 'gameSessions'
+        });
+
+        // Game transactions
+        models.User.hasMany(models.GameTransaction, {
+            foreignKey: 'user_id',
+            as: 'gameTransactions'
+        });
+
+        // Gift code claims
+        models.User.hasMany(models.GiftCodeClaim, {
+            foreignKey: 'user_id',
+            as: 'giftCodeClaims'
+        });
+
+        // OTP requests
+        models.User.hasMany(models.OtpRequest, {
+            foreignKey: 'user_id',
+            as: 'otpRequests'
+        });
+
+        // Referral commissions
+        models.User.hasMany(models.ReferralCommission, {
+            foreignKey: 'user_id',
+            as: 'referralCommissions'
+        });
+
+        // Referral tree
+        models.User.hasMany(models.ReferralTree, {
+            foreignKey: 'user_id',
+            as: 'referralTree'
+        });
+
+        // Refresh tokens
+        models.User.hasMany(models.RefreshToken, {
+            foreignKey: 'userId',
+            as: 'refreshTokens'
+        });
+
+        // Seamless transactions
+        models.User.hasMany(models.SeamlessTransaction, {
+            foreignKey: 'user_id',
+            as: 'seamlessTransactions'
+        });
+
+        // Third party wallet
+        models.User.hasOne(models.ThirdPartyWallet, {
+            foreignKey: 'user_id',
+            as: 'thirdPartyWallet'
+        });
+
+        // User rebate levels
+        models.User.hasMany(models.UserRebateLevel, {
+            foreignKey: 'user_id',
+            as: 'rebateLevels'
+        });
+
+        // User sessions
+        models.User.hasMany(models.UserSession, {
+            foreignKey: 'userId',
+            as: 'sessions'
+        });
+
+        // VIP rewards
+        models.User.hasMany(models.VipReward, {
+            foreignKey: 'user_id',
+            as: 'vipRewards'
+        });
+
+        // Wallet recharges
+        models.User.hasMany(models.WalletRecharge, {
+            foreignKey: 'user_id',
+            as: 'walletRecharges'
+        });
+
+        // Wallet withdrawals
+        models.User.hasMany(models.WalletWithdrawal, {
+            foreignKey: 'user_id',
+            as: 'walletWithdrawals'
+        });
     }
 
-    // Load UsdtAccount model early
-    const usdtAccountFile = unsafeModels.find(file => file === 'UsdtAccount.js');
-    if (usdtAccountFile) {
-      try {
-        const modelPath = path.join(__dirname, usdtAccountFile);
-        console.log(`📄 Loading UsdtAccount model early: ${usdtAccountFile}`);
-        
-        const model = require(modelPath);
-        
-        if (typeof model === 'function' && typeof model.init === 'function') {
-          try {
-            console.log(`🔧 Initializing UsdtAccount model`);
-            const initializedModel = model.init(sequelize);
-            const finalModel = initializedModel || model;
-            
-            if (finalModel && (finalModel.name || finalModel.constructor.name)) {
-              const modelName = finalModel.name || finalModel.constructor.name;
-              db[modelName] = finalModel;
-              console.log(`✅ Successfully loaded UsdtAccount model`);
-            }
-          } catch (initError) {
-            console.error(`❌ Error initializing UsdtAccount model:`, initError.message);
-            throw initError; // Re-throw as this is critical
-          }
-        }
-      } catch (error) {
-        console.error(`❌ Error loading UsdtAccount model:`, error.message);
-        throw error; // Re-throw as this is critical
-      }
+    // Reverse associations
+    if (models.AttendanceRecord) {
+        models.AttendanceRecord.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
     }
 
-    // Load GamePeriod model early
-    const gamePeriodFile = unsafeModels.find(file => file === 'GamePeriod.js');
-    if (gamePeriodFile) {
-      try {
-        const modelPath = path.join(__dirname, gamePeriodFile);
-        console.log(`📄 Loading GamePeriod model early: ${gamePeriodFile}`);
-        
-        const model = require(modelPath);
-        
-        if (typeof model === 'function' && typeof model.init === 'function') {
-          try {
-            console.log(`🔧 Initializing GamePeriod model`);
-            const initializedModel = model.init(sequelize);
-            const finalModel = initializedModel || model;
-            
-            if (finalModel && (finalModel.name || finalModel.constructor.name)) {
-              const modelName = finalModel.name || finalModel.constructor.name;
-              db[modelName] = finalModel;
-              db.GamePeriod = finalModel; // Explicitly set GamePeriod
-              console.log(`✅ Successfully loaded GamePeriod model`);
-            }
-          } catch (initError) {
-            console.error(`❌ Error initializing GamePeriod model:`, initError.message);
-            throw initError; // Re-throw as this is critical
-          }
-        }
-      } catch (error) {
-        console.error(`❌ Error loading GamePeriod model:`, error.message);
-        throw error; // Re-throw as this is critical
-      }
+    if (models.BankAccount) {
+        models.BankAccount.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
     }
 
-    // Load safe models
-    const loadedModels = [];
-    for (const file of safeModels) {
-      try {
-        const modelPath = path.join(__dirname, file);
-        console.log(`📄 Loading safe model: ${file}`);
-        
-        const model = require(modelPath);
-        
-        if (typeof model === 'function' && typeof model.init === 'function') {
-          try {
-            console.log(`🔧 Initializing model class: ${model.name || 'Unknown'}`);
-            const initializedModel = model.init(sequelize);
-            
-            const finalModel = initializedModel || model;
-            
-            if (finalModel && (finalModel.name || finalModel.constructor.name)) {
-              const modelName = finalModel.name || finalModel.constructor.name;
-              db[modelName] = finalModel;
-              loadedModels.push(modelName);
-              console.log(`✅ Successfully loaded model: ${modelName}`);
-            }
-          } catch (initError) {
-            console.error(`❌ Error initializing safe model ${file}:`, initError.message);
-            continue;
-          }
-        } else {
-          console.log(`🚫 Skipping ${file} - doesn't use expected pattern`);
-        }
-      } catch (error) {
-        console.error(`❌ Error loading safe model ${file}:`, error.message);
-        continue;
-      }
+    if (models.GameSession) {
+        models.GameSession.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
     }
 
-    // Now try to load remaining problematic models with extra safety
-    console.log('🛡️ Attempting to load remaining problematic models with safety measures...');
-    for (const file of unsafeModels.filter(f => f !== 'PaymentGateway.js' && f !== 'UsdtAccount.js')) {
-      try {
-        const modelPath = path.join(__dirname, file);
-        console.log(`⚠️ Carefully loading problematic model: ${file}`);
-        
-        // Read file content first to check its structure
-        const fileContent = fs.readFileSync(modelPath, 'utf8');
-        
-        // Skip if it uses sequelize.define() pattern
-        if (fileContent.includes('sequelize.define(') && !fileContent.includes('static init(')) {
-          console.log(`🚫 Skipping ${file} - uses old sequelize.define() pattern`);
-          continue;
-        }
-        
-        const model = require(modelPath);
-        
-        if (typeof model === 'function' && typeof model.init === 'function') {
-          try {
-            console.log(`🔧 Carefully initializing: ${model.name || file}`);
-            const initializedModel = model.init(sequelize);
-            const finalModel = initializedModel || model;
-            
-            if (finalModel && (finalModel.name || finalModel.constructor.name)) {
-              const modelName = finalModel.name || finalModel.constructor.name;
-              db[modelName] = finalModel;
-              loadedModels.push(modelName);
-              console.log(`✅ Successfully loaded problematic model: ${modelName}`);
-            }
-          } catch (initError) {
-            console.warn(`⚠️ Failed to initialize problematic model ${file}, skipping:`, initError.message);
-            continue;
-          }
-        } else {
-          console.log(`🚫 Skipping ${file} - doesn't use expected pattern`);
-        }
-        
-      } catch (error) {
-        console.warn(`⚠️ Error loading problematic model ${file}, skipping:`, error.message);
-        continue;
-      }
+    if (models.GameTransaction) {
+        models.GameTransaction.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
     }
 
-    console.log(`📊 Successfully loaded ${loadedModels.length} models:`, loadedModels);
+    if (models.GiftCodeClaim) {
+        models.GiftCodeClaim.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
 
-    // Wait for all models to be registered
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (models.OtpRequest) {
+        models.OtpRequest.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
 
-    // Set up associations with error handling
-    console.log('🔗 Setting up model associations...');
-    const associationErrors = [];
-    
-    Object.keys(db).forEach(modelName => {
-      if (db[modelName] && typeof db[modelName].associate === 'function') {
-        try {
-          console.log(`🔗 Setting up associations for: ${modelName}`);
-          db[modelName].associate(db);
-          console.log(`✅ Associations completed for: ${modelName}`);
+    if (models.ReferralCommission) {
+        models.ReferralCommission.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+
+    if (models.ReferralTree) {
+        models.ReferralTree.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+
+    if (models.RefreshToken) {
+        models.RefreshToken.belongsTo(models.User, {
+            foreignKey: 'userId',
+            as: 'user'
+        });
+    }
+
+    if (models.SeamlessTransaction) {
+        models.SeamlessTransaction.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+
+    if (models.ThirdPartyWallet) {
+        models.ThirdPartyWallet.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+
+    if (models.UserRebateLevel) {
+        models.UserRebateLevel.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+
+    if (models.UserSession) {
+        models.UserSession.belongsTo(models.User, {
+            foreignKey: 'userId',
+            as: 'user'
+        });
+    }
+
+    if (models.VipReward) {
+        models.VipReward.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+
+    if (models.WalletRecharge) {
+        models.WalletRecharge.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+
+    if (models.WalletWithdrawal) {
+        models.WalletWithdrawal.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'user'
+        });
+    }
+};
+
+// Initialize models and associations
+const initializeModels = async () => {
+    try {
+        // First ensure database connection is established
+        await connectDB();
+        
+        // Verify Sequelize instance and wait for it to be ready
+        if (!sequelize || typeof sequelize.define !== 'function') {
+            throw new Error('Invalid Sequelize instance');
+        }
+
+        // Wait for Sequelize to be fully initialized
+        await new Promise((resolve, reject) => {
+            if (sequelize.authenticate) {
+                sequelize.authenticate()
+                    .then(() => resolve())
+                    .catch(reject);
+            } else {
+                resolve();
+            }
+        });
+
+        // Initialize User model first since other models depend on it
+        if (models.User && typeof models.User.init === 'function') {
+            try {
+                const initializedUser = models.User.init(sequelize);
+                if (initializedUser) {
+                    models.User = initializedUser;
+        }
+      } catch (error) {
+                console.error('Error initializing User model:', error);
+                throw error;
+            }
+        }
+
+        // Initialize other models
+        for (const modelName of Object.keys(models)) {
+            if (modelName === 'User') continue; // Skip User as it's already initialized
+            
+            const model = models[modelName];
+            if (typeof model.init === 'function') {
+                try {
+                    const initializedModel = model.init(sequelize);
+                    if (initializedModel) {
+                        models[modelName] = initializedModel;
+        }
+      } catch (error) {
+                    console.error(`Error initializing model ${modelName}:`, error);
+                    throw error;
+                }
+            }
+        }
+        
+        // Define associations
+        defineAssociations();
+        
+        // Call associate method on each model if it exists
+        for (const modelName of Object.keys(models)) {
+            const model = models[modelName];
+            if (typeof model.associate === 'function') {
+                try {
+                    model.associate(models);
+                } catch (error) {
+                    console.error(`Error in model association for ${modelName}:`, error);
+                    throw error;
+                }
+            }
+        }
+        
+        // Sync models with database
+        await sequelize.sync();
+        
+        return models;
         } catch (error) {
-          console.warn(`⚠️ Association error for ${modelName}, continuing:`, error.message);
-          associationErrors.push({ model: modelName, error: error.message });
-        }
-      }
-    });
-
-    if (associationErrors.length > 0) {
-      console.warn('⚠️ Some associations failed:', associationErrors);
-    }
-
-    return db;
-  } catch (error) {
-    console.error('❌ Model initialization failed:', error);
+        console.error('Error initializing models:', error);
     throw error;
   }
 };
 
-// Export the sequelize instance and initializeModels function
 module.exports = {
-  sequelize,
-  initializeModels,
-  GamePeriod: db.GamePeriod // Explicitly export GamePeriod
+    models,
+    initializeModels
 };

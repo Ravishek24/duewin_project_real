@@ -1,7 +1,6 @@
 // Backend/scripts/gameScheduler.js
 const { redis } = require('../config/redisConfig');
 const { sequelize } = require('../config/db');
-const gameLogicService = require('../services/gameLogicService');
 const periodService = require('../services/periodService');
 const { broadcastToGame } = require('../services/websocketService');
 const cron = require('node-cron');
@@ -9,8 +8,10 @@ const seamlessService = require('../services/seamlessService');
 const tronHashService = require('../services/tronHashService');
 const logger = require('../utils/logger');
 const moment = require('moment-timezone');
-const models = require('../models');
-const { initializeModels } = models;
+
+// Don't require models or gameLogicService at the top level
+let models = null;
+let gameLogicService = null;
 
 /**
  * Game scheduler to handle processing of game results
@@ -22,16 +23,45 @@ async function initialize() {
   try {
     console.log('🔄 Starting initialization...');
     
-    // Step 1: Connect to database
+    // Step 1: Connect to database and ensure connection is established
+    console.log('🔄 Connecting to database...');
     await sequelize.authenticate();
     console.log('✅ Database connected for game scheduler');
     
-    // Step 2: Initialize models
+    // Step 2: Wait for models to be fully initialized
     console.log('🔄 Initializing models...');
-    await initializeModels();
-    console.log('✅ Models initialized for game scheduler');
+    const modelsModule = require('../models');
     
-    // Step 3: Initialize Redis
+    // Ensure models are properly initialized with error handling
+    try {
+      // Wait for database connection to be fully established
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      models = await modelsModule.initializeModels();
+      if (!models) {
+        throw new Error('Models initialization failed - no models returned');
+      }
+      
+      // Verify Sequelize instance is properly initialized
+      if (!sequelize.getQueryInterface) {
+        throw new Error('Sequelize instance is not properly initialized');
+      }
+      
+      console.log('✅ Models initialized for game scheduler');
+    } catch (error) {
+      console.error('❌ Error initializing models:', error);
+      throw error;
+    }
+    
+    // Step 3: Now that models are initialized, require gameLogicService
+    console.log('🔄 Loading game logic service...');
+    gameLogicService = require('../services/gameLogicService');
+    
+    // Give gameLogicService time to initialize its models
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log('✅ Game logic service loaded');
+    
+    // Step 4: Initialize Redis
     if (!redis.status === 'ready') {
       console.log('🔄 Waiting for Redis to be ready...');
       await new Promise((resolve) => {
@@ -40,7 +70,7 @@ async function initialize() {
     }
     console.log('✅ Redis connection verified');
     
-    // Step 4: Initialize TRON hash collection
+    // Step 5: Initialize TRON hash collection
     try {
       console.log('🔄 Starting TRON hash collection...');
       await tronHashService.startHashCollection();
@@ -50,7 +80,7 @@ async function initialize() {
       console.log('⚠️ Game results will use fallback hash generation');
     }
     
-    // Step 5: Initialize game periods
+    // Step 6: Initialize game periods
     console.log('🔄 Initializing game periods...');
     await initializeGamePeriods();
     console.log('✅ Game periods initialized');
@@ -88,8 +118,12 @@ function scheduleWeeklyRefresh() {
 cron.schedule('0 0 * * *', async () => {
   console.log('Running daily Redis cleanup...');
   try {
-    const result = await gameLogicService.cleanupRedisData();
-    console.log('Redis cleanup result:', result);
+    if (gameLogicService) {
+      const result = await gameLogicService.cleanupRedisData();
+      console.log('Redis cleanup result:', result);
+    } else {
+      console.log('Game logic service not initialized, skipping cleanup');
+    }
   } catch (error) {
     console.error('Failed to run Redis cleanup:', error);
   }
@@ -217,126 +251,62 @@ const broadcastResult = async (gameType, data) => {
  * @param {number} duration - Duration in seconds
  */
 async function processPeriod(gameType, duration) {
-    console.log(`Processing ${gameType} ${duration}s period...`);
-    console.log('=== PROCESSING PERIOD START ===');
-    console.log('Game Type:', gameType);
-    console.log('Duration:', duration);
-    console.log('Current time:', new Date().toISOString());
+  const now = new Date();
+  const periodId = await periodService.generatePeriodId(gameType, duration, now);
 
-    try {
-        // Generate period ID
-        console.log('=== GENERATING PERIOD ID ===');
-        console.log('Game Type:', gameType);
-        console.log('Duration:', duration);
-        console.log('Timestamp:', new Date().toISOString());
-        const periodId = await periodService.generatePeriodId(gameType, duration, new Date());
-        console.log('Generated period ID:', periodId);
-        console.log('=== PERIOD ID GENERATION COMPLETE ===');
+  try {
+    console.log(`🔄 Closing and finalizing period: ${gameType} ${duration}s - ${periodId}`);
+    
+    // 1. Finalize the current period (e.g., generate result, close bets)
+    const resultData = await gameLogicService.finalizePeriod(gameType, duration, periodId);
+    
+    // 2. Broadcast result via WebSocket
+    await broadcastResult(gameType, {
+      periodId,
+      result: resultData.result,
+      gameType,
+      duration
+    });
 
-        // Check if period already exists
-        const existingPeriod = await models.GamePeriod.findOne({
-            where: {
-                period_id: periodId,
-                game_type: gameType,
-                duration: duration
-            }
-        });
+    console.log(`✅ Period finalized and result broadcasted: ${gameType} ${duration}s - ${periodId}`);
 
-        if (existingPeriod) {
-            console.log(`Period ${periodId} already exists, skipping creation`);
-            return;
-        }
+    // 3. Initialize next period
+    const nextPeriodId = await periodService.generatePeriodId(gameType, duration, new Date());
+    await periodService.initializePeriod(gameType, duration, nextPeriodId);
 
-        // Create period key
-        const periodKey = `${gameType}:${duration}s:${periodId}`;
-        console.log('Period key:', periodKey);
-
-        // Get period data from Redis
-        const periodData = await redis.get(periodKey);
-        console.log('Period data from Redis:', periodData);
-
-        let period;
-        if (!periodData) {
-            console.log('No period data found, initializing new period...');
-            const now = new Date();
-            const startTime = new Date(now);
-            const endTime = new Date(now.getTime() + (duration * 1000));
-
-            console.log('Initializing period with times:', {
-                periodId,
-                startTime: startTime.toISOString(),
-                endTime: endTime.toISOString(),
-                duration,
-                currentTime: now.toISOString()
-            });
-
-            period = {
-                gameType,
-                duration,
-                periodId,
-                startTime: startTime.toISOString(),
-                endTime: endTime.toISOString(),
-                durationKey: `${duration}s`,
-                periodKey,
-                betsKey: `${periodKey}:bets`,
-                resultKey: `${periodKey}:result`
-            };
-
-            // Store period data in Redis
-            await redis.set(periodKey, JSON.stringify(period), {
-                EX: duration * 2 // Set expiry to 2x duration
-            });
-            console.log('Period initialized:', period);
-        } else {
-            period = JSON.parse(periodData);
-            console.log('Using existing period data:', period);
-        }
-
-        // Create period in database
-        try {
-            const dbPeriod = await models.GamePeriod.create({
-                period_id: period.periodId,
-                game_type: gameType,
-                duration: duration,
-                start_time: period.startTime,
-                end_time: period.endTime,
-                is_completed: false,
-                total_bet_amount: 0,
-                total_payout_amount: 0,
-                unique_bettors: 0
-            });
-            console.log('Period stored in database:', dbPeriod.period_id);
-        } catch (error) {
-            if (error.name === 'SequelizeUniqueConstraintError') {
-                console.log(`Period ${period.periodId} already exists in database, continuing...`);
-            } else {
-                throw error;
-            }
-        }
-
-        // Process game results
-        const result = await gameLogicService.processGameResults(gameType, duration, period.periodId);
-        console.log('Result processing completed:', result);
-
-        if (!result.success) {
-            console.error('Failed to process results:', result.error);
-        }
-
-    } catch (error) {
-        console.error('Error processing period:', error);
-        console.error('Error stack:', error.stack);
-    }
+    console.log(`✅ Next period initialized: ${gameType} ${duration}s - ${nextPeriodId}`);
+    
+  } catch (error) {
+    console.error(`❌ Error processing period ${periodId} for ${gameType} ${duration}s:`, error);
+    logger.error('Error processing period:', {
+      gameType,
+      duration,
+      periodId,
+      error: error.message,
+      stack: error.stack
+    });
+  }
 }
 
-// Get cron expression based on duration
-const getCronExpression = (duration) => {
-    if (duration <= 60) {
-        return `*/${duration} * * * * *`; // Every X seconds
-    } else {
-        const minutes = duration / 60;
-        return `0 */${minutes} * * * *`; // Every X minutes
-    }
-};
+/**
+ * Get a cron expression for the given duration
+ * @param {number} duration - Duration in seconds
+ * @returns {string} Cron expression
+ */
+function getCronExpression(duration) {
+  switch (duration) {
+    case 30: return '*/0.5 * * * * *'; // Every 30s - custom scheduler usually needed, cron doesn't support sub-minute
+    case 60: return '* * * * *';       // Every 1 minute
+    case 180: return '*/3 * * * *';    // Every 3 minutes
+    case 300: return '*/5 * * * *';    // Every 5 minutes
+    case 600: return '*/10 * * * *';   // Every 10 minutes
+    default: throw new Error(`Unsupported game duration: ${duration}`);
+  }
+}
+
+// Start the scheduler
+initialize();
+
 
 // Start the game scheduler
 const startGameScheduler = async () => {

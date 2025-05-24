@@ -57,7 +57,7 @@ class OtpRequest extends Model {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
                 targetKey: 'user_id',
-                as: 'user'
+                as: 'otpuser'
             });
         } else {
             console.warn('User model not found or not properly initialized for OtpRequest association');

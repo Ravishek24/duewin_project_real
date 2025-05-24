@@ -75,7 +75,7 @@ class ReferralTree extends Model {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
                 targetKey: 'user_id',
-                as: 'user'
+                as: 'referraltreeuser'
             });
             
             this.belongsTo(models.User, {

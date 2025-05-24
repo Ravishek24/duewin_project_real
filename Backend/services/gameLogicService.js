@@ -1,6 +1,5 @@
 // Backend/services/gameLogicService.js
 const { sequelize, DataTypes } = require('../config/db');
-const models = require('../models');
 const redisClient = require('../config/redis');
 const periodService = require('./periodService');
 const tronHashService = require('./tronHashService');
@@ -25,18 +24,60 @@ const gameResultsLogger = winston.createLogger({
     ]
 });
 
-// Get models
-const {
-    BetResultWingo,
-    BetResult5D,
-    BetResultK3,
-    BetResultTrxWix,
-    BetRecordWingo,
-    BetRecord5D,
-    BetRecordK3,
-    BetRecordTrxWix,
-    GamePeriod,
-} = models;
+// Initialize models variable - will be populated after initialization
+let models = null;
+let BetResultWingo, BetResult5D, BetResultK3, BetResultTrxWix;
+let BetRecordWingo, BetRecord5D, BetRecordK3, BetRecordTrxWix;
+let GamePeriod, User;
+
+// Function to initialize models when they're ready
+const initializeServiceModels = async () => {
+    try {
+        // Try to get models from the already initialized module
+        const modelModule = require('../models');
+        
+        // If models are not initialized, wait for initialization
+        if (!modelModule.GamePeriod) {
+            console.log('⏳ Waiting for models to be initialized in gameLogicService...');
+            models = await modelModule.initializeModels();
+        } else {
+            models = modelModule;
+        }
+        
+        // Assign individual models
+        BetResultWingo = models.BetResultWingo;
+        BetResult5D = models.BetResult5D;
+        BetResultK3 = models.BetResultK3;
+        BetResultTrxWix = models.BetResultTrxWix;
+        BetRecordWingo = models.BetRecordWingo;
+        BetRecord5D = models.BetRecord5D;
+        BetRecordK3 = models.BetRecordK3;
+        BetRecordTrxWix = models.BetRecordTrxWix;
+        GamePeriod = models.GamePeriod;
+        User = models.User;
+        
+        console.log('✅ Models initialized in gameLogicService');
+        return true;
+    } catch (error) {
+        console.error('❌ Error initializing models in gameLogicService:', error);
+        throw error;
+    }
+};
+
+// Add a helper function to ensure models are initialized before use
+const ensureModelsInitialized = async () => {
+    if (!models || !GamePeriod || !User) {
+        await initializeServiceModels();
+    }
+    if (!models || !GamePeriod || !User) {
+        throw new Error('Models not properly initialized');
+    }
+};
+
+// Call initialization immediately
+initializeServiceModels().catch(error => {
+    console.error('Failed to initialize service models:', error);
+});
 
 const { v4: uuidv4 } = require('uuid');
 const referralService = require('./referralService');
@@ -996,15 +1037,18 @@ const processBet = async (betData) => {
     gameType,
     duration,
     periodId,
-      betType,
-      betCategory,
-      betValue,
+    betType,
+    betCategory,
+    betValue,
     betAmount
   } = betData;
   
   const t = await sequelize.transaction();
   
   try {
+    // Ensure models are initialized
+    await ensureModelsInitialized();
+    
     // Check if betting is frozen for this period
     const frozen = await isBettingFrozen(gameType, duration, periodId);
     if (frozen) {
@@ -1141,7 +1185,6 @@ const processBet = async (betData) => {
     };
   }
 };
-
 /**
  * Calculate odds for a bet type
  * @param {string} gameType - Game type
@@ -2417,10 +2460,11 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
  * @returns {Object} - Processing result
  */
 const processGameResults = async (gameType, duration, periodId) => {
+    await ensureModelsInitialized();
     logger.info('=== STARTING GAME RESULT PROCESSING ===', {
-                gameType, 
-                duration, 
-                periodId,
+        gameType, 
+        duration, 
+        periodId,
         timestamp: new Date().toISOString()
     });
     

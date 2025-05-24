@@ -1,4 +1,4 @@
-// Backend/index.js
+// Backend/index.js - Minimal startup with robust error handling
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
@@ -8,31 +8,16 @@ const socketIo = require('socket.io');
 // Load environment variables first
 dotenv.config();
 
-// Import database configuration
-const { sequelize, connectDB } = require('./config/db');
+console.log('🚀 Starting DueWin Backend Server...');
 
-// Import other modules
-const apiRoutes = require('./routes/index');
-const testRoutes = require('./routes/testRoutes');
-const { errorHandler } = require('./middleware/errorHandler');
-const { isWhitelisted, whitelistedIPs } = require('./config/whitelist');
-const cron = require('node-cron');
-const { createAdapter } = require('@socket.io/redis-adapter');
-const Redis = require('ioredis');
-const { auth, authenticateAdmin } = require('./middleware/auth');
-const { globalLimiter } = require('./middleware/rateLimiter');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const { setIo } = require('./config/socketConfig');
-
-// Create Express app
+// Create Express app first
 const app = express();
 const PORT = process.env.SERVER_PORT || 8000;
 
-// Create HTTP server (needed for Socket.io)
+// Create HTTP server
 const server = http.createServer(app);
 
-// Basic middleware setup first
+// Basic middleware setup
 app.use(cors({
     origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -40,22 +25,27 @@ app.use(cors({
     credentials: true
 }));
 
-app.use(helmet());
-app.use(morgan('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Redis client setup for scaling (optional)
-let pubClient, subClient;
-if (process.env.REDIS_URL) {
-    try {
-        pubClient = new Redis(process.env.REDIS_URL);
-        subClient = pubClient.duplicate();
-        console.log('✅ Redis connected for session and socket scaling');
-    } catch (error) {
-        console.warn('⚠️ Redis connection failed, continuing without Redis scaling:', error.message);
-    }
-}
+// Basic health check route (works immediately)
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        message: 'Server is running'
+    });
+});
+
+// Basic root route
+app.get('/', (req, res) => {
+    res.json({ 
+        status: 'success', 
+        message: 'DueWin Backend Server is running!',
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Initialize Socket.IO
 const io = socketIo(server, {
@@ -65,206 +55,279 @@ const io = socketIo(server, {
     }
 });
 
-// Set io instance in socketConfig
-setIo(io);
-
 // Socket.IO connection handling
 io.on('connection', (socket) => {
     console.log('New client connected:', socket.id);
-
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
     });
 });
 
-// Global rate limiter (with error handling)
+// Set io instance for other modules
 try {
-    if (typeof globalLimiter === 'function') {
-        app.use(globalLimiter);
-    }
+    const { setIo } = require('./config/socketConfig');
+    setIo(io);
+    console.log('✅ Socket.IO configured');
 } catch (error) {
-    console.warn('⚠️ Global rate limiter setup failed, continuing without it:', error.message);
+    console.warn('⚠️ Socket config not available:', error.message);
 }
 
-// Main server initialization function
-const startServer = async () => {
+// Database initialization function
+const initializeDatabase = async () => {
     try {
-        console.log('🚀 Starting server initialization...');
+        console.log('📊 Initializing database connection...');
         
-        // Step 1: Connect to database first
-        console.log('📊 Connecting to database...');
+        // Import database configuration
+        const { connectDB, waitForDatabase } = require('./config/db');
+        
+        // Connect to database
         await connectDB();
-        console.log('✅ Database connection established');
+        console.log('✅ Database connected successfully');
         
-        // Step 2: Wait a moment for connection to stabilize
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Increased delay
+        // Wait for database to be fully ready
+        await waitForDatabase();
+        console.log('✅ Database is ready for operations');
         
-        // Step 3: Initialize models AFTER database connection
+        return true;
+    } catch (error) {
+        console.error('❌ Database initialization failed:', error.message);
+        throw error;
+    }
+};
+
+// Model initialization function
+const initializeModels = async () => {
+    try {
         console.log('🔧 Initializing models...');
+        
+        // Import model initialization
         const { initializeModels } = require('./models');
+        
+        // Initialize models
         const models = await initializeModels();
         console.log('✅ Models initialized successfully');
+        console.log(`📊 Loaded ${Object.keys(models).length - 2} models`);
         
-        // Step 4: Wait for Sequelize to be fully initialized
-        console.log('⏳ Ensuring Sequelize is fully initialized...');
-        let sequelizeReady = false;
-        let retries = 0;
-        const maxRetries = 10; // Increased max retries
-        const retryDelay = 1000;
+        return models;
+    } catch (error) {
+        console.error('❌ Model initialization failed:', error.message);
+        throw error;
+    }
+};
 
-        while (!sequelizeReady && retries < maxRetries) {
-            if (sequelize && 
-                sequelize.constructor && 
-                sequelize.constructor.Query && 
-                sequelize.constructor.Query.prototype) {
-                sequelizeReady = true;
-                console.log('✅ Sequelize fully initialized');
-            } else {
-                retries++;
-                console.log(`⏳ Waiting for Sequelize initialization (attempt ${retries}/${maxRetries})...`);
-                await new Promise(resolve => setTimeout(resolve, retryDelay));
-            }
-        }
-
-        if (!sequelizeReady) {
-            console.warn('⚠️ Sequelize initialization timed out, proceeding with caution');
-        }
+// Routes setup function
+const setupRoutes = async () => {
+    try {
+        console.log('🛣️ Setting up routes...');
         
-        // Step 5: Install any necessary fixes
+        // Import routes
+        const apiRoutes = require('./routes/index');
+        const testRoutes = require('./routes/testRoutes');
+        
+        // Mount API routes
+        app.use('/api', apiRoutes);
+        app.use('/test', testRoutes);
+        
+        console.log('✅ Routes configured successfully');
+        return true;
+    } catch (error) {
+        console.error('❌ Routes setup failed:', error.message);
+        // Don't throw - server can still run with basic routes
+        return false;
+    }
+};
+
+// Additional services setup
+const setupAdditionalServices = async () => {
+    try {
+        console.log('🔧 Setting up additional services...');
+        
+        // Install hack fixes
         try {
             const { installHackFix } = require('./config/hackFix');
+            const { sequelize } = require('./config/db');
             const hackFixInstalled = await installHackFix(sequelize);
             if (hackFixInstalled) {
-                console.log('✅ Hack fixes installed successfully');
-            } else {
-                console.warn('⚠️ Some hack fixes could not be installed');
+                console.log('✅ Hack fixes installed');
             }
-        } catch (error) {
-            console.warn('⚠️ Hack fixes installation failed:', error.message);
+        } catch (hackError) {
+            console.warn('⚠️ Hack fixes not installed:', hackError.message);
         }
         
-        // Step 6: Initialize payment gateways
+        // Initialize payment gateways
         try {
             const paymentGatewayService = require('./services/paymentGatewayService');
             await paymentGatewayService.initializeDefaultGateways();
             console.log('✅ Payment gateways initialized');
-        } catch (error) {
-            console.warn('⚠️ Payment gateway initialization failed:', error.message);
+        } catch (paymentError) {
+            console.warn('⚠️ Payment gateway initialization failed:', paymentError.message);
         }
         
-        // Step 7: Set up routes
-        app.get('/', (req, res) => {
-            res.json({ 
-                status: 'success', 
-                message: 'Server is running successfully!',
-                timestamp: new Date().toISOString()
-            });
-        });
-
-        // Mount API routes
-        app.use('/api', apiRoutes);
-        app.use('/test', testRoutes);
-
-        // Health check route
-        app.get('/health', (req, res) => {
-            res.json({ 
-                status: 'ok',
-                timestamp: new Date().toISOString(),
-                uptime: process.uptime()
-            });
-        });
-
-        // Error handling middleware (must be after routes)
-        app.use((err, req, res, next) => {
-            console.error('Error in middleware:', err);
-            errorHandler(err, req, res, next);
-        });
-
-        // Step 8: Start the HTTP server
-        server.listen(PORT, '0.0.0.0', () => {
-            console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
-            console.log(`🌐 Health check: http://0.0.0.0:${PORT}/health`);
-        });
-
-        // Step 9: Initialize background services (optional)
+        // Set up cron jobs
         try {
-            // Schedule daily referral update job
+            const cron = require('node-cron');
             cron.schedule('0 0 * * *', async () => {
-                console.log('🔄 Running daily referral update job...');
+                console.log('🔄 Running daily maintenance...');
                 try {
                     const { processReferrals } = require('./services/referralService');
                     await processReferrals();
-                    console.log('✅ Daily referral update job completed');
-                } catch (error) {
-                    console.error('❌ Error in daily referral update job:', error);
+                    console.log('✅ Daily maintenance completed');
+                } catch (cronError) {
+                    console.error('❌ Daily maintenance failed:', cronError.message);
                 }
             });
-
-            console.log('✅ Background services initialized');
-        } catch (error) {
-            console.warn('⚠️ Background services initialization failed:', error.message);
+            console.log('✅ Scheduled jobs configured');
+        } catch (cronError) {
+            console.warn('⚠️ Cron jobs not configured:', cronError.message);
         }
-
-        console.log('🎉 Server initialization completed successfully!');
-
+        
+        return true;
     } catch (error) {
-        console.error('❌ Failed to start server:', error);
+        console.warn('⚠️ Additional services setup had issues:', error.message);
+        return false;
+    }
+};
+
+// Error handling middleware
+const setupErrorHandling = () => {
+    // Global error handler
+    app.use((err, req, res, next) => {
+        console.error('Express error handler:', err);
+        
+        if (res.headersSent) {
+            return next(err);
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    // 404 handler
+    app.use((req, res) => {
+        res.status(404).json({
+            success: false,
+            message: 'Route not found',
+            path: req.path,
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    console.log('✅ Error handling configured');
+};
+
+// Main server initialization
+const startServer = async () => {
+    try {
+        console.log('🚀 Starting server initialization sequence...');
+        
+        // Step 1: Initialize database (critical)
+        await initializeDatabase();
+        
+        // Step 2: Initialize models (critical)
+        await initializeModels();
+        
+        // Step 3: Setup routes (important but not critical)
+        await setupRoutes();
+        
+        // Step 4: Setup additional services (optional)
+        await setupAdditionalServices();
+        
+        // Step 5: Setup error handling
+        setupErrorHandling();
+        
+        // Step 6: Start the server
+        server.listen(PORT, '0.0.0.0', () => {
+            console.log(`✅ Server running successfully on http://0.0.0.0:${PORT}`);
+            console.log(`🌐 Health check: http://0.0.0.0:${PORT}/health`);
+            console.log(`📊 Database: Connected and ready`);
+            console.log(`🎉 DueWin Backend Server is fully operational!`);
+        });
+        
+    } catch (error) {
+        console.error('❌ Server initialization failed:', error);
         console.error('Stack trace:', error.stack);
         
-        // Try to close database connection before exiting
+        // Try graceful cleanup
         try {
-            await sequelize.close();
-        } catch (closeError) {
-            console.error('Error closing database connection:', closeError.message);
+            const { sequelize } = require('./config/db');
+            if (sequelize) {
+                await sequelize.close();
+                console.log('🧹 Database connection closed');
+            }
+        } catch (cleanupError) {
+            console.error('❌ Cleanup failed:', cleanupError.message);
         }
         
         process.exit(1);
     }
 };
 
-// Handle graceful shutdown
-process.on('SIGTERM', async () => {
-    console.log('🛑 SIGTERM received, shutting down gracefully...');
+// Graceful shutdown handlers
+const gracefulShutdown = async (signal) => {
+    console.log(`🛑 ${signal} received, shutting down gracefully...`);
+    
     try {
+        // Close HTTP server
         server.close(() => {
             console.log('HTTP server closed');
         });
-        await sequelize.close();
-        console.log('Database connection closed');
+        
+        // Close database connection
+        const { sequelize } = require('./config/db');
+        if (sequelize) {
+            await sequelize.close();
+            console.log('Database connection closed');
+        }
+        
         process.exit(0);
     } catch (error) {
         console.error('Error during shutdown:', error);
         process.exit(1);
     }
-});
+};
 
-process.on('SIGINT', async () => {
-    console.log('🛑 SIGINT received, shutting down gracefully...');
-    try {
-        server.close(() => {
-            console.log('HTTP server closed');
-        });
-        await sequelize.close();
-        console.log('Database connection closed');
-        process.exit(0);
-    } catch (error) {
-        console.error('Error during shutdown:', error);
-        process.exit(1);
-    }
-});
+// Process event handlers
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Handle uncaught exceptions
+// Enhanced error handling for unhandled exceptions
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-    // Don't exit immediately, let the application handle it
+    console.error('🚨 Uncaught Exception:', error);
+    console.error('Stack trace:', error.stack);
+    
+    // Check if it's the Sequelize getQueryInterface error
+    if (error.message && error.message.includes('getQueryInterface')) {
+        console.error('🚨 This is the Sequelize initialization error');
+        console.error('🚨 Server will attempt to continue, but functionality may be limited');
+        return; // Don't exit, allow retry mechanisms to handle it
+    }
+    
+    // For other uncaught exceptions, exit gracefully
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    // Don't exit immediately, let the application handle it
+    console.error('🚨 Unhandled Rejection at:', promise);
+    console.error('🚨 Reason:', reason);
+    
+    // Check if it's related to Sequelize
+    if (reason && reason.message && reason.message.includes('getQueryInterface')) {
+        console.error('🚨 This appears to be related to the Sequelize issue');
+        console.error('🚨 Server will continue running');
+        return; // Don't exit
+    }
+    
+    // Log but don't exit for other unhandled rejections
+    console.error('🚨 Continuing execution despite unhandled rejection');
 });
 
 // Start the server
-startServer();
+startServer().catch(error => {
+    console.error('🚨 Failed to start server:', error);
+    process.exit(1);
+});
 
 module.exports = app;

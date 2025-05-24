@@ -61,7 +61,7 @@ class ThirdPartyWallet extends Model {
       this.belongsTo(models.User, {
         foreignKey: 'user_id',
         targetKey: 'user_id',
-        as: 'user'
+        as: 'thirdpartywalletuser'
       });
     } else {
       console.warn('User model not found or not properly initialized for ThirdPartyWallet association');
