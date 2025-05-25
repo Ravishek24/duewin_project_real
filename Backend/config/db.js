@@ -114,7 +114,7 @@ const connectDB = async () => {
                 
                 // Check specifically for important tables
                 const tableNames = tables[0].map(t => Object.values(t)[0]);
-                const importantTables = ['users', 'payment_gateways', 'bet_result_wingos'];
+                const importantTables = ['users', 'game_periods', 'bet_result_wingos', 'payment_gateways'];
                 const missingTables = importantTables.filter(table => !tableNames.includes(table));
                 
                 if (missingTables.length > 0) {

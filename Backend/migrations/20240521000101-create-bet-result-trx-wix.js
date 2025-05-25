@@ -10,8 +10,7 @@ module.exports = {
       },
       period: {
         type: Sequelize.STRING,
-        allowNull: false,
-        unique: true
+        allowNull: false
       },
       result: {
         type: Sequelize.JSON,
@@ -27,12 +26,30 @@ module.exports = {
       },
       created_at: {
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.NOW
       },
       updated_at: {
         type: Sequelize.DATE,
+        allowNull: false,
         defaultValue: Sequelize.NOW
+      },
+      timeline: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        defaultValue: 'default'
+      },
+      duration: {
+        type: Sequelize.INTEGER,
+        allowNull: false,
+        defaultValue: 60,
+        comment: 'Duration in seconds (60, 180, 300, 600)'
       }
+    });
+
+    await queryInterface.addIndex('bet_result_trx_wix', ['period', 'duration'], {
+      unique: true,
+      name: 'bet_result_trx_wix_period_duration_unique'
     });
   },
   async down(queryInterface, Sequelize) {

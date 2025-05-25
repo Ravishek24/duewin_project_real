@@ -19,7 +19,14 @@ module.exports = (sequelize, DataTypes) => {
     },
     result: {
       type: DataTypes.JSON,
-      allowNull: false
+      allowNull: false,
+      get() {
+        const rawValue = this.getDataValue('result');
+        return rawValue ? JSON.parse(JSON.stringify(rawValue)) : null;
+      },
+      set(value) {
+        this.setDataValue('result', value);
+      }
     },
     verification_hash: {
       type: DataTypes.STRING,

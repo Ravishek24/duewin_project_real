@@ -33,15 +33,18 @@ let GamePeriod, User;
 // Function to initialize models when they're ready
 const initializeServiceModels = async () => {
     try {
-        // Try to get models from the already initialized module
-        const modelModule = require('../models');
+        // Import the models module
+        const { models: modelModule, initializeModels } = require('../models');
         
-        // If models are not initialized, wait for initialization
-        if (!modelModule.GamePeriod) {
-            console.log('⏳ Waiting for models to be initialized in gameLogicService...');
-            models = await modelModule.initializeModels();
-        } else {
-            models = modelModule;
+        // Always wait for initialization to ensure models are ready
+        console.log('⏳ Initializing models in gameLogicService...');
+        await initializeModels();
+        
+        // Get models from the module
+        models = modelModule;
+        
+        if (!models) {
+            throw new Error('Models initialization failed - no models returned');
         }
         
         // Assign individual models
@@ -56,6 +59,32 @@ const initializeServiceModels = async () => {
         GamePeriod = models.GamePeriod;
         User = models.User;
         
+        // Verify all required models are available and properly initialized
+        const requiredModels = [
+            'BetResultWingo', 'BetResult5D', 'BetResultK3', 'BetResultTrxWix',
+            'BetRecordWingo', 'BetRecord5D', 'BetRecordK3', 'BetRecordTrxWix',
+            'GamePeriod', 'User'
+        ];
+        
+        const missingModels = requiredModels.filter(modelName => {
+            const model = models[modelName];
+            return !model || typeof model.create !== 'function';
+        });
+        
+        if (missingModels.length > 0) {
+            throw new Error(`Missing or improperly initialized models: ${missingModels.join(', ')}`);
+        }
+        
+        // Verify model methods
+        const modelMethods = ['create', 'findOne', 'findAll', 'update', 'destroy'];
+        for (const modelName of requiredModels) {
+            const model = models[modelName];
+            const missingMethods = modelMethods.filter(method => typeof model[method] !== 'function');
+            if (missingMethods.length > 0) {
+                throw new Error(`Model ${modelName} is missing required methods: ${missingMethods.join(', ')}`);
+            }
+        }
+        
         console.log('✅ Models initialized in gameLogicService');
         return true;
     } catch (error) {
@@ -66,17 +95,40 @@ const initializeServiceModels = async () => {
 
 // Add a helper function to ensure models are initialized before use
 const ensureModelsInitialized = async () => {
-    if (!models || !GamePeriod || !User) {
-        await initializeServiceModels();
-    }
-    if (!models || !GamePeriod || !User) {
-        throw new Error('Models not properly initialized');
+    try {
+        if (!models || !GamePeriod || !User) {
+            await initializeServiceModels();
+        }
+        if (!models || !GamePeriod || !User) {
+            throw new Error('Models not properly initialized');
+        }
+    } catch (error) {
+        console.error('Failed to ensure models are initialized:', error);
+        throw error;
     }
 };
 
-// Call initialization immediately
-initializeServiceModels().catch(error => {
-    console.error('Failed to initialize service models:', error);
+// Call initialization immediately and retry on failure
+const initializeWithRetry = async (retries = 3, delay = 2000) => {
+    for (let i = 0; i < retries; i++) {
+        try {
+            await initializeServiceModels();
+            return;
+        } catch (error) {
+            console.error(`Failed to initialize models (attempt ${i + 1}/${retries}):`, error);
+            if (i < retries - 1) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else {
+                throw error;
+            }
+        }
+    }
+};
+
+// Initialize with retry
+initializeWithRetry().catch(error => {
+    console.error('Failed to initialize service models after all retries:', error);
+    process.exit(1); // Exit if we can't initialize models
 });
 
 const { v4: uuidv4 } = require('uuid');
@@ -102,76 +154,84 @@ const RISK_THRESHOLDS = {
 };
 
 /**
- * Validate 60/40 algorithm results for safety
- * @param {Object} result - Result object
- * @param {number} totalBetAmount - Total bet amount
- * @param {number} expectedPayout - Expected payout
+ * Validate result against 60/40 criteria
+ * @param {Object} result - Result object with payout information
+ * @param {string} gameType - Game type
  * @returns {Object} - Validation result
  */
-const validate60_40Result = async (result, totalBetAmount, expectedPayout) => {
+const validate60_40Result = async (result, gameType) => {
     try {
-        // Calculate payout percentage
-        const payoutPercentage = (expectedPayout / totalBetAmount) * 100;
+        const warnings = [];
         
-        // Calculate house edge
-        const houseEdge = totalBetAmount - expectedPayout;
-        const houseEdgePercent = (houseEdge / totalBetAmount) * 100;
-        
-        // Safety thresholds
-        const MIN_HOUSE_EDGE = 40; // Minimum 40% house edge
-        const MAX_PAYOUT_PERCENT = 60; // Maximum 60% payout
-        const MIN_BET_AMOUNT = 10; // Minimum bet amount to consider
-        
-        // Validation checks
-        const validations = {
-            isSafe: true,
-            warnings: [],
-            houseEdgePercent,
-            payoutPercentage
+        if (!result) {
+            return { isSafe: false, warnings: ['Result is null or undefined'] };
+        }
+
+        // Validate payout percentage and house edge
+        if (result.payoutPercentage > 60) {
+            warnings.push(`Payout percentage (${result.payoutPercentage}%) exceeds 60% limit`);
+        }
+        if (result.houseEdge < 40) {
+            warnings.push(`House edge (${result.houseEdge}%) is below 40% minimum`);
+        }
+
+        // Validate result structure based on game type
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                if (typeof result.result.number !== 'number') {
+                    warnings.push('Invalid number in result');
+                }
+                if (!['big', 'small'].includes(result.result.size.toLowerCase())) {
+                    warnings.push('Invalid size in result');
+                }
+                if (!['red', 'green', 'red_violet', 'green_violet'].includes(result.result.color.toLowerCase())) {
+                    warnings.push('Invalid color in result');
+                }
+                break;
+                
+            case 'fived':
+            case '5d':
+                if (!Array.isArray([result.result.A, result.result.B, result.result.C, result.result.D, result.result.E])) {
+                    warnings.push('Invalid dice results');
+                }
+                if (typeof result.result.sum !== 'number') {
+                    warnings.push('Invalid sum in result');
+                }
+                break;
+                
+            case 'k3':
+                if (!Array.isArray([result.result.dice_1, result.result.dice_2, result.result.dice_3])) {
+                    warnings.push('Invalid dice results');
+                }
+                if (typeof result.result.sum !== 'number') {
+                    warnings.push('Invalid sum in result');
+                }
+                if (typeof result.result.has_pair !== 'boolean') {
+                    warnings.push('Invalid pair status');
+                }
+                if (typeof result.result.has_triple !== 'boolean') {
+                    warnings.push('Invalid triple status');
+                }
+                if (typeof result.result.is_straight !== 'boolean') {
+                    warnings.push('Invalid straight status');
+                }
+                break;
+        }
+
+        return {
+            isSafe: warnings.length === 0,
+            warnings
         };
-        
-        // Check minimum bet amount
-        if (totalBetAmount < MIN_BET_AMOUNT) {
-            validations.isSafe = false;
-            validations.warnings.push('Total bet amount too low');
-        }
-        
-        // Check house edge
-        if (houseEdgePercent < MIN_HOUSE_EDGE) {
-            validations.isSafe = false;
-            validations.warnings.push(`House edge too low: ${houseEdgePercent}%`);
-        }
-        
-        // Check payout percentage
-        if (payoutPercentage > MAX_PAYOUT_PERCENT) {
-            validations.isSafe = false;
-            validations.warnings.push(`Payout percentage too high: ${payoutPercentage}%`);
-        }
-        
-        // Log validation results
-        logger.info('60/40 result validation', {
-            result,
-            validations,
-            totalBetAmount,
-            expectedPayout
-        });
-        
-        return validations;
-        
     } catch (error) {
         logger.error('Error validating 60/40 result', {
             error: error.message,
             stack: error.stack,
-            result,
-            totalBetAmount,
-            expectedPayout
+            gameType
         });
-        
         return {
             isSafe: false,
-            warnings: ['Error during validation'],
-            houseEdgePercent: 0,
-            payoutPercentage: 0
+            warnings: ['Error during validation: ' + error.message]
         };
     }
 };
@@ -227,1204 +287,6 @@ const shouldUseMinimumBetResult = async (gameType, duration, periodId) => {
             periodId
         });
         return false;
-    }
-};
-
-/**
- * Get minimum bet result for current period
- * @param {string} gameType - Game type
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period ID
- * @returns {Object} - Minimum bet result
- */
-const getMinimumBetResult = async (gameType, duration, periodId) => {
-    try {
-        const durationKey = duration === 30 ? '30s' : 
-                          duration === 60 ? '1m' : 
-                          duration === 180 ? '3m' : 
-                          duration === 300 ? '5m' : '10m';
-
-        // Get all possible results
-        const possibleResults = await generateAllPossibleResults(gameType);
-        
-        // Calculate bet amounts for each result
-        const resultWithBets = await Promise.all(possibleResults.map(async (result) => {
-            const expectedPayout = await calculateExpectedPayout(gameType, durationKey, periodId, result);
-            return {
-                result,
-                betAmount: expectedPayout
-            };
-        }));
-
-        // Sort by bet amount (ascending)
-        resultWithBets.sort((a, b) => a.betAmount - b.betAmount);
-
-        // Get the result with minimum bet amount
-        const minimumBetResult = resultWithBets[0];
-
-        logger.info('Minimum bet result selected', {
-            gameType,
-            duration,
-            periodId,
-            result: minimumBetResult.result,
-            betAmount: minimumBetResult.betAmount
-        });
-
-        return minimumBetResult;
-
-    } catch (error) {
-        logger.error('Error getting minimum bet result', {
-            error: error.message,
-            stack: error.stack,
-            gameType,
-            duration,
-            periodId
-        });
-        return null;
-    }
-};
-
-/**
- * Calculate optimized game result based on 60/40 algorithm
- * @param {string} gameType - Game type (wingo, fiveD, k3)
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period identifier
- * @returns {Object} - Optimized result and expected payout
- */
-const calculateOptimizedResult = async (gameType, duration, periodId) => {
-    try {
-        console.log('\n=== CALCULATING OPTIMIZED RESULT ===');
-        console.log(`Game Type: ${gameType}`);
-        console.log(`Duration: ${duration}s`);
-        console.log(`Period ID: ${periodId}`);
-        
-        const durationKey = duration === 30 ? '30s' : 
-                          duration === 60 ? '1m' : 
-                          duration === 180 ? '3m' : 
-                          duration === 300 ? '5m' : '10m';
-        
-        // Get total bet amount for this period
-        const totalBetAmount = parseFloat(
-            await redisClient.get(`${gameType}:${durationKey}:${periodId}:total`) || 0
-        );
-        
-        console.log(`Total bet amount: ${totalBetAmount}`);
-      
-        // Generate result based on game type
-        let gameResult;
-        console.log('\n--- Generating Result ---');
-        switch (gameType.toLowerCase()) {
-            case 'wingo':
-            case 'trx_wix':
-                gameResult = {
-                    number: Math.floor(Math.random() * 10),
-                    color: ['red', 'green', 'violet', 'green_violet'][Math.floor(Math.random() * 4)],
-                    size: Math.random() >= 0.5 ? 'Big' : 'Small'
-                };
-                console.log('Generated Wingo/TrxWix result:', JSON.stringify(gameResult, null, 2));
-                break;
-            case 'fived':
-            case '5d':
-                const numbers = Array(5).fill(0).map(() => Math.floor(Math.random() * 10));
-                gameResult = {
-                    A: numbers[0],
-                    B: numbers[1],
-                    C: numbers[2],
-                    D: numbers[3],
-                    E: numbers[4],
-                    sum: numbers.reduce((a, b) => a + b, 0),
-                    time: duration
-                };
-                console.log('Generated FiveD result:', JSON.stringify(gameResult, null, 2));
-                break;
-            case 'k3':
-                const dice = Array(3).fill(0).map(() => Math.floor(Math.random() * 6) + 1);
-                const sum = dice.reduce((a, b) => a + b, 0);
-                gameResult = {
-                    dice_1: dice[0],
-                    dice_2: dice[1],
-                    dice_3: dice[2],
-                    sum: sum,
-                    has_pair: new Set(dice).size === 2,
-                    has_triple: new Set(dice).size === 1,
-                    is_straight: new Set(dice).size === 3 && Math.max(...dice) - Math.min(...dice) === 2,
-                    sum_size: sum >= 11 ? 'Big' : 'Small',
-                    sum_parity: sum % 2 === 0 ? 'Even' : 'Odd',
-                    time: duration
-                };
-                console.log('Generated K3 result:', JSON.stringify(gameResult, null, 2));
-                break;
-            default:
-                throw new Error(`Invalid game type: ${gameType}`);
-        }
-
-        console.log('\n=== RESULT CALCULATION COMPLETED ===\n');
-        return gameResult;
-    } catch (error) {
-        console.error('\n=== RESULT CALCULATION FAILED ===');
-        console.error('Error details:', error.message);
-        console.error('Stack trace:', error.stack);
-        throw error;
-    }
-};
-
-/**
- * Validate fallback result for safety
- * @param {Object} result - Result object
- * @param {string} gameType - Game type
- * @returns {Object} - Validation result
- */
-const validateFallbackResult = async (result, gameType) => {
-    const warnings = [];
-    
-    if (!result) {
-        return { isSafe: false, warnings: ['Result is null or undefined'] };
-    }
-
-    switch (gameType.toLowerCase()) {
-        case 'wingo':
-            if (typeof result.number !== 'number') {
-                warnings.push('Invalid number in result');
-                }
-            if (!['big', 'small'].includes(result.size)) {
-                warnings.push('Invalid size in result');
-            }
-            if (!['red', 'green'].includes(result.color)) {
-                warnings.push('Invalid color in result');
-            }
-            break;
-            
-        case 'trx_wix':
-            if (typeof result.number !== 'number') {
-                warnings.push('Invalid number in result');
-                }
-            if (!['big', 'small'].includes(result.size)) {
-                warnings.push('Invalid size in result');
-            }
-            if (!['red', 'green'].includes(result.color)) {
-                warnings.push('Invalid color in result');
-            }
-            if (!result.verification?.hash) {
-                warnings.push('Missing verification hash');
-                }
-                break;
-
-        case 'fived':
-        case '5d':
-            if (!Array.isArray([result.A, result.B, result.C, result.D, result.E])) {
-                warnings.push('Invalid dice results');
-            }
-            if (typeof result.sum !== 'number') {
-                warnings.push('Invalid sum in result');
-                }
-                break;
-
-            case 'k3':
-            if (!Array.isArray([result.dice_1, result.dice_2, result.dice_3])) {
-                warnings.push('Invalid dice results');
-            }
-            if (typeof result.sum !== 'number') {
-                warnings.push('Invalid sum in result');
-            }
-            if (typeof result.has_pair !== 'boolean') {
-                warnings.push('Invalid pair status');
-            }
-            if (typeof result.has_triple !== 'boolean') {
-                warnings.push('Invalid triple status');
-            }
-            if (typeof result.is_straight !== 'boolean') {
-                warnings.push('Invalid straight status');
-                }
-                break;
-            
-        default:
-            warnings.push(`Unsupported game type: ${gameType}`);
-    }
-
-        return {
-        isSafe: warnings.length === 0,
-        warnings
-        };
-};
-
-/**
- * Generate a fallback result when the 60/40 algorithm fails
- * @param {string} gameType - Game type (wingo, fiveD, k3)
- * @returns {Object} - Fallback result and expected payout
- */
-const generateFallbackResult = async (gameType) => {
-    try {
-        logger.info('Generating fallback result', { gameType });
-        
-        // When no bets are placed, use truly random generation
-        const totalBetAmount = 0; // Since there are no bets
-        
-        // Use crypto for better randomness if available
-        let randomResult;
-        try {
-            const crypto = require('crypto');
-            
-            // Get current timestamp for additional entropy
-            const timestamp = Date.now();
-            
-            // Create a combination of sources for better randomness
-            const randomBuffer = crypto.randomBytes(8);
-            const random1 = randomBuffer.readUInt32BE(0) / 0xFFFFFFFF;
-            const random2 = randomBuffer.readUInt32BE(4) / 0xFFFFFFFF;
-            
-            // Combine multiple random sources
-            const combinedRandom = (timestamp % 997 * random1 + random2) % 1;
-            
-            // Generate different result for each game type
-            switch (gameType) {
-                case 'trx_wix':
-                    const number = Math.floor(combinedRandom * 10); // 0-9
-                    let color = '';
-                    let size = number >= 5 ? 'Big' : 'Small';
-                    
-                    // Determine color based on number
-                    if (number === 0) {
-                        color = 'violet';
-                    } else if (number === 5) {
-                        color = 'green_violet';
-                    } else if ([1, 3, 7, 9].includes(number)) {
-                        color = 'green';
-                    } else {
-                        color = 'red';
-                    }
-                    
-                    randomResult = { number, color, size };
-                    break;
-                    
-                case 'fiveD':
-                    randomResult = {
-                        A: Math.floor(random1 * 10),
-                        B: Math.floor(random2 * 10),
-                        C: Math.floor(combinedRandom * 10),
-                        D: Math.floor((random1 + timestamp % 97) % 1 * 10),
-                        E: Math.floor((random2 + timestamp % 89) % 1 * 10),
-                        sum: 0, // Will be calculated below
-                        time: duration
-                    };
-                    // Calculate sum
-                    randomResult.sum = randomResult.A + randomResult.B + randomResult.C + randomResult.D + randomResult.E;
-                    break;
-                    
-                case 'k3':
-                    const d1 = Math.floor(random1 * 6) + 1;
-                    const d2 = Math.floor(random2 * 6) + 1;
-                    const d3 = Math.floor(combinedRandom * 6) + 1;
-                    const k3Sum = d1 + d2 + d3;
-                    
-                    // Check for pairs and triples
-                    const k3DiceCounts = [d1, d2, d3].reduce((acc, val) => {
-                        acc[val] = (acc[val] || 0) + 1;
-                        return acc;
-                    }, {});
-                    
-                    const k3HasPair = Object.values(k3DiceCounts).some(count => count === 2);
-                    const k3HasTriple = Object.values(k3DiceCounts).some(count => count === 3);
-                    
-                    // Check for straight
-                    const k3SortedDice = [d1, d2, d3].sort((a, b) => a - b);
-                    const k3IsStraight = (
-                        (k3SortedDice[0] === 1 && k3SortedDice[1] === 2 && k3SortedDice[2] === 3) ||
-                        (k3SortedDice[0] === 2 && k3SortedDice[1] === 3 && k3SortedDice[2] === 4) ||
-                        (k3SortedDice[0] === 3 && k3SortedDice[1] === 4 && k3SortedDice[2] === 5) ||
-                        (k3SortedDice[0] === 4 && k3SortedDice[1] === 5 && k3SortedDice[2] === 6)
-                    );
-                    
-                    randomResult = {
-                        dice_1: d1,
-                        dice_2: d2,
-                        dice_3: d3,
-                        sum: k3Sum,
-                        has_pair: k3HasPair,
-                        has_triple: k3HasTriple,
-                        is_straight: k3IsStraight,
-                        sum_size: k3Sum > 10.5 ? 'big' : 'small',
-                        sum_parity: k3Sum % 2 === 0 ? 'even' : 'odd',
-                        time: duration
-                    };
-                    break;
-                    
-                default:
-                    randomResult = generateRandomResult(gameType);
-                    break;
-            }
-        } catch (cryptoError) {
-            // Fallback if crypto is not available
-            logger.warn('Crypto random generation failed, using Math.random', { error: cryptoError.message });
-            randomResult = generateRandomResult(gameType);
-        }
-        
-        const validation = await validateFallbackResult(randomResult, gameType);
-        
-        logger.info('Generated truly random fallback result', {
-            gameType,
-            randomResult,
-                validation
-        });
-            
-            return {
-            result: randomResult,
-                expectedPayout: 0,
-                houseEdgePercent: 100,
-            validation
-        };
-    } catch (error) {
-        logger.error('Error generating fallback result', {
-            error: error.message,
-            stack: error.stack,
-            gameType
-        });
-        
-        // Last resort fallback
-        const randomResult = generateRandomResult(gameType);
-        return {
-            result: randomResult,
-            expectedPayout: 0,
-            houseEdgePercent: 100,
-            validation: { isSafe: true, warnings: [] }
-        };
-    }
-};
-
-/**
- * Generate random result based on game type
- * @param {string} gameType - Game type (wingo, fiveD, k3)
- * @param {number} duration - Duration in seconds
- * @returns {Object} - Random result object
- */
-const generateRandomResult = (gameType, duration) => {
-  switch (gameType.toLowerCase()) {
-    case 'wingo':
-      const number = Math.floor(Math.random() * 10); // 0-9
-      let color = '';
-      let size = number >= 5 ? 'Big' : 'Small';
-      
-      // Determine color based on number
-      if (number === 0) {
-        color = 'violet';
-      } else if (number === 5) {
-        color = 'green_violet';
-      } else if ([1, 3, 7, 9].includes(number)) {
-        color = 'green';
-      } else {
-        color = 'red';
-      }
-      
-      return { number, color, size };
-      
-    case 'fived':
-    case '5d':
-      const A = Math.floor(Math.random() * 10);
-      const B = Math.floor(Math.random() * 10);
-      const C = Math.floor(Math.random() * 10);
-      const D = Math.floor(Math.random() * 10);
-      const E = Math.floor(Math.random() * 10);
-      const sum = A + B + C + D + E;
-      
-      return {
-        A, B, C, D, E,
-        sum,
-        time: duration
-      };
-      
-    case 'k3':
-      const dice_1 = Math.floor(Math.random() * 6) + 1;
-      const dice_2 = Math.floor(Math.random() * 6) + 1;
-      const dice_3 = Math.floor(Math.random() * 6) + 1;
-      const diceSum = dice_1 + dice_2 + dice_3;
-      
-      // Check for pairs and triples
-      const diceCounts = [dice_1, dice_2, dice_3].reduce((acc, val) => {
-        acc[val] = (acc[val] || 0) + 1;
-        return acc;
-      }, {});
-      
-      const has_pair = Object.values(diceCounts).some(count => count === 2);
-      const has_triple = Object.values(diceCounts).some(count => count === 3);
-      
-      // Check for straight (1-2-3, 2-3-4, 3-4-5, 4-5-6)
-      const sortedDice = [dice_1, dice_2, dice_3].sort((a, b) => a - b);
-      const is_straight = (
-        (sortedDice[0] === 1 && sortedDice[1] === 2 && sortedDice[2] === 3) ||
-        (sortedDice[0] === 2 && sortedDice[1] === 3 && sortedDice[2] === 4) ||
-        (sortedDice[0] === 3 && sortedDice[1] === 4 && sortedDice[2] === 5) ||
-        (sortedDice[0] === 4 && sortedDice[1] === 5 && sortedDice[2] === 6)
-      );
-      
-      return {
-        dice_1,
-        dice_2,
-        dice_3,
-        sum: diceSum,
-        has_pair,
-        has_triple,
-        is_straight,
-        sum_size: diceSum > 10.5 ? 'big' : 'small',
-        sum_parity: diceSum % 2 === 0 ? 'even' : 'odd',
-        time: duration
-      };
-      
-    case 'trx_wix':
-      const trxNumber = Math.floor(Math.random() * 10); // 0-9
-      let trxColor = '';
-      let trxSize = trxNumber >= 5 ? 'Big' : 'Small';
-      
-      // Determine color based on number
-      if (trxNumber === 0) {
-        trxColor = 'violet';
-      } else if (trxNumber === 5) {
-        trxColor = 'green_violet';
-      } else if ([1, 3, 7, 9].includes(trxNumber)) {
-        trxColor = 'green';
-      } else {
-        trxColor = 'red';
-      }
-      
-      // Generate a random hash
-      const hash = Math.random().toString(36).substring(2, 15);
-      
-      return {
-        number: trxNumber,
-        color: trxColor,
-        size: trxSize,
-        hash
-      };
-      
-    default:
-      throw new Error(`Invalid game type: ${gameType}`);
-  }
-};
-
-/**
- * Generate all possible results for a game type
- * @param {string} gameType - Game type (wingo, fiveD, k3)
- * @returns {Array} - Array of all possible results
- */
-const generateAllPossibleResults = async (gameType) => {
-    switch (gameType.toLowerCase()) {
-        case 'wingo':
-      // For Wingo, there are 10 possible results (0-9)
-            const wingoResults = [];
-      for (let i = 0; i < 10; i++) {
-        let color = '';
-        let size = i >= 5 ? 'Big' : 'Small';
-        
-        // Determine color based on number
-        if (i === 0) {
-          color = 'violet';
-        } else if (i === 5) {
-          color = 'green_violet';
-        } else if ([1, 3, 7, 9].includes(i)) {
-          color = 'green';
-        } else {
-          color = 'red';
-        }
-        
-                wingoResults.push({ number: i, color, size });
-            }
-            return wingoResults;
-            
-        case 'trx_wix':
-            // For Trx_wix, there are 10 possible results (0-9)
-            const trxWixResults = [];
-            for (let i = 0; i < 10; i++) {
-                let color = '';
-                let size = i >= 5 ? 'Big' : 'Small';
-                
-                // Determine color based on number
-                if (i === 0) {
-                    color = 'violet';
-                } else if (i === 5) {
-                    color = 'green_violet';
-                } else if ([1, 3, 7, 9].includes(i)) {
-                    color = 'green';
-                } else {
-                    color = 'red';
-                }
-                
-                // Generate a unique hash for each result
-                const hash = Math.random().toString(36).substring(2, 15);
-                
-                trxWixResults.push({ number: i, color, size, hash });
-      }
-            return trxWixResults;
-    
-    case 'fiveD':
-      // For 5D, there are too many combinations to generate all
-      // Instead, generate a subset of possible results
-      const fiveDResults = [];
-      for (let i = 0; i < 50; i++) {
-        fiveDResults.push({
-          A: Math.floor(Math.random() * 10),
-          B: Math.floor(Math.random() * 10),
-          C: Math.floor(Math.random() * 10),
-          D: Math.floor(Math.random() * 10),
-          E: Math.floor(Math.random() * 10)
-        });
-      }
-      return fiveDResults;
-    
-    case 'k3':
-      // For K3, generate all combinations of dice (216 combinations)
-      const k3Results = [];
-      for (let d1 = 1; d1 <= 6; d1++) {
-        for (let d2 = 1; d2 <= 6; d2++) {
-          for (let d3 = 1; d3 <= 6; d3++) {
-            k3Results.push({ dice_1: d1, dice_2: d2, dice_3: d3 });
-          }
-        }
-      }
-      return k3Results;
-    
-    default:
-      return [generateRandomResult(gameType)];
-  }
-};
-
-/**
- * Calculate expected payout for a result
- * @param {string} gameType - Game type (wingo, fiveD, k3)
- * @param {string} durationKey - Duration key (30s, 1m, etc.)
- * @param {string} periodId - Period identifier
- * @param {Object} result - Result object
- * @returns {number} - Expected payout
- */
-const calculateExpectedPayout = async (gameType, durationKey, periodId, result) => {
-  let totalPayout = 0;
-  
-    switch (gameType.toLowerCase()) {
-        case 'wingo':
-            // Calculate number bets
-            const wingoNumberBetAmount = parseFloat(
-                await redisClient.get(`wingo:${durationKey}:${periodId}:number:${result.number}`) || 0
-            );
-            totalPayout += wingoNumberBetAmount * 9; // 9x multiplier for number bets
-            
-            // Calculate color bets
-            const wingoColorBetAmount = parseFloat(
-                await redisClient.get(`wingo:${durationKey}:${periodId}:color:${result.color}`) || 0
-            );
-            
-            // Different multipliers based on color
-            let wingoColorMultiplier = 2; // Default for red/green
-            if (result.color === 'violet') {
-                wingoColorMultiplier = 4.5;
-            } else if (result.color === 'green_violet' || result.color === 'red_violet') {
-                wingoColorMultiplier = 2;
-            }
-            
-            totalPayout += wingoColorBetAmount * wingoColorMultiplier;
-            
-            // Calculate size bets
-            const wingoSizeBetAmount = parseFloat(
-                await redisClient.get(`wingo:${durationKey}:${periodId}:size:${result.size.toLowerCase()}`) || 0
-            );
-            totalPayout += wingoSizeBetAmount * 2; // 2x for big/small
-            
-            // Calculate odd/even bets
-            const wingoParity = result.number % 2 === 0 ? 'even' : 'odd';
-            const wingoParityBetAmount = parseFloat(
-                await redisClient.get(`wingo:${durationKey}:${periodId}:parity:${wingoParity}`) || 0
-            );
-            totalPayout += wingoParityBetAmount * 2; // 2x for odd/even
-            break;
-            
-    case 'trx_wix':
-      // Calculate number bets
-            const trxWixNumberBetAmount = parseFloat(
-        await redisClient.get(`trx_wix:${durationKey}:${periodId}:number:${result.number}`) || 0
-      );
-            totalPayout += trxWixNumberBetAmount * 9; // 9x multiplier for number bets
-      
-      // Calculate color bets
-            const trxWixColorBetAmount = parseFloat(
-        await redisClient.get(`trx_wix:${durationKey}:${periodId}:color:${result.color}`) || 0
-      );
-      
-      // Different multipliers based on color
-            let trxWixColorMultiplier = 2; // Default for red/green
-      if (result.color === 'violet') {
-                trxWixColorMultiplier = 4.5;
-      } else if (result.color === 'green_violet' || result.color === 'red_violet') {
-                trxWixColorMultiplier = 2;
-      }
-      
-            totalPayout += trxWixColorBetAmount * trxWixColorMultiplier;
-      
-      // Calculate size bets
-            const trxWixSizeBetAmount = parseFloat(
-        await redisClient.get(`trx_wix:${durationKey}:${periodId}:size:${result.size.toLowerCase()}`) || 0
-      );
-            totalPayout += trxWixSizeBetAmount * 2; // 2x for big/small
-      
-      // Calculate odd/even bets
-            const trxWixParity = result.number % 2 === 0 ? 'even' : 'odd';
-            const trxWixParityBetAmount = parseFloat(
-                await redisClient.get(`trx_wix:${durationKey}:${periodId}:parity:${trxWixParity}`) || 0
-      );
-            totalPayout += trxWixParityBetAmount * 2; // 2x for odd/even
-      break;
-      
-    case 'fiveD':
-      // Calculate individual position bets (A-E)
-      for (const pos of ['A', 'B', 'C', 'D', 'E']) {
-        const posBetAmount = parseFloat(
-          await redisClient.get(`fiveD:${durationKey}:${periodId}:${pos}:number:${result[pos]}`) || 0
-        );
-        totalPayout += posBetAmount * 9; // 9x multiplier for exact number
-      }
-      
-      // Calculate sum bets
-      const sum = result.A + result.B + result.C + result.D + result.E;
-      const sumBetAmount = parseFloat(
-        await redisClient.get(`fiveD:${durationKey}:${periodId}:sum:number:${sum}`) || 0
-      );
-      totalPayout += sumBetAmount * 9; // 9x multiplier for sum
-      
-      // Calculate big/small bets (sum > 22.5 is big)
-      const sumCategory = sum > 22.5 ? 'big' : 'small';
-      const sumCategoryBetAmount = parseFloat(
-        await redisClient.get(`fiveD:${durationKey}:${periodId}:sum:category:${sumCategory}`) || 0
-      );
-      totalPayout += sumCategoryBetAmount * 2; // 2x for big/small
-      
-      // Calculate odd/even bets for sum
-      const sumParity = sum % 2 === 0 ? 'even' : 'odd';
-      const sumParityBetAmount = parseFloat(
-        await redisClient.get(`fiveD:${durationKey}:${periodId}:sum:parity:${sumParity}`) || 0
-      );
-      totalPayout += sumParityBetAmount * 2; // 2x for odd/even
-      
-      break;
-      
-    case 'k3':
-      // Calculate sum bets
-      const diceSum = result.dice_1 + result.dice_2 + result.dice_3;
-      const diceSumBetAmount = parseFloat(
-        await redisClient.get(`k3:${durationKey}:${periodId}:sum:${diceSum}`) || 0
-      );
-      totalPayout += diceSumBetAmount * 9; // 9x multiplier for exact sum
-      
-      // Calculate sum category bets (big/small)
-      const diceSumCategory = diceSum > 10.5 ? 'big' : 'small';
-      const diceCategoryBetAmount = parseFloat(
-        await redisClient.get(`k3:${durationKey}:${periodId}:sum_category:${diceSumCategory}`) || 0
-      );
-      totalPayout += diceCategoryBetAmount * 2; // 2x for big/small
-      
-      // Calculate matching dice bets
-      const diceCounts = [result.dice_1, result.dice_2, result.dice_3].reduce((acc, val) => {
-        acc[val] = (acc[val] || 0) + 1;
-        return acc;
-      }, {});
-      
-      // Check for triplets
-      if (Object.values(diceCounts).includes(3)) {
-        const tripletBetAmount = parseFloat(
-          await redisClient.get(`k3:${durationKey}:${periodId}:matching_dice:triplet:${result.dice_1}`) || 0
-        );
-        totalPayout += tripletBetAmount * 30; // 30x for triplets
-      }
-      
-      // Check for pairs
-      const pairs = Object.entries(diceCounts).filter(([_, count]) => count === 2);
-      if (pairs.length > 0) {
-        const pairValue = pairs[0][0];
-        const pairBetAmount = parseFloat(
-          await redisClient.get(`k3:${durationKey}:${periodId}:matching_dice:pair:${pairValue}`) || 0
-        );
-        totalPayout += pairBetAmount * 15; // 15x for pairs
-      }
-      
-      // Calculate number pattern bets
-      const pattern = [result.dice_1, result.dice_2, result.dice_3].sort().join('');
-      const patternBetAmount = parseFloat(
-        await redisClient.get(`k3:${durationKey}:${periodId}:number_pattern:${pattern}`) || 0
-      );
-      totalPayout += patternBetAmount * 9; // 9x for number patterns
-      
-      break;
-  }
-  
-  return totalPayout;
-};
-
-/**
- * Store bet in Redis for real-time analysis
- * @param {string} gameType - Game type (wingo, fiveD, k3)
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period identifier
- * @param {string} betType - Type of bet (number, color, etc.)
- * @param {string} betCategory - Category of bet (A, B, etc. for 5D)
- * @param {string} betValue - Value that was bet on
- * @param {number} betAmount - Effective bet amount
- */
-const storeBetInRedis = async (
-  gameType, 
-  duration, 
-  periodId, 
-  betType, 
-  betCategory, 
-  betValue, 
-  betAmount
-) => {
-  try {
-    const durationKey = duration === 30 ? '30s' : 
-                        duration === 60 ? '1m' : 
-                        duration === 180 ? '3m' : 
-                        duration === 300 ? '5m' : '10m';
-    
-    // Build Redis key based on game type and bet details
-    let redisKey;
-    
-    switch (gameType) {
-      case 'trx_wix':
-        redisKey = `trx_wix:${durationKey}:${periodId}:${betType.toLowerCase()}:${betValue.toLowerCase()}`;
-        break;
-      
-      case 'fiveD':
-        if (['A', 'B', 'C', 'D', 'E'].includes(betCategory)) {
-          redisKey = `fiveD:${durationKey}:${periodId}:${betCategory}:${betType.toLowerCase()}:${betValue.toLowerCase()}`;
-        } else { // Sum bet
-          redisKey = `fiveD:${durationKey}:${periodId}:sum:${betType.toLowerCase()}:${betValue.toLowerCase()}`;
-        }
-        break;
-      
-      case 'k3':
-        if (betType === 'SUM') {
-          redisKey = `k3:${durationKey}:${periodId}:sum:${betValue}`;
-        } else if (betType === 'SUM_CATEGORY') {
-          redisKey = `k3:${durationKey}:${periodId}:sum_category:${betValue.toLowerCase()}`;
-        } else if (betType === 'MATCHING_DICE') {
-          redisKey = `k3:${durationKey}:${periodId}:matching_dice:${betCategory.toLowerCase()}:${betValue.toLowerCase()}`;
-        } else if (betType === 'NUMBER_PATTERN') {
-          redisKey = `k3:${durationKey}:${periodId}:number_pattern:${betValue.toLowerCase()}`;
-        }
-        break;
-    }
-    
-    // Update bet amount in Redis (increment)
-    await redisClient.incrByFloat(redisKey, betAmount);
-    
-    // Update total bet amount for this period
-    const totalKey = `${gameType}:${durationKey}:${periodId}:total`;
-    await redisClient.incrByFloat(totalKey, betAmount);
-    
-    // Set expiry for these keys (e.g., 24 hours)
-    const EXPIRY_SECONDS = 24 * 60 * 60;
-    await redisClient.expire(redisKey, EXPIRY_SECONDS);
-    await redisClient.expire(totalKey, EXPIRY_SECONDS);
-    
-    return true;
-  } catch (error) {
-    console.error('Error storing bet in Redis:', error);
-    return false;
-  }
-};
-
-/**
- * Process a bet on a game
- * @param {Object} betData - Bet data
- * @returns {Object} - Processing result
- */
-const processBet = async (betData) => {
-  const {
-    userId,
-    gameType,
-    duration,
-    periodId,
-    betType,
-    betCategory,
-    betValue,
-    betAmount
-  } = betData;
-  
-  const t = await sequelize.transaction();
-  
-  try {
-    // Ensure models are initialized
-    await ensureModelsInitialized();
-    
-    // Check if betting is frozen for this period
-    const frozen = await isBettingFrozen(gameType, duration, periodId);
-    if (frozen) {
-      await t.rollback();
-      return {
-        success: false,
-        message: 'Betting is frozen for this period'
-      };
-    }
-
-    // Validate bet before processing
-    const validation = await validateBet(betData);
-    if (!validation.valid) {
-      await t.rollback();
-      return {
-        success: false,
-        message: validation.message
-      };
-    }
-
-    // Check if period is still open for betting
-    const periodStatus = await getPeriodStatus(gameType, duration, periodId);
-    if (!periodStatus.active || periodStatus.timeRemaining < 5) { // 5 seconds safety margin
-      await t.rollback();
-      return {
-        success: false,
-        message: 'Betting for this period is closed'
-      };
-    }
-    
-    // Get user with locking to prevent race conditions
-    const user = await User.findByPk(userId, {
-      lock: true,
-      transaction: t
-    });
-    
-    if (!user) {
-      await t.rollback();
-      return {
-        success: false,
-        message: 'User not found'
-      };
-    }
-    
-    // Check if user has sufficient balance
-    if (parseFloat(user.wallet_balance) < parseFloat(betAmount)) {
-      await t.rollback();
-      return {
-        success: false,
-        message: 'Insufficient wallet balance'
-      };
-    }
-    
-    // Apply platform fee (2% of bet amount)
-    const fee = parseFloat(betAmount) * 0.02;
-    const effectiveBetAmount = parseFloat(betAmount) - fee;
-    
-    // Update user's wallet balance
-    const newBalance = parseFloat(user.wallet_balance) - parseFloat(betAmount);
-    await User.update(
-      { wallet_balance: newBalance },
-      { 
-        where: { user_id: userId },
-        transaction: t 
-      }
-    );
-
-    await referralService.recordBetExperience(userId, effectiveBetAmount);
-    
-    // Store bet in Redis for real-time analysis
-    await storeBetInRedis(
-      gameType,
-      duration,
-      periodId,
-      betType,
-      betCategory,
-      betValue,
-      effectiveBetAmount // Store the effective amount after fee
-    );
-    
-    // Create bet record in database
-    let betRecord;
-    
-    switch (gameType) {
-      case 'trx_wix':
-        betRecord = await BetRecordTrxWix.create({
-          user_id: userId,
-          period: periodId,
-          bet_type: `${betType}:${betValue}`,
-          bet_amount: betAmount,
-          odds: calculateOdds(gameType, betType, betValue),
-          status: 'pending'
-        }, { transaction: t });
-        break;
-      
-      case 'fiveD':
-        betRecord = await BetRecord5D.create({
-          user_id: userId,
-          period: periodId,
-          bet_type: `${betType}:${betValue}`,
-          bet_amount: betAmount,
-          odds: calculateOdds(gameType, betType, betValue),
-          status: 'pending'
-        }, { transaction: t });
-        break;
-      
-      case 'k3':
-        betRecord = await BetRecordK3.create({
-          user_id: userId,
-          period: periodId,
-          bet_type: `${betType}:${betValue}`,
-          bet_amount: betAmount,
-          odds: calculateOdds(gameType, betType, betValue),
-          status: 'pending'
-        }, { transaction: t });
-        break;
-    }
-    
-    await t.commit();
-    
-    return {
-      success: true,
-      message: 'Bet placed successfully',
-      betId: betRecord.bet_id,
-      newBalance
-    };
-  } catch (error) {
-    await t.rollback();
-    console.error('Error processing bet:', error);
-    
-    return {
-      success: false,
-      message: 'Server error processing bet'
-    };
-  }
-};
-/**
- * Calculate odds for a bet type
- * @param {string} gameType - Game type
- * @param {string} betType - Type of bet (NUMBER, COLOR, SIZE, etc.)
- * @param {string} betValue - Value of the bet
- * @returns {number} - Odds multiplier
- */
-const calculateOdds = (gameType, betType, betValue) => {
-  switch (gameType) {
-    case 'trx_wix':
-      if (betType === 'NUMBER') {
-        return 9.0; // 9x for number bets
-      } else if (betType === 'COLOR') {
-        if (betValue === 'violet') {
-          return 4.5; // 4.5x for violet
-        } else if (betValue === 'green_violet' || betValue === 'red_violet') {
-          return 2.0; // 2x for dual colors
-        } else {
-          return 2.0; // 2x for regular colors (red/green)
-        }
-      } else if (betType === 'SIZE') {
-        return 2.0; // 2x for big/small
-      } else if (betType === 'PARITY') {
-        return 2.0; // 2x for odd/even
-      }
-      break;
-      
-    case 'fiveD':
-      // 5D odds calculation
-      return 9.0; // Default
-      
-    case 'k3':
-      // K3 odds calculation
-      return 6.0; // Default
-  }
-  
-  return 1.0; // Default fallback
-};
-
-/**
- * Get active periods for a game type
- * @param {string} gameType - Game type
- * @returns {Array} - Active periods
- */
-const getActivePeriods = async (gameType) => {
-    try {
-        const now = new Date();
-        let activePeriods = [];
-
-        // Get current periods for each duration
-        if (gameType === 'wingo') {
-            activePeriods.push(await periodService.generatePeriodId(gameType, 30, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 60, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 180, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 300, now));
-        } else if (gameType === 'fiveD') {
-            activePeriods.push(await periodService.generatePeriodId(gameType, 60, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 180, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 300, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 600, now));
-        } else if (gameType === 'k3') {
-            activePeriods.push(await periodService.generatePeriodId(gameType, 60, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 180, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 300, now));
-            activePeriods.push(await periodService.generatePeriodId(gameType, 600, now));
-        }
-
-        // Add next periods if needed
-        activePeriods = await periodService.addPeriods(activePeriods, gameType, 30, now);
-        activePeriods = await periodService.addPeriods(activePeriods, gameType, 60, now);
-        activePeriods = await periodService.addPeriods(activePeriods, gameType, 180, now);
-        activePeriods = await periodService.addPeriods(activePeriods, gameType, 300, now);
-        if (gameType !== 'wingo') {
-            activePeriods = await periodService.addPeriods(activePeriods, gameType, 600, now);
-        }
-
-        return activePeriods;
-    } catch (error) {
-        logger.error('Error getting active periods:', {
-            error: error.message,
-            stack: error.stack,
-            gameType
-        });
-        return [];
-    }
-};
-
-/**
- * Get status of a period
- * @param {string} gameType - Game type
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period ID
- * @returns {Object} - Period status
- */
-const getPeriodStatus = periodService.getPeriodStatus;
-
-/**
- * Store temporary result in Redis
- * @param {string} gameType - Game type
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period ID
- * @param {Object} result - Result object
- */
-const storeTemporaryResult = async (gameType, duration, periodId, result) => {
-  try {
-  const durationKey = duration === 30 ? '30s' : 
-                      duration === 60 ? '1m' : 
-                      duration === 180 ? '3m' : 
-                      duration === 300 ? '5m' : '10m';
-  
-    // Key for individual result
-    const resultKey = `${gameType}:${durationKey}:${periodId}:result`;
-  
-    // Store the result in Redis
-    await redisClient.set(resultKey, JSON.stringify(result));
-  
-    // Set expiry for individual result (24 hours)
-    const EXPIRY_SECONDS = 24 * 60 * 60;
-    await redisClient.expire(resultKey, EXPIRY_SECONDS);
-    
-    // Safe handling of sorted set operations
-    try {
-      // Key for list of recent results
-      const listKey = `${gameType}:${durationKey}:recent_results`;
-      
-      // Check if zadd is available, some Redis clients have different method names
-      if (typeof redisClient.zAdd === 'function') {
-        // Add period ID to the sorted list (using timestamp as score for sorting)
-        const now = Date.now();
-        await redisClient.zAdd(listKey, { score: now, value: periodId });
-        
-        // Keep only the 10 most recent results in the sorted set
-        // Use the alternative zRemRangeByRank method if available
-        if (typeof redisClient.zRemRangeByRank === 'function') {
-          await redisClient.zRemRangeByRank(listKey, 0, -11);
-        }
-        
-        // Set expiry for the list itself (7 days)
-        await redisClient.expire(listKey, 7 * 24 * 60 * 60);
-      } else if (typeof redisClient.zadd === 'function') {
-        // Legacy Redis client
-        const now = Date.now();
-        await redisClient.zadd(listKey, now, periodId);
-        
-        // Keep only the 10 most recent results in the sorted set
-        await redisClient.zremrangebyrank(listKey, 0, -11);
-        
-        // Set expiry for the list itself (7 days)
-        await redisClient.expire(listKey, 7 * 24 * 60 * 60);
-      } else {
-        // Fallback to using a normal key if sorted sets are not available
-        const fallbackListKey = `${gameType}:${durationKey}:recent_results_list`;
-        const recentList = JSON.parse(await redisClient.get(fallbackListKey) || '[]');
-        
-        // Add new period to the list
-        recentList.push({
-          periodId,
-          timestamp: Date.now()
-        });
-        
-        // Keep only 10 most recent
-        const sortedList = recentList.sort((a, b) => b.timestamp - a.timestamp).slice(0, 10);
-        
-        // Save back to Redis
-        await redisClient.set(fallbackListKey, JSON.stringify(sortedList));
-        await redisClient.expire(fallbackListKey, 7 * 24 * 60 * 60);
-      }
-    } catch (redisError) {
-      console.error('Error with Redis sorted set operations:', redisError);
-      // Continue execution - the main result is still stored
-    }
-    
-    // Log successful storage
-    console.log(`Stored ${gameType} ${durationKey} result for period ${periodId} in Redis`);
-  
-  } catch (error) {
-    console.error('Error storing temporary result in Redis:', error);
-    // Still attempt to store the basic result even if our cleanup logic fails
-    const fallbackKey = `${gameType}:${duration}:${periodId}:result`;
-    
-    try {
-      await redisClient.set(fallbackKey, JSON.stringify(result));
-      await redisClient.expire(fallbackKey, 24 * 60 * 60);
-    } catch (finalError) {
-      console.error('Final fallback Redis storage also failed:', finalError);
-      // At this point we've done all we can - the DB record is still preserved
-    }
-  }
-};
-
-/**
- * Store minimum combinations for the current hour
- * @param {string} gameType - Game type
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period ID
- * @param {Array} combinations - Array of minimum combinations
- */
-const storeHourlyMinimumCombinations = async (gameType, duration, periodId, combinations) => {
-    try {
-        const durationKey = duration === 30 ? '30s' : 
-                          duration === 60 ? '1m' : 
-                          duration === 180 ? '3m' : 
-                          duration === 300 ? '5m' : '10m';
-
-        // Get current hour timestamp
-        const now = new Date();
-        const hourKey = now.toISOString().slice(0, 13); // Format: YYYY-MM-DDTHH
-
-        // Create Redis key for this hour's combinations
-        const hourlyKey = `${gameType}:${durationKey}:hourly:${hourKey}`;
-
-        // Store combinations with metadata
-        await redisClient.set(hourlyKey, JSON.stringify({
-            timestamp: now.toISOString(),
-            periodId,
-            combinations: combinations.slice(0, 3), // Store top 3 minimum combinations
-            gameType,
-            duration
-        }));
-
-        // Set expiry for 24 hours
-        const EXPIRY_SECONDS = 24 * 60 * 60;
-        await redisClient.expire(hourlyKey, EXPIRY_SECONDS);
-
-        logger.info('Stored hourly minimum combinations', {
-            gameType,
-            duration,
-            periodId,
-            hourKey,
-            combinations: combinations.slice(0, 3)
-        });
-
-    } catch (error) {
-        logger.error('Error storing hourly minimum combinations', {
-            error: error.message,
-            stack: error.stack,
-            gameType,
-            duration,
-            periodId
-        });
     }
 };
 
@@ -1928,139 +790,150 @@ const getAllMinimumCombinations = async (gameType) => {
 };
 
 /**
- * Calculate game result with TRON hash verification
+ * Check if minimum user requirement is met
  * @param {string} gameType - Game type
- * @param {string} duration - Game duration
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {Promise<boolean>} - Whether minimum requirement is met
+ */
+const checkMinimumUserRequirement = async (gameType, duration, periodId) => {
+    try {
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+        
+        // Get unique users who placed bets in this period
+        const uniqueUsers = new Set();
+        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
+        
+        for (const key of betKeys) {
+            const betData = await redisClient.get(key);
+            if (betData) {
+                const bet = JSON.parse(betData);
+                uniqueUsers.add(bet.userId);
+            }
+        }
+        
+        return uniqueUsers.size >= 10;
+    } catch (error) {
+        logger.error('Error checking minimum user requirement', {
+            error: error.message,
+            gameType,
+            periodId
+        });
+        return false;
+    }
+};
+
+/**
+ * Calculate result with verification
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
  * @param {string} periodId - Period ID
  * @returns {Promise<Object>} - Result with verification
  */
 const calculateResultWithVerification = async (gameType, duration, periodId) => {
     try {
-        // Calculate the result using existing logic
-        let result;
+        // Check minimum user requirement
+        const hasMinimumUsers = await checkMinimumUserRequirement(gameType, duration, periodId);
         
-        try {
-            result = await calculateOptimizedResult(gameType, duration, periodId);
-        } catch (calcError) {
-            logger.warn('Error calculating optimized result, using fallback', {
-                error: calcError.message,
-                gameType,
-                duration,
-                periodId
+        if (!hasMinimumUsers) {
+            // Get all bet combinations for this period
+            const durationKey = duration === 30 ? '30s' : 
+                              duration === 60 ? '1m' : 
+                              duration === 180 ? '3m' : 
+                              duration === 300 ? '5m' : '10m';
+            
+            // Get all possible results
+            const possibleResults = await generateAllPossibleResults(gameType);
+            
+            // Get all bet combinations from Redis
+            const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
+            const betCombinations = new Set();
+            
+            for (const key of betKeys) {
+                const betData = await redisClient.get(key);
+                if (betData) {
+                    const bet = JSON.parse(betData);
+                    betCombinations.add(JSON.stringify(bet.betType + ':' + bet.betValue));
+                }
+            }
+            
+            // Filter out results that would match any bet combinations
+            const safeResults = possibleResults.filter(result => {
+                // For each result, check if it would match any bet combination
+                for (const betCombo of betCombinations) {
+                    const [betType, betValue] = betCombo.split(':');
+                    if (checkBetWin({ bet_type: betType + ':' + betValue }, result, gameType)) {
+                        return false; // This result would match a bet, so exclude it
+                    }
+                }
+                return true; // This result doesn't match any bets
             });
             
-            // Fall back to generating a result directly based on game type
-            result = generateRandomResult(gameType);
+            // If we have safe results, randomly select one
+            if (safeResults.length > 0) {
+                const randomIndex = Math.floor(Math.random() * safeResults.length);
+                const safeResult = safeResults[randomIndex];
+                
+                logger.info('Selected safe result for insufficient users', {
+                    gameType,
+                    periodId,
+                    safeResult,
+                    betCombinations: Array.from(betCombinations)
+                });
+                
+                return {
+                    success: true,
+                    result: safeResult,
+                    allUsersLose: true,
+                    verification: {
+                        hash: Math.random().toString(36).substring(2, 15), // Generate random hash
+                        link: 'https://tronscan.org/' // Default verification link
+                    }
+                };
+            } else {
+                // If somehow no safe results (shouldn't happen), use fallback
+                const fallbackResult = generateRandomResult(gameType);
+                logger.warn('No safe results found, using fallback', {
+                    gameType,
+                    periodId,
+                    fallbackResult
+                });
+                
+                return {
+                    success: true,
+                    result: fallbackResult,
+                    allUsersLose: true,
+                    verification: {
+                        hash: Math.random().toString(36).substring(2, 15),
+                        link: 'https://tronscan.org/'
+                    }
+                };
+            }
         }
         
-        // Extract the actual result from the optimization result
-        let gameResult;
-        if (result && result.optimalResult && result.optimalResult.result) {
-            gameResult = result.optimalResult.result;
-        } else if (result && result.result) {
-            gameResult = result.result;
-        } else {
-            // Create a default game result if everything else fails
-            gameResult = generateRandomResult(gameType);
-        }
-        
-        // Ensure result has required fields based on game type
-        switch (gameType.toLowerCase()) {
-                case 'wingo':
-                case 'trx_wix':
-                if (!gameResult.number || !gameResult.color || !gameResult.size) {
-                    gameResult = {
-                        number: gameResult.number || Math.floor(Math.random() * 10),
-                        color: gameResult.color || ['red', 'green', 'violet', 'green_violet'][Math.floor(Math.random() * 4)],
-                        size: gameResult.size || (gameResult.number >= 5 ? 'Big' : 'Small')
-                    };
-                }
-                    break;
-            case 'fived':
-            case '5d':
-                if (!gameResult.A || !gameResult.B || !gameResult.C || !gameResult.D || !gameResult.E) {
-                    const numbers = Array(5).fill(0).map(() => Math.floor(Math.random() * 10));
-                    gameResult = {
-                        A: numbers[0],
-                        B: numbers[1],
-                        C: numbers[2],
-                        D: numbers[3],
-                        E: numbers[4],
-                        sum: numbers.reduce((a, b) => a + b, 0),
-                        time: duration
-                    };
-                }
-                    break;
-                case 'k3':
-                if (!gameResult.dice_1 || !gameResult.dice_2 || !gameResult.dice_3) {
-                    const dice = Array(3).fill(0).map(() => Math.floor(Math.random() * 6) + 1);
-                    const sum = dice.reduce((a, b) => a + b, 0);
-                    gameResult = { 
-                        dice_1: dice[0],
-                        dice_2: dice[1],
-                        dice_3: dice[2],
-                        sum: sum,
-                        has_pair: new Set(dice).size === 2,
-                        has_triple: new Set(dice).size === 1,
-                        is_straight: new Set(dice).size === 3 && Math.max(...dice) - Math.min(...dice) === 2,
-                        sum_size: sum >= 11 ? 'Big' : 'Small',
-                        sum_parity: sum % 2 === 0 ? 'Even' : 'Odd',
-                        time: duration
-                    };
-                }
-                    break;
-        }
-        
-        // Get verification hash for the result
-        let numberForVerification;
-        switch (gameType.toLowerCase()) {
-            case 'wingo':
-            case 'trx_wix':
-            numberForVerification = gameResult.number;
-                break;
-            case 'fived':
-            case '5d':
-            numberForVerification = gameResult.sum % 10; // Use last digit of sum
-                break;
-            case 'k3':
-            numberForVerification = gameResult.sum % 10; // Use last digit of sum
-                break;
-            default:
-                throw new Error(`Invalid game type: ${gameType}`);
-        }
-        
-        const verification = await tronHashService.getResultWithVerification(numberForVerification);
-        
-        // Log the result with verification
-        logger.info('Game result with verification', {
-            gameType,
-            duration,
-            periodId,
-            result: verification
-        });
+        // Normal result calculation if minimum users requirement is met
+        const result = await calculateOptimizedResult(gameType, duration, periodId);
+        const verification = await tronHashService.getResultWithVerification(result.optimalResult);
         
         return {
             success: true,
-            result: gameResult,
-            verification: verification
+            result: result.optimalResult.result,
+            verification: {
+                hash: verification.hash,
+                link: verification.link
+            },
+            allUsersLose: false
         };
     } catch (error) {
         logger.error('Error calculating result with verification', {
             error: error.message,
-            stack: error.stack,
             gameType,
-            duration,
             periodId
         });
-        
-        // As a last resort, return a simple valid result based on game type
-        const defaultResult = generateRandomResult(gameType);
-        
-        return {
-            success: false,
-            message: error.message,
-            result: defaultResult
-        };
+        throw error;
     }
 };
 
@@ -2088,31 +961,21 @@ const endRound = async (gameType, duration, periodId) => {
         logger.info('Ending round', {
             gameType,
             duration,
-            periodId,
-            timestamp: new Date().toISOString()
+            periodId
         });
 
-        // Get the result with verification
+        // Calculate result with verification
         const resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId);
-        if (!resultWithVerification.success) {
-            throw new Error('Failed to calculate result with verification');
-        }
-
-        // Process game results (save to database and update Redis)
-        const processResult = await processGameResults(gameType, duration, periodId);
-        if (!processResult.success) {
-            throw new Error('Failed to process game results');
+        
+        // Process winners
+        let winners = [];
+        if (!resultWithVerification.allUsersLose) {
+            winners = await processWinningBets(gameType, duration, periodId, resultWithVerification.result);
+        } else {
+            // Mark all bets as lost
+            await markAllBetsAsLost(gameType, periodId);
         }
         
-        // Store the result with verification in Redis
-        await storeTemporaryResult(gameType, duration, periodId, resultWithVerification);
-        
-        // Process winning bets
-        const winners = await processWinningBets(gameType, duration, periodId, resultWithVerification.result);
-        if (!winners) {
-            throw new Error('Failed to process winning bets');
-        }
-
         // Update game history
         await updateGameHistory(gameType, duration, periodId, resultWithVerification.result);
         
@@ -2126,17 +989,16 @@ const endRound = async (gameType, duration, periodId) => {
             periodId,
             result: resultWithVerification.result,
             winnersCount: winners.length,
+            allUsersLose: resultWithVerification.allUsersLose,
             timestamp: new Date().toISOString()
         });
         
         return {
             success: true,
             result: resultWithVerification.result,
-            verification: {
-                hash: resultWithVerification.hash,
-                link: resultWithVerification.link
-            },
-            winners
+            verification: resultWithVerification.verification,
+            winners,
+            allUsersLose: resultWithVerification.allUsersLose
         };
     } catch (error) {
         logger.error('Error ending round', {
@@ -2150,6 +1012,45 @@ const endRound = async (gameType, duration, periodId) => {
             success: false,
             message: error.message
         };
+    }
+};
+
+/**
+ * Mark all bets as lost for a period
+ * @param {string} gameType - Game type
+ * @param {string} periodId - Period ID
+ */
+const markAllBetsAsLost = async (gameType, periodId) => {
+    try {
+        let BetRecord;
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+                BetRecord = BetRecordWingo;
+                break;
+            case 'trx_wix':
+                BetRecord = BetRecordTrxWix;
+                break;
+            case 'fiveD':
+                BetRecord = BetRecord5D;
+                break;
+            case 'k3':
+                BetRecord = BetRecordK3;
+                break;
+            default:
+                throw new Error('Invalid game type');
+        }
+
+        await BetRecord.update(
+            { status: 'lost' },
+            { where: { period: periodId, status: 'pending' } }
+        );
+    } catch (error) {
+        logger.error('Error marking all bets as lost', {
+            error: error.message,
+            gameType,
+            periodId
+        });
+        throw error;
     }
 };
 
@@ -2472,7 +1373,7 @@ const processGameResults = async (gameType, duration, periodId) => {
         
     try {
         logger.info(`Processing game results for period ${periodId}`, {
-                gameType, 
+            gameType, 
             duration
         });
 
@@ -2486,9 +1387,9 @@ const processGameResults = async (gameType, duration, periodId) => {
             case 'wingo':
                 savedResult = await BetResultWingo.create({
                     bet_number: periodId,
-                    result_of_number: result.number,
-                    result_of_size: result.size,
-                    result_of_color: result.color,
+                    result_of_number: result.result.number,
+                    result_of_size: result.result.size,
+                    result_of_color: result.result.color,
                     duration: duration,
                     timeline: new Date().toISOString()
                 }, { transaction: t });
@@ -2496,12 +1397,12 @@ const processGameResults = async (gameType, duration, periodId) => {
             case 'fiveD':
                 savedResult = await BetResult5D.create({
                     bet_number: periodId,
-                    result_a: result.A,
-                    result_b: result.B,
-                    result_c: result.C,
-                    result_d: result.D,
-                    result_e: result.E,
-                    total_sum: result.sum,
+                    result_a: result.result.A,
+                    result_b: result.result.B,
+                    result_c: result.result.C,
+                    result_d: result.result.D,
+                    result_e: result.result.E,
+                    total_sum: result.result.sum,
                     duration: duration,
                     timeline: new Date().toISOString()
                 }, { transaction: t });
@@ -2509,15 +1410,15 @@ const processGameResults = async (gameType, duration, periodId) => {
             case 'k3':
                 savedResult = await BetResultK3.create({
                     bet_number: periodId,
-                    dice_1: result.dice_1,
-                    dice_2: result.dice_2,
-                    dice_3: result.dice_3,
-                    sum: result.sum,
-                    has_pair: result.has_pair,
-                    has_triple: result.has_triple,
-                    is_straight: result.is_straight,
-                    sum_size: result.sum_size,
-                    sum_parity: result.sum_parity,
+                    dice_1: result.result.dice_1,
+                    dice_2: result.result.dice_2,
+                    dice_3: result.result.dice_3,
+                    sum: result.result.sum,
+                    has_pair: result.result.has_pair,
+                    has_triple: result.result.has_triple,
+                    is_straight: result.result.is_straight,
+                    sum_size: result.result.sum_size,
+                    sum_parity: result.result.sum_parity,
                     duration: duration,
                     timeline: new Date().toISOString()
                 }, { transaction: t });
@@ -2525,7 +1426,7 @@ const processGameResults = async (gameType, duration, periodId) => {
             case 'trx_wix':
                 savedResult = await BetResultTrxWix.create({
                     period: periodId,
-                    result: result.result,
+                    result: result.result, // Store the result object directly, not stringified
                     verification_hash: result.verification?.hash || '',
                     verification_link: result.verification?.link || '',
                     duration: duration,
@@ -2685,22 +1586,31 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
  */
 const checkBetWin = (bet, result, gameType) => {
     try {
-    const [betType, betValue] = bet.bet_type.split(':');
-    
+        const [betType, betValue] = bet.bet_type.split(':');
+        
         switch (gameType.toLowerCase()) {
             case 'wingo':
-        case 'trx_wix':
-            if (betType === 'NUMBER') {
-                return result.number === parseInt(betValue);
-            } else if (betType === 'COLOR') {
-                return result.color.toLowerCase() === betValue.toLowerCase();
-            } else if (betType === 'SIZE') {
-                return result.size.toLowerCase() === betValue.toLowerCase();
-            } else if (betType === 'PARITY') {
-                const isEven = result.number % 2 === 0;
-                return (isEven && betValue === 'even') || (!isEven && betValue === 'odd');
-            }
-            break;
+            case 'trx_wix':
+                if (betType === 'NUMBER') {
+                    return result.number === parseInt(betValue);
+                } else if (betType === 'COLOR') {
+                    // Handle mixed color cases
+                    if (betValue === 'green' && result.color === 'green_violet') {
+                        bet.odds = 1.5; // Set odds to 1.5x for mixed color win
+                        return true;
+                    } else if (betValue === 'red' && result.color === 'red_violet') {
+                        bet.odds = 1.5; // Set odds to 1.5x for mixed color win
+                        return true;
+                    }
+                    // Normal color match
+                    return result.color.toLowerCase() === betValue.toLowerCase();
+                } else if (betType === 'SIZE') {
+                    return result.size.toLowerCase() === betValue.toLowerCase();
+                } else if (betType === 'PARITY') {
+                    const isEven = result.number % 2 === 0;
+                    return (isEven && betValue === 'even') || (!isEven && betValue === 'odd');
+                }
+                break;
             
             case 'fived':
             case '5d':
@@ -2767,7 +1677,7 @@ const checkBetWin = (bet, result, gameType) => {
  */
 const calculateWinnings = (bet, gameType) => {
     try {
-    const odds = bet.odds || calculateOdds(gameType, bet.bet_type.split(':')[0], bet.bet_type.split(':')[1]);
+        const odds = bet.odds || calculateOdds(gameType, bet.bet_type.split(':')[0], bet.bet_type.split(':')[1]);
         const winnings = bet.bet_amount * odds;
         
         logger.info('Calculated winnings', {
@@ -3249,6 +2159,941 @@ function validateResultStructure(result, gameType) {
 
     return errors;
 }
+
+/**
+ * Get minimum bet result for a period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {Object} - Minimum bet result
+ */
+const getMinimumBetResult = async (gameType, duration, periodId) => {
+    try {
+        // Get duration key
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+
+        // Get pre-calculated results
+        const preCalculated = await getPreCalculatedResults(gameType, duration, periodId);
+        
+        if (!preCalculated || !preCalculated.lowestCombinations || preCalculated.lowestCombinations.length === 0) {
+            // If no pre-calculated results, generate a random result
+            return generateRandomResult(gameType);
+        }
+
+        // Get the first (lowest) combination
+        const lowestCombination = preCalculated.lowestCombinations[0];
+        
+        logger.info('Retrieved minimum bet result', {
+            gameType,
+            duration,
+            periodId,
+            result: lowestCombination.result
+        });
+
+        return lowestCombination.result;
+    } catch (error) {
+        logger.error('Error getting minimum bet result', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+        
+        // Fallback to random result if there's an error
+        return generateRandomResult(gameType);
+    }
+};
+
+/**
+ * Calculate optimized result for a game period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {Object} - Optimized result with verification
+ */
+const calculateOptimizedResult = async (gameType, duration, periodId) => {
+    try {
+        // Get duration key
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+
+        // Get all possible results
+        const possibleResults = await generateAllPossibleResults(gameType);
+        
+        // Calculate expected payout for each result
+        const resultsWithPayouts = await Promise.all(possibleResults.map(async (result) => {
+            const expectedPayout = await calculateExpectedPayout(gameType, durationKey, periodId, result);
+            return {
+                result,
+                expectedPayout
+            };
+        }));
+
+        // Sort by expected payout (ascending)
+        resultsWithPayouts.sort((a, b) => a.expectedPayout - b.expectedPayout);
+
+        // Get the result with the lowest expected payout
+        const optimalResult = resultsWithPayouts[0];
+
+        // Validate the result against 60/40 criteria
+        const validation = await validate60_40Result(optimalResult, gameType);
+        
+        if (!validation.isSafe) {
+            logger.warn('Optimal result failed 60/40 validation', {
+                gameType,
+                duration,
+                periodId,
+                validation
+            });
+            
+            // Try to find a safe result
+            const safeResult = resultsWithPayouts.find(r => 
+                r.expectedPayout <= optimalResult.expectedPayout * 1.1 // Allow 10% more payout
+            );
+            
+            if (safeResult) {
+                return {
+                    optimalResult: safeResult,
+                    validation: await validate60_40Result(safeResult, gameType)
+                };
+            }
+        }
+
+        logger.info('Calculated optimized result', {
+            gameType,
+            duration,
+            periodId,
+            expectedPayout: optimalResult.expectedPayout,
+            validation
+        });
+
+        return {
+            optimalResult,
+            validation
+        };
+    } catch (error) {
+        logger.error('Error calculating optimized result', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+        
+        // Fallback to random result if calculation fails
+        const fallbackResult = generateRandomResult(gameType);
+        return {
+            optimalResult: {
+                result: fallbackResult,
+                expectedPayout: 0
+            },
+            validation: {
+                isSafe: true,
+                warnings: ['Using fallback result due to calculation error']
+            }
+        };
+    }
+};
+
+/**
+ * Validate a fallback result for a game type
+ * @param {Object} result - Result to validate
+ * @param {string} gameType - Game type
+ * @returns {Object} - Validation result
+ */
+const validateFallbackResult = async (result, gameType) => {
+    try {
+        const warnings = [];
+        
+        if (!result) {
+            return { isSafe: false, warnings: ['Result is null or undefined'] };
+        }
+
+        // Validate result structure based on game type
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                if (typeof result.number !== 'number' || result.number < 0 || result.number > 9) {
+                    warnings.push('Invalid number in result');
+                }
+                if (!['big', 'small'].includes(result.size?.toLowerCase())) {
+                    warnings.push('Invalid size in result');
+                }
+                if (!['red', 'green', 'red_violet', 'green_violet'].includes(result.color?.toLowerCase())) {
+                    warnings.push('Invalid color in result');
+                }
+                break;
+
+            case 'fived':
+            case '5d':
+                if (!Array.isArray([result.A, result.B, result.C, result.D, result.E])) {
+                    warnings.push('Invalid dice results');
+                }
+                if (typeof result.sum !== 'number') {
+                    warnings.push('Invalid sum in result');
+                }
+                // Validate each dice value
+                ['A', 'B', 'C', 'D', 'E'].forEach(dice => {
+                    if (typeof result[dice] !== 'number' || result[dice] < 1 || result[dice] > 6) {
+                        warnings.push(`Invalid value for dice ${dice}`);
+                    }
+                });
+                break;
+
+            case 'k3':
+                if (!Array.isArray([result.dice_1, result.dice_2, result.dice_3])) {
+                    warnings.push('Invalid dice results');
+                }
+                if (typeof result.sum !== 'number') {
+                    warnings.push('Invalid sum in result');
+                }
+                if (typeof result.has_pair !== 'boolean') {
+                    warnings.push('Invalid pair status');
+                }
+                if (typeof result.has_triple !== 'boolean') {
+                    warnings.push('Invalid triple status');
+                }
+                if (typeof result.is_straight !== 'boolean') {
+                    warnings.push('Invalid straight status');
+                }
+                // Validate each dice value
+                ['dice_1', 'dice_2', 'dice_3'].forEach(dice => {
+                    if (typeof result[dice] !== 'number' || result[dice] < 1 || result[dice] > 6) {
+                        warnings.push(`Invalid value for ${dice}`);
+                    }
+                });
+                break;
+
+            default:
+                warnings.push(`Unsupported game type: ${gameType}`);
+        }
+
+        // Additional validation for all game types
+        if (result.verificationHash && typeof result.verificationHash !== 'string') {
+            warnings.push('Invalid verification hash format');
+        }
+
+        if (result.verificationLink && typeof result.verificationLink !== 'string') {
+            warnings.push('Invalid verification link format');
+        }
+
+        // Check for any suspicious patterns
+        if (await checkSuspiciousPatterns(result, gameType)) {
+            warnings.push('Suspicious result pattern detected');
+        }
+
+        return {
+            isSafe: warnings.length === 0,
+            warnings
+        };
+    } catch (error) {
+        logger.error('Error validating fallback result', {
+            error: error.message,
+            stack: error.stack,
+            gameType
+        });
+        return {
+            isSafe: false,
+            warnings: ['Error during validation: ' + error.message]
+        };
+    }
+};
+
+/**
+ * Check for suspicious patterns in a result
+ * @param {Object} result - Result to check
+ * @param {string} gameType - Game type
+ * @returns {boolean} - Whether suspicious patterns were found
+ */
+const checkSuspiciousPatterns = async (result, gameType) => {
+    try {
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                // Check for repeated numbers
+                const lastResults = await getLastResults(gameType, 5);
+                if (lastResults.some(r => r.number === result.number)) {
+                    return true;
+                }
+                break;
+
+            case 'fived':
+            case '5d':
+                // Check for all same numbers
+                if (result.A === result.B && result.B === result.C && 
+                    result.C === result.D && result.D === result.E) {
+                    return true;
+                }
+                break;
+
+            case 'k3':
+                // Check for all same numbers
+                if (result.dice_1 === result.dice_2 && 
+                    result.dice_2 === result.dice_3) {
+                    return true;
+                }
+                break;
+        }
+        return false;
+    } catch (error) {
+        logger.error('Error checking suspicious patterns', {
+            error: error.message,
+            stack: error.stack,
+            gameType
+        });
+        return false;
+    }
+};
+
+/**
+ * Generate a fallback result for a game type
+ * @param {string} gameType - Game type
+ * @returns {Object} - Generated fallback result
+ */
+const generateFallbackResult = async (gameType) => {
+    try {
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                return {
+                    number: Math.floor(Math.random() * 10), // 0-9
+                    size: Math.random() < 0.5 ? 'big' : 'small',
+                    color: ['red', 'green', 'red_violet', 'green_violet'][Math.floor(Math.random() * 4)]
+                };
+
+            case 'fived':
+            case '5d':
+                const dice = Array(5).fill(0).map(() => Math.floor(Math.random() * 6) + 1); // 1-6
+                return {
+                    A: dice[0],
+                    B: dice[1],
+                    C: dice[2],
+                    D: dice[3],
+                    E: dice[4],
+                    sum: dice.reduce((a, b) => a + b, 0)
+                };
+
+            case 'k3':
+                const k3Dice = Array(3).fill(0).map(() => Math.floor(Math.random() * 6) + 1); // 1-6
+                const sum = k3Dice.reduce((a, b) => a + b, 0);
+                const counts = k3Dice.reduce((acc, val) => {
+                    acc[val] = (acc[val] || 0) + 1;
+                    return acc;
+                }, {});
+                
+                return {
+                    dice_1: k3Dice[0],
+                    dice_2: k3Dice[1],
+                    dice_3: k3Dice[2],
+                    sum: sum,
+                    has_pair: Object.values(counts).includes(2),
+                    has_triple: Object.values(counts).includes(3),
+                    is_straight: k3Dice.sort().every((val, idx, arr) => 
+                        idx === 0 || val === arr[idx - 1] + 1
+                    ),
+                    sum_size: sum > 10 ? 'big' : 'small',
+                    sum_parity: sum % 2 === 0 ? 'even' : 'odd'
+                };
+
+            default:
+                throw new Error(`Unsupported game type: ${gameType}`);
+        }
+    } catch (error) {
+        logger.error('Error generating fallback result', {
+            error: error.message,
+            stack: error.stack,
+            gameType
+        });
+        throw error;
+    }
+};
+
+/**
+ * Generate a random result for a game type
+ * @param {string} gameType - Game type
+ * @returns {Object} - Generated random result
+ */
+const generateRandomResult = async (gameType) => {
+    try {
+        logger.info('Generating random result', { gameType });
+
+        let result;
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                result = {
+                    number: Math.floor(Math.random() * 10), // 0-9
+                    size: Math.random() < 0.5 ? 'big' : 'small',
+                    color: ['red', 'green', 'red_violet', 'green_violet'][Math.floor(Math.random() * 4)]
+                };
+                break;
+
+            case 'fived':
+            case '5d':
+                const dice = Array(5).fill(0).map(() => Math.floor(Math.random() * 6) + 1); // 1-6
+                result = {
+                    A: dice[0],
+                    B: dice[1],
+                    C: dice[2],
+                    D: dice[3],
+                    E: dice[4],
+                    sum: dice.reduce((a, b) => a + b, 0)
+                };
+                break;
+
+            case 'k3':
+                const k3Dice = Array(3).fill(0).map(() => Math.floor(Math.random() * 6) + 1); // 1-6
+                const sum = k3Dice.reduce((a, b) => a + b, 0);
+                const counts = k3Dice.reduce((acc, val) => {
+                    acc[val] = (acc[val] || 0) + 1;
+                    return acc;
+                }, {});
+                
+                result = {
+                    dice_1: k3Dice[0],
+                    dice_2: k3Dice[1],
+                    dice_3: k3Dice[2],
+                    sum: sum,
+                    has_pair: Object.values(counts).includes(2),
+                    has_triple: Object.values(counts).includes(3),
+                    is_straight: k3Dice.sort().every((val, idx, arr) => 
+                        idx === 0 || val === arr[idx - 1] + 1
+                    ),
+                    sum_size: sum > 10 ? 'big' : 'small',
+                    sum_parity: sum % 2 === 0 ? 'even' : 'odd'
+                };
+                break;
+
+            default:
+                throw new Error(`Unsupported game type: ${gameType}`);
+        }
+
+        // Validate the generated result
+        const validation = await validateFallbackResult(result, gameType);
+        if (!validation.isSafe) {
+            logger.warn('Generated random result failed validation, regenerating', {
+                gameType,
+                validation
+            });
+            return generateRandomResult(gameType); // Recursively try again
+        }
+
+        logger.info('Successfully generated random result', {
+            gameType,
+            result
+        });
+
+        return result;
+    } catch (error) {
+        logger.error('Error generating random result', {
+            error: error.message,
+            stack: error.stack,
+            gameType
+        });
+        throw error;
+    }
+};
+
+/**
+ * Generate all possible results for a game type
+ * @param {string} gameType - Game type
+ * @returns {Array} - Array of all possible results
+ */
+const generateAllPossibleResults = async (gameType) => {
+    try {
+        logger.info('Generating all possible results', { gameType });
+
+        let results = [];
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                // Generate all combinations of number, size, and color
+                for (let number = 0; number <= 9; number++) {
+                    for (const size of ['big', 'small']) {
+                        for (const color of ['red', 'green', 'red_violet', 'green_violet']) {
+                            results.push({
+                                number,
+                                size,
+                                color
+                            });
+                        }
+                    }
+                }
+                break;
+
+            case 'fived':
+            case '5d':
+                // Generate all possible combinations of 5 dice
+                for (let a = 1; a <= 6; a++) {
+                    for (let b = 1; b <= 6; b++) {
+                        for (let c = 1; c <= 6; c++) {
+                            for (let d = 1; d <= 6; d++) {
+                                for (let e = 1; e <= 6; e++) {
+                                    results.push({
+                                        A: a,
+                                        B: b,
+                                        C: c,
+                                        D: d,
+                                        E: e,
+                                        sum: a + b + c + d + e
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+
+            case 'k3':
+                // Generate all possible combinations of 3 dice
+                for (let d1 = 1; d1 <= 6; d1++) {
+                    for (let d2 = 1; d2 <= 6; d2++) {
+                        for (let d3 = 1; d3 <= 6; d3++) {
+                            const sum = d1 + d2 + d3;
+                            const counts = [d1, d2, d3].reduce((acc, val) => {
+                                acc[val] = (acc[val] || 0) + 1;
+                                return acc;
+                            }, {});
+                            
+                            results.push({
+                                dice_1: d1,
+                                dice_2: d2,
+                                dice_3: d3,
+                                sum: sum,
+                                has_pair: Object.values(counts).includes(2),
+                                has_triple: Object.values(counts).includes(3),
+                                is_straight: [d1, d2, d3].sort().every((val, idx, arr) => 
+                                    idx === 0 || val === arr[idx - 1] + 1
+                                ),
+                                sum_size: sum > 10 ? 'big' : 'small',
+                                sum_parity: sum % 2 === 0 ? 'even' : 'odd'
+                            });
+                        }
+                    }
+                }
+                break;
+
+            default:
+                throw new Error(`Unsupported game type: ${gameType}`);
+        }
+
+        logger.info('Generated all possible results', {
+            gameType,
+            resultCount: results.length
+        });
+
+        return results;
+    } catch (error) {
+        logger.error('Error generating all possible results', {
+            error: error.message,
+            stack: error.stack,
+            gameType
+        });
+        throw error;
+    }
+};
+
+/**
+ * Calculate expected payout for a potential result
+ * @param {string} gameType - Game type
+ * @param {string} durationKey - Duration key (30s, 1m, 3m, 5m, 10m)
+ * @param {string} periodId - Period ID
+ * @param {Object} result - Potential result to calculate payout for
+ * @returns {number} - Expected payout amount
+ */
+const calculateExpectedPayout = async (gameType, durationKey, periodId, result) => {
+    try {
+        logger.info('Calculating expected payout', {
+            gameType,
+            durationKey,
+            periodId,
+            result
+        });
+
+        // Get all bets for this period
+        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
+        let totalPayout = 0;
+
+        for (const key of betKeys) {
+            const betData = await redisClient.get(key);
+            if (!betData) continue;
+
+            const bet = JSON.parse(betData);
+            const [betType, betValue] = bet.bet_type.split(':');
+
+            // Check if this bet would win with the given result
+            const isWinner = checkBetWin(bet, result, gameType);
+            if (isWinner) {
+                // Calculate winnings for this bet
+                const winnings = calculateWinnings(bet, gameType);
+                totalPayout += winnings;
+            }
+        }
+
+        logger.info('Calculated expected payout', {
+            gameType,
+            durationKey,
+            periodId,
+            totalPayout
+        });
+
+        return totalPayout;
+    } catch (error) {
+        logger.error('Error calculating expected payout', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            durationKey,
+            periodId
+        });
+        return 0;
+    }
+};
+
+/**
+ * Store a bet in Redis
+ * @param {Object} betData - Bet data to store
+ * @returns {Promise<boolean>} - Whether storage was successful
+ */
+const storeBetInRedis = async (betData) => {
+    try {
+        const {
+            userId,
+            gameType,
+            duration,
+            periodId,
+            betType,
+            betValue,
+            betAmount,
+            odds
+        } = betData;
+
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+
+        // Create Redis key for this bet
+        const betKey = `${gameType}:${durationKey}:${periodId}:${userId}:${betType}:${betValue}`;
+        
+        // Store bet data
+        await redisClient.set(betKey, JSON.stringify({
+            userId,
+            betType,
+            betValue,
+            betAmount,
+            odds,
+            timestamp: Date.now()
+        }));
+
+        // Update total bet amount for this period
+        const totalKey = `${gameType}:${durationKey}:${periodId}:total`;
+        await redisClient.incrbyfloat(totalKey, betAmount);
+
+        // Set expiry for bet data (24 hours)
+        await redisClient.expire(betKey, 86400);
+        await redisClient.expire(totalKey, 86400);
+
+        logger.info('Bet stored in Redis', {
+            gameType,
+            duration,
+            periodId,
+            userId,
+            betType,
+            betValue,
+            betAmount
+        });
+
+        return true;
+    } catch (error) {
+        logger.error('Error storing bet in Redis', {
+            error: error.message,
+            stack: error.stack,
+            betData
+        });
+        return false;
+    }
+};
+
+/**
+ * Process a bet
+ * @param {Object} betData - Bet data to process
+ * @returns {Promise<Object>} - Processing result
+ */
+const processBet = async (betData) => {
+    try {
+        // Validate bet
+        const validation = await validateBet(betData);
+        if (!validation.valid) {
+            return {
+                success: false,
+                message: validation.message
+            };
+        }
+
+        // Store bet in Redis
+        const stored = await storeBetInRedis(betData);
+        if (!stored) {
+            return {
+                success: false,
+                message: 'Failed to store bet'
+            };
+        }
+
+        // Update user's bet count
+        const betCount = await getUserBetCount(betData.userId, betData.gameType, betData.periodId);
+        
+        // Deduct bet amount from user's balance
+        await User.decrement('wallet_balance', {
+            by: betData.betAmount,
+            where: { user_id: betData.userId }
+        });
+
+        logger.info('Bet processed successfully', {
+            userId: betData.userId,
+            gameType: betData.gameType,
+            periodId: betData.periodId,
+            betAmount: betData.betAmount
+        });
+
+        return {
+            success: true,
+            message: 'Bet processed successfully',
+            betCount: betCount + 1
+        };
+    } catch (error) {
+        logger.error('Error processing bet', {
+            error: error.message,
+            stack: error.stack,
+            betData
+        });
+        return {
+            success: false,
+            message: 'Error processing bet'
+        };
+    }
+};
+
+/**
+ * Calculate odds for a bet type
+ * @param {string} gameType - Game type
+ * @param {string} betType - Type of bet
+ * @param {string} betValue - Value bet on
+ * @returns {number} - Calculated odds
+ */
+const calculateOdds = (gameType, betType, betValue) => {
+    try {
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                switch (betType) {
+                    case 'NUMBER':
+                        return 9.0; // 1:9 odds for specific number
+                    case 'COLOR':
+                        return betValue === 'red_violet' || betValue === 'green_violet' ? 1.5 : 2.0;
+                    case 'SIZE':
+                        return 2.0;
+                    case 'PARITY':
+                        return 2.0;
+                    default:
+                        return 1.0;
+                }
+
+            case 'fived':
+            case '5d':
+                switch (betType) {
+                    case 'POSITION':
+                        return 6.0; // 1:6 odds for specific position
+                    case 'SUM':
+                        return 10.0; // 1:10 odds for specific sum
+                    case 'DRAGON_TIGER':
+                        return 2.0;
+                    default:
+                        return 1.0;
+                }
+
+            case 'k3':
+                switch (betType) {
+                    case 'SUM':
+                        return 10.0;
+                    case 'MATCHING_DICE':
+                        return betValue === 'triplet' ? 30.0 : 3.0;
+                    case 'STRAIGHT':
+                        return 6.0;
+                    case 'SIZE':
+                        return 2.0;
+                    case 'PARITY':
+                        return 2.0;
+                    default:
+                        return 1.0;
+                }
+
+            default:
+                return 1.0;
+        }
+    } catch (error) {
+        logger.error('Error calculating odds', {
+            error: error.message,
+            gameType,
+            betType,
+            betValue
+        });
+        return 1.0;
+    }
+};
+
+/**
+ * Get active periods for a game type
+ * @param {string} gameType - Game type
+ * @returns {Promise<Array>} - Array of active periods
+ */
+const getActivePeriods = async (gameType) => {
+    try {
+        const activePeriods = [];
+        const durations = [30, 60, 180, 300, 600];
+
+        for (const duration of durations) {
+            const durationKey = duration === 30 ? '30s' : 
+                              duration === 60 ? '1m' : 
+                              duration === 180 ? '3m' : 
+                              duration === 300 ? '5m' : '10m';
+
+            // Get current period
+            const currentPeriod = await periodService.getCurrentPeriod(gameType, duration);
+            if (currentPeriod) {
+                activePeriods.push({
+                    gameType,
+                    duration,
+                    periodId: currentPeriod.periodId,
+                    startTime: currentPeriod.startTime,
+                    endTime: currentPeriod.endTime,
+                    timeRemaining: currentPeriod.timeRemaining
+                });
+            }
+        }
+
+        return activePeriods;
+    } catch (error) {
+        logger.error('Error getting active periods', {
+            error: error.message,
+            stack: error.stack,
+            gameType
+        });
+        return [];
+    }
+};
+
+/**
+ * Store temporary result in Redis
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {Object} result - Result to store
+ * @returns {Promise<boolean>} - Whether storage was successful
+ */
+const storeTemporaryResult = async (gameType, duration, periodId, result) => {
+    try {
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+
+        // Create Redis key for temporary result
+        const tempResultKey = `${gameType}:${durationKey}:${periodId}:temp_result`;
+        
+        // Store result
+        await redisClient.set(tempResultKey, JSON.stringify({
+            result,
+            timestamp: Date.now()
+        }));
+
+        // Set expiry for 1 hour
+        await redisClient.expire(tempResultKey, 3600);
+
+        logger.info('Temporary result stored', {
+            gameType,
+            duration,
+            periodId,
+            result
+        });
+
+        return true;
+    } catch (error) {
+        logger.error('Error storing temporary result', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+        return false;
+    }
+};
+
+/**
+ * Store hourly minimum combinations in Redis
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {Array} resultWithBets - Array of results with their bet amounts
+ * @returns {Promise<boolean>} - Whether storage was successful
+ */
+const storeHourlyMinimumCombinations = async (gameType, duration, periodId, resultWithBets) => {
+    try {
+        const durationKey = duration === 30 ? '30s' : 
+                          duration === 60 ? '1m' : 
+                          duration === 180 ? '3m' : 
+                          duration === 300 ? '5m' : '10m';
+
+        // Get current hour timestamp
+        const now = new Date();
+        const hourKey = now.toISOString().slice(0, 13); // YYYY-MM-DDTHH
+
+        // Create Redis key for hourly combinations
+        const hourlyKey = `${gameType}:${durationKey}:hourly:${hourKey}`;
+
+        // Sort results by bet amount (ascending)
+        const sortedResults = [...resultWithBets].sort((a, b) => a.betAmount - b.betAmount);
+
+        // Get top 3 minimum combinations
+        const minimumCombinations = sortedResults.slice(0, 3);
+
+        // Store in Redis
+        await redisClient.set(hourlyKey, JSON.stringify({
+            combinations: minimumCombinations,
+            timestamp: now.toISOString(),
+            periodId
+        }));
+
+        // Set expiry for 1 hour
+        await redisClient.expire(hourlyKey, 3600);
+
+        logger.info('Stored hourly minimum combinations', {
+            gameType,
+            duration,
+            periodId,
+            hourKey,
+            combinationCount: minimumCombinations.length
+        });
+
+        return true;
+    } catch (error) {
+        logger.error('Error storing hourly minimum combinations', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+        return false;
+    }
+};
 
 module.exports = {
     models,

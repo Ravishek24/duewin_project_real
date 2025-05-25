@@ -1,17 +1,20 @@
 // Backend/scripts/gameScheduler.js
 const { redis } = require('../config/redisConfig');
-const { sequelize } = require('../config/db');
-const periodService = require('../services/periodService');
-const { broadcastToGame } = require('../services/websocketService');
+const { connectDB } = require('../config/db'); // Changed: Import connectDB instead of sequelize directly
 const cron = require('node-cron');
-const seamlessService = require('../services/seamlessService');
-const tronHashService = require('../services/tronHashService');
 const logger = require('../utils/logger');
 const moment = require('moment-timezone');
+
+// Import services after DB connection is established
+let periodService = null;
+let broadcastToGame = null;
+let seamlessService = null;
+let tronHashService = null;
 
 // Don't require models or gameLogicService at the top level
 let models = null;
 let gameLogicService = null;
+let sequelize = null; // Will be set after connection
 
 /**
  * Game scheduler to handle processing of game results
@@ -25,8 +28,23 @@ async function initialize() {
     
     // Step 1: Connect to database and ensure connection is established
     console.log('🔄 Connecting to database...');
+    await connectDB(); // Use connectDB() first
+    
+    // Now get the sequelize instance after connection is established
+    const { sequelize: seq } = require('../config/db');
+    sequelize = seq;
+    
     await sequelize.authenticate();
     console.log('✅ Database connected for game scheduler');
+    
+    // Step 1.5: Import services after DB connection
+    console.log('🔄 Loading services...');
+    periodService = require('../services/periodService');
+    const websocketService = require('../services/websocketService');
+    broadcastToGame = websocketService.broadcastToGame;
+    seamlessService = require('../services/seamlessService');
+    tronHashService = require('../services/tronHashService');
+    console.log('✅ Services loaded');
     
     // Step 2: Wait for models to be fully initialized
     console.log('🔄 Initializing models...');
@@ -257,8 +275,8 @@ async function processPeriod(gameType, duration) {
   try {
     console.log(`🔄 Closing and finalizing period: ${gameType} ${duration}s - ${periodId}`);
     
-    // 1. Finalize the current period (e.g., generate result, close bets)
-    const resultData = await gameLogicService.finalizePeriod(gameType, duration, periodId);
+    // 1. Process the current period (generate result, process winners)
+    const resultData = await gameLogicService.processGameResults(gameType, duration, periodId);
     
     // 2. Broadcast result via WebSocket
     await broadcastResult(gameType, {
@@ -268,7 +286,7 @@ async function processPeriod(gameType, duration) {
       duration
     });
 
-    console.log(`✅ Period finalized and result broadcasted: ${gameType} ${duration}s - ${periodId}`);
+    console.log(`✅ Period processed and result broadcasted: ${gameType} ${duration}s - ${periodId}`);
 
     // 3. Initialize next period
     const nextPeriodId = await periodService.generatePeriodId(gameType, duration, new Date());
@@ -295,7 +313,7 @@ async function processPeriod(gameType, duration) {
  */
 function getCronExpression(duration) {
   switch (duration) {
-    case 30: return '*/0.5 * * * * *'; // Every 30s - custom scheduler usually needed, cron doesn't support sub-minute
+    case 30: return '*/30 * * * * *'; // Every 30 seconds (Fixed: cron-like syntax)
     case 60: return '* * * * *';       // Every 1 minute
     case 180: return '*/3 * * * *';    // Every 3 minutes
     case 300: return '*/5 * * * *';    // Every 5 minutes
@@ -304,14 +322,14 @@ function getCronExpression(duration) {
   }
 }
 
-// Start the scheduler
-initialize();
-
-
 // Start the game scheduler
 const startGameScheduler = async () => {
     try {
         await initialize();
+        
+        // Call scheduleWeeklyRefresh after initialization
+        scheduleWeeklyRefresh();
+        
         logger.info('Game scheduler running. Press Ctrl+C to stop.');
         logger.info('✅ Game scheduler started successfully');
     } catch (error) {

@@ -6,64 +6,10 @@ const winston = require('winston');
 const path = require('path');
 const crypto = require('crypto');
 
-// We'll get the models dynamically when needed instead of importing at module level
-let GamePeriod = null;
-let modelsInitialized = false;
-
-// Function to ensure models are loaded
-const ensureModelsLoaded = async () => {
-    if (!modelsInitialized || !GamePeriod) {
-        try {
-            console.log('🔄 Loading models in periodService...');
-            
-            // Try to get models from the index file
-            const models = require('../models');
-            
-            // If models has an initializeModels function, call it
-            if (models.initializeModels && typeof models.initializeModels === 'function') {
-                console.log('🔄 Calling initializeModels...');
-                const initializedModels = await models.initializeModels();
-                GamePeriod = initializedModels.GamePeriod;
-                console.log('✅ Models initialized via initializeModels');
-            } else if (models.GamePeriod) {
-                // Try to get GamePeriod directly from models
-                GamePeriod = models.GamePeriod;
-                console.log('✅ GamePeriod loaded directly from models');
-            } else if (models.sequelize) {
-                // Try to get from sequelize models
-                GamePeriod = models.sequelize.models.GamePeriod;
-                console.log('✅ GamePeriod loaded from sequelize.models');
-            }
-            
-            // If still not found, try importing directly
-            if (!GamePeriod) {
-                console.log('🔄 Trying to import GamePeriod directly...');
-                const GamePeriodModel = require('../models/GamePeriod');
-                if (GamePeriodModel.init && typeof GamePeriodModel.init === 'function') {
-                    GamePeriod = GamePeriodModel.init(sequelize);
-                    console.log('✅ GamePeriod initialized directly');
-                } else {
-                    GamePeriod = GamePeriodModel;
-                    console.log('✅ GamePeriod loaded directly');
-                }
-            }
-            
-            if (!GamePeriod) {
-                throw new Error('GamePeriod model not found after all attempts');
-            }
-            
-            modelsInitialized = true;
-            console.log('✅ GamePeriod model loaded successfully in periodService');
-        } catch (error) {
-            console.error('❌ Failed to load models in period service:', error);
-            throw error;
-        }
-    }
-    return GamePeriod;
-};
+// Initialize logger variable
+let logger;
 
 // Configure Winston logger with better error handling
-let logger;
 try {
     logger = winston.createLogger({
         format: winston.format.combine(
@@ -88,6 +34,61 @@ try {
         debug: console.log
     };
 }
+
+// Initialize models variable
+let GamePeriod = null;
+let modelsInitialized = false;
+
+// Function to ensure models are loaded
+const ensureModelsLoaded = async () => {
+    try {
+        if (!GamePeriod) {
+            // Import the models module
+            const { models, initializeModels } = require('../models');
+            
+            // Initialize models
+            await initializeModels();
+            
+            // Get GamePeriod model
+            GamePeriod = models.GamePeriod;
+            
+            if (!GamePeriod) {
+                throw new Error('GamePeriod model not found after initialization');
+            }
+            
+            // Verify model methods
+            const requiredMethods = ['findOne', 'create', 'update', 'findAll'];
+            const missingMethods = requiredMethods.filter(method => typeof GamePeriod[method] !== 'function');
+            
+            if (missingMethods.length > 0) {
+                // If methods are missing, try to reinitialize the model
+                const { sequelize } = require('../config/db');
+                const GamePeriodModel = require('../models/GamePeriod');
+                
+                // Reinitialize the model
+                GamePeriod = GamePeriodModel.init(sequelize);
+                
+                // Verify methods again
+                const stillMissing = requiredMethods.filter(method => typeof GamePeriod[method] !== 'function');
+                if (stillMissing.length > 0) {
+                    throw new Error(`GamePeriod model is missing required methods: ${stillMissing.join(', ')}`);
+                }
+            }
+            
+            logger.info('GamePeriod model initialized successfully');
+        }
+        return GamePeriod;
+    } catch (error) {
+        logger.error('Error loading GamePeriod model:', error);
+        throw error;
+    }
+};
+
+// Call initialization immediately
+ensureModelsLoaded().catch(error => {
+    logger.error('Failed to initialize GamePeriod model:', error);
+    process.exit(1);
+});
 
 /**
  * Generate period ID based on game type, duration, and current time

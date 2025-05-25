@@ -3,7 +3,7 @@ const { Model, DataTypes } = require('sequelize');
 
 class GamePeriod extends Model {
   static init(sequelize) {
-    return super.init({
+    const model = super.init({
       id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
@@ -96,6 +96,30 @@ class GamePeriod extends Model {
         }
       ]
     });
+
+    // Ensure all required methods are available
+    if (!model.findOne) {
+      model.findOne = async function(options) {
+        return await this.findOne(options);
+      };
+    }
+    if (!model.create) {
+      model.create = async function(values, options) {
+        return await this.create(values, options);
+      };
+    }
+    if (!model.update) {
+      model.update = async function(values, options) {
+        return await this.update(values, options);
+      };
+    }
+    if (!model.findAll) {
+      model.findAll = async function(options) {
+        return await this.findAll(options);
+      };
+    }
+
+    return model;
   }
 
   static associate(models) {

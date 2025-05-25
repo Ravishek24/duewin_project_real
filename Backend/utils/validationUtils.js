@@ -91,7 +91,7 @@ const isValidAmount = (amount) => {
  * @returns {boolean} - True if valid, false otherwise
  */
 const isValidBetAmount = (amount) => {
-    return !isNaN(amount) && amount >= 10 && amount <= 10000; // Min 10, Max 10000
+    return !isNaN(amount) && amount >= 1 && amount <= 50000; // Min 1, Max 50000
 };
 
 /**

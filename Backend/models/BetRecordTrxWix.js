@@ -1,7 +1,7 @@
-// Backend/models/BetResultTrxWix.js
+// Backend/models/BetRecordTrxWix.js
 const { Model, DataTypes } = require('sequelize');
 
-class BetResultTrxWix extends Model {
+class BetRecordTrxWix extends Model {
   static init(sequelize) {
     return super.init({
       result_id: {
@@ -48,8 +48,8 @@ class BetResultTrxWix extends Model {
       }
     }, {
       sequelize,
-      modelName: 'BetResultTrxWix',
-      tableName: 'bet_result_trx_wix',
+      modelName: 'BetRecordTrxWix',
+      tableName: 'bet_record_trx_wix',
       timestamps: true,
       createdAt: 'created_at',
       updatedAt: 'updated_at',
@@ -57,7 +57,7 @@ class BetResultTrxWix extends Model {
         {
           unique: true,
           fields: ['period', 'duration'],
-          name: 'bet_result_trx_wix_period_duration_unique'
+          name: 'bet_record_trx_wix_period_duration_unique'
         }
       ]
     });
@@ -68,4 +68,4 @@ class BetResultTrxWix extends Model {
   }
 }
 
-module.exports = BetResultTrxWix;
+module.exports = BetRecordTrxWix;

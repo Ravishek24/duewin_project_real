@@ -1,7 +1,7 @@
-// Backend/models/BetResultK3.js
+// Backend/models/BetRecordK3.js
 const { Model, DataTypes } = require('sequelize');
 
-class BetResultK3 extends Model {
+class BetRecordK3 extends Model {
   static init(sequelize) {
     return super.init({
       bet_id: {
@@ -13,40 +13,8 @@ class BetResultK3 extends Model {
         type: DataTypes.STRING,
         allowNull: false
       },
-      dice_1: {
+      result: {
         type: DataTypes.INTEGER,
-        allowNull: false
-      },
-      dice_2: {
-        type: DataTypes.INTEGER,
-        allowNull: false
-      },
-      dice_3: {
-        type: DataTypes.INTEGER,
-        allowNull: false
-      },
-      sum: {
-        type: DataTypes.INTEGER,
-        allowNull: false
-      },
-      has_pair: {
-        type: DataTypes.BOOLEAN,
-        allowNull: false
-      },
-      has_triple: {
-        type: DataTypes.BOOLEAN,
-        allowNull: false
-      },
-      is_straight: {
-        type: DataTypes.BOOLEAN,
-        allowNull: false
-      },
-      sum_size: {
-        type: DataTypes.ENUM('Big', 'Small'),
-        allowNull: false
-      },
-      sum_parity: {
-        type: DataTypes.ENUM('Odd', 'Even'),
         allowNull: false
       },
       time: {
@@ -72,14 +40,14 @@ class BetResultK3 extends Model {
       }
     }, {
       sequelize,
-      modelName: 'BetResultK3',
-      tableName: 'bet_result_k3s',
+      modelName: 'BetRecordK3',
+      tableName: 'bet_record_k3s',
       timestamps: false,
       indexes: [
         {
           unique: true,
           fields: ['bet_number', 'duration'],
-          name: 'bet_result_k3s_bet_number_duration_unique'
+          name: 'bet_record_k3s_bet_number_duration_unique'
         }
       ]
     });
@@ -90,4 +58,4 @@ class BetResultK3 extends Model {
   }
 }
 
-module.exports = BetResultK3;
+module.exports = BetRecordK3;

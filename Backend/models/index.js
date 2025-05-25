@@ -1,4 +1,4 @@
-// Backend/models/index.js - Complete Fix
+// Backend/models/index.js - Fixed Version
 'use strict';
 
 const fs = require('fs');
@@ -21,224 +21,13 @@ const modelFiles = fs.readdirSync(__dirname)
 // Import all models
 for (const file of modelFiles) {
     const model = require(path.join(__dirname, file));
-    const modelName = model.name || file.split('.')[0];
-    models[modelName] = model;
+    // Handle both class-based and function-based models
+    if (model && (typeof model === 'function' || model.default)) {
+        const modelClass = model.default || model;
+        const modelName = modelClass.name || file.split('.')[0];
+        models[modelName] = modelClass;
+    }
 }
-
-// Define associations with unique aliases
-const defineAssociations = () => {
-    // User associations
-    if (models.User) {
-        // Attendance records
-        models.User.hasMany(models.AttendanceRecord, {
-            foreignKey: 'user_id',
-            as: 'attendanceRecords'
-        });
-
-        // Bank accounts
-        models.User.hasMany(models.BankAccount, {
-            foreignKey: 'user_id',
-            as: 'bankAccounts'
-        });
-
-        // Game sessions
-        models.User.hasMany(models.GameSession, {
-            foreignKey: 'user_id',
-            as: 'gameSessions'
-        });
-
-        // Game transactions
-        models.User.hasMany(models.GameTransaction, {
-            foreignKey: 'user_id',
-            as: 'gameTransactions'
-        });
-
-        // Gift code claims
-        models.User.hasMany(models.GiftCodeClaim, {
-            foreignKey: 'user_id',
-            as: 'giftCodeClaims'
-        });
-
-        // OTP requests
-        models.User.hasMany(models.OtpRequest, {
-            foreignKey: 'user_id',
-            as: 'otpRequests'
-        });
-
-        // Referral commissions
-        models.User.hasMany(models.ReferralCommission, {
-            foreignKey: 'user_id',
-            as: 'referralCommissions'
-        });
-
-        // Referral tree
-        models.User.hasMany(models.ReferralTree, {
-            foreignKey: 'user_id',
-            as: 'referralTree'
-        });
-
-        // Refresh tokens
-        models.User.hasMany(models.RefreshToken, {
-            foreignKey: 'userId',
-            as: 'refreshTokens'
-        });
-
-        // Seamless transactions
-        models.User.hasMany(models.SeamlessTransaction, {
-            foreignKey: 'user_id',
-            as: 'seamlessTransactions'
-        });
-
-        // Third party wallet
-        models.User.hasOne(models.ThirdPartyWallet, {
-            foreignKey: 'user_id',
-            as: 'thirdPartyWallet'
-        });
-
-        // User rebate levels
-        models.User.hasMany(models.UserRebateLevel, {
-            foreignKey: 'user_id',
-            as: 'rebateLevels'
-        });
-
-        // User sessions
-        models.User.hasMany(models.UserSession, {
-            foreignKey: 'userId',
-            as: 'sessions'
-        });
-
-        // VIP rewards
-        models.User.hasMany(models.VipReward, {
-            foreignKey: 'user_id',
-            as: 'vipRewards'
-        });
-
-        // Wallet recharges
-        models.User.hasMany(models.WalletRecharge, {
-            foreignKey: 'user_id',
-            as: 'walletRecharges'
-        });
-
-        // Wallet withdrawals
-        models.User.hasMany(models.WalletWithdrawal, {
-            foreignKey: 'user_id',
-            as: 'walletWithdrawals'
-        });
-    }
-
-    // Reverse associations
-    if (models.AttendanceRecord) {
-        models.AttendanceRecord.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.BankAccount) {
-        models.BankAccount.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.GameSession) {
-        models.GameSession.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.GameTransaction) {
-        models.GameTransaction.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.GiftCodeClaim) {
-        models.GiftCodeClaim.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.OtpRequest) {
-        models.OtpRequest.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.ReferralCommission) {
-        models.ReferralCommission.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.ReferralTree) {
-        models.ReferralTree.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.RefreshToken) {
-        models.RefreshToken.belongsTo(models.User, {
-            foreignKey: 'userId',
-            as: 'user'
-        });
-    }
-
-    if (models.SeamlessTransaction) {
-        models.SeamlessTransaction.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.ThirdPartyWallet) {
-        models.ThirdPartyWallet.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.UserRebateLevel) {
-        models.UserRebateLevel.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.UserSession) {
-        models.UserSession.belongsTo(models.User, {
-            foreignKey: 'userId',
-            as: 'user'
-        });
-    }
-
-    if (models.VipReward) {
-        models.VipReward.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.WalletRecharge) {
-        models.WalletRecharge.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-
-    if (models.WalletWithdrawal) {
-        models.WalletWithdrawal.belongsTo(models.User, {
-            foreignKey: 'user_id',
-            as: 'user'
-        });
-    }
-};
 
 // Initialize models and associations
 const initializeModels = async () => {
@@ -268,8 +57,8 @@ const initializeModels = async () => {
                 const initializedUser = models.User.init(sequelize);
                 if (initializedUser) {
                     models.User = initializedUser;
-        }
-      } catch (error) {
+                }
+            } catch (error) {
                 console.error('Error initializing User model:', error);
                 throw error;
             }
@@ -285,18 +74,30 @@ const initializeModels = async () => {
                     const initializedModel = model.init(sequelize);
                     if (initializedModel) {
                         models[modelName] = initializedModel;
-        }
-      } catch (error) {
+                        
+                        // Verify model methods
+                        const requiredMethods = ['findOne', 'create', 'update', 'findAll'];
+                        const missingMethods = requiredMethods.filter(method => typeof initializedModel[method] !== 'function');
+                        
+                        if (missingMethods.length > 0) {
+                            console.warn(`Model ${modelName} is missing methods: ${missingMethods.join(', ')}`);
+                            // Try to add missing methods
+                            for (const method of missingMethods) {
+                                initializedModel[method] = async function(...args) {
+                                    return await this[method](...args);
+                                };
+                            }
+                        }
+                    }
+                } catch (error) {
                     console.error(`Error initializing model ${modelName}:`, error);
                     throw error;
                 }
             }
         }
         
-        // Define associations
-        defineAssociations();
-        
         // Call associate method on each model if it exists
+        // This will handle all associations defined in individual model files
         for (const modelName of Object.keys(models)) {
             const model = models[modelName];
             if (typeof model.associate === 'function') {
@@ -312,11 +113,24 @@ const initializeModels = async () => {
         // Sync models with database
         await sequelize.sync();
         
+        // Verify all models are properly initialized
+        const requiredModels = [
+            'User', 'GamePeriod', 'BetResultWingo', 'BetResult5D', 
+            'BetResultK3', 'BetResultTrxWix', 'BetRecordWingo', 
+            'BetRecord5D', 'BetRecordK3', 'BetRecordTrxWix'
+        ];
+        
+        const missingModels = requiredModels.filter(modelName => !models[modelName]);
+        if (missingModels.length > 0) {
+            throw new Error(`Missing required models: ${missingModels.join(', ')}`);
+        }
+        
+        console.log('✅ All models initialized successfully');
         return models;
-        } catch (error) {
+    } catch (error) {
         console.error('Error initializing models:', error);
-    throw error;
-  }
+        throw error;
+    }
 };
 
 module.exports = {

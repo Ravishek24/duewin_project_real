@@ -1,7 +1,7 @@
-// Backend/models/BetResult5D.js
+// Backend/models/BetRecord5D.js
 const { Model, DataTypes } = require('sequelize');
 
-class BetResult5D extends Model {
+class BetRecord5D extends Model {
   static init(sequelize) {
     return super.init({
       bet_id: {
@@ -60,14 +60,14 @@ class BetResult5D extends Model {
       }
     }, {
       sequelize,
-      modelName: 'BetResult5D',
-      tableName: 'bet_result_5ds',
+      modelName: 'BetRecord5D',
+      tableName: 'bet_record_5ds',
       timestamps: false,
       indexes: [
         {
           unique: true,
           fields: ['bet_number', 'duration'],
-          name: 'bet_result_5ds_bet_number_duration_unique'
+          name: 'bet_record_5ds_bet_number_duration_unique'
         }
       ]
     });
@@ -78,4 +78,4 @@ class BetResult5D extends Model {
   }
 }
 
-module.exports = BetResult5D;
+module.exports = BetRecord5D;
