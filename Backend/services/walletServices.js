@@ -1,5 +1,5 @@
-const { sequelize } = require('../config/db');
-const { Op } = require('sequelize');
+const { sequelize, Op, waitForDatabase } = require('../config/db');
+const { getModels } = require('../models');
 const User = require('../models/User');
 const WalletRecharge = require('../models/WalletRecharge');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
@@ -87,11 +87,25 @@ const getWalletBalance = async (userId) => {
 // Service to get transaction history (both recharges and withdrawals)
 const getTransactionHistory = async (userId, page = 1, limit = 10) => {
   try {
+    // Wait for database to be ready
+    await waitForDatabase();
+    
+    // Get initialized models
+    const models = await getModels();
+    if (!models) {
+      throw new Error('Models not initialized');
+    }
+
     const offset = (page - 1) * limit;
     
-    // Get recharges
-    const recharges = await WalletRecharge.findAll({
+    // Get recharges with payment gateway info
+    const recharges = await models.WalletRecharge.findAll({
       where: { user_id: userId },
+      include: [{
+        model: models.PaymentGateway,
+        as: 'paymentGateway',
+        attributes: ['name', 'code']
+      }],
       attributes: [
         ['id', 'recharge_id'],
         'amount',
@@ -99,15 +113,20 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
         'updated_at',
         'status',
         ['id', 'order_id'],
-        ['payment_gateway_id', 'payment_gateway'],
+        'payment_gateway_id',
         [sequelize.literal('"recharge"'), 'type']
       ],
       order: [['created_at', 'DESC']]
     });
     
-    // Get withdrawals
-    const withdrawals = await WalletWithdrawal.findAll({
+    // Get withdrawals with payment gateway info
+    const withdrawals = await models.WalletWithdrawal.findAll({
       where: { user_id: userId },
+      include: [{
+        model: models.PaymentGateway,
+        as: 'paymentGateway',
+        attributes: ['name', 'code']
+      }],
       attributes: [
         ['id', 'withdrawal_id'],
         'amount',
@@ -115,19 +134,46 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
         'updated_at',
         'status',
         ['id', 'order_id'],
-        ['payment_gateway_id', 'payment_gateway'],
+        'payment_gateway_id',
         'withdrawal_type',
         [sequelize.literal('"withdrawal"'), 'type']
       ],
       order: [['created_at', 'DESC']]
     });
     
+    // Format transactions
+    const formatTransactions = (transactions) => {
+      return transactions.map(transaction => {
+        try {
+          const formattedTransaction = {
+            id: transaction.recharge_id || transaction.withdrawal_id,
+            type: transaction.type,
+            amount: parseFloat(transaction.amount).toFixed(2),
+            status: transaction.status,
+            payment_method: transaction.paymentGateway ? transaction.paymentGateway.name : 'Unknown',
+            payment_code: transaction.paymentGateway ? transaction.paymentGateway.code : null,
+            created_at: transaction.created_at,
+            updated_at: transaction.updated_at,
+            order_id: transaction.order_id
+          };
+
+          if (transaction.type === 'withdrawal') {
+            formattedTransaction.withdrawal_type = transaction.withdrawal_type;
+          }
+
+          return formattedTransaction;
+        } catch (err) {
+          console.error('Error formatting transaction:', err, transaction);
+          return null;
+        }
+      }).filter(Boolean); // Remove any null entries from formatting errors
+    };
+    
     // Combine and sort
-    const allTransactions = [...recharges, ...withdrawals].sort((a, b) => {
-      const dateA = new Date(a.created_at);
-      const dateB = new Date(b.created_at);
-      return dateB - dateA;
-    });
+    const allTransactions = [
+      ...formatTransactions(recharges),
+      ...formatTransactions(withdrawals)
+    ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     
     // Apply pagination
     const paginatedTransactions = allTransactions.slice(offset, offset + limit);
@@ -137,13 +183,17 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
       transactions: paginatedTransactions,
       pagination: {
         total: allTransactions.length,
-        page: page,
-        limit: limit,
+        page: parseInt(page),
+        limit: parseInt(limit),
         pages: Math.ceil(allTransactions.length / limit)
       }
     };
   } catch (error) {
     console.error('Error fetching transaction history:', error);
+    // Log more details about the error
+    if (error.name === 'SequelizeDatabaseError') {
+      console.error('Database error details:', error.original);
+    }
     return {
       success: false,
       message: 'Server error fetching transaction history.'
@@ -154,16 +204,30 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
 // Service to get recharge history
 const getRechargeHistory = async (userId, page = 1, limit = 10) => {
   try {
+    // Wait for database to be ready
+    await waitForDatabase();
+    
+    // Get initialized models
+    const models = await getModels();
+    if (!models) {
+      throw new Error('Models not initialized');
+    }
+
     const offset = (page - 1) * limit;
     
     // Get total count
-    const total = await WalletRecharge.count({
+    const total = await models.WalletRecharge.count({
       where: { user_id: userId }
     });
     
-    // Get recharges with pagination
-    const recharges = await WalletRecharge.findAll({
+    // Get recharges with pagination and payment gateway info
+    const recharges = await models.WalletRecharge.findAll({
       where: { user_id: userId },
+      include: [{
+        model: models.PaymentGateway,
+        as: 'paymentGateway',
+        attributes: ['name', 'code']
+      }],
       order: [['created_at', 'DESC']],
       limit: limit,
       offset: offset
@@ -171,16 +235,27 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
     
     return {
       success: true,
-      recharges: recharges,
+      recharges: recharges.map(recharge => ({
+        id: recharge.id,
+        amount: parseFloat(recharge.amount).toFixed(2),
+        status: recharge.status,
+        payment_method: recharge.paymentGateway ? recharge.paymentGateway.name : 'Unknown',
+        payment_code: recharge.paymentGateway ? recharge.paymentGateway.code : null,
+        created_at: recharge.created_at,
+        updated_at: recharge.updated_at
+      })),
       pagination: {
         total: total,
-        page: page,
-        limit: limit,
+        page: parseInt(page),
+        limit: parseInt(limit),
         pages: Math.ceil(total / limit)
       }
     };
   } catch (error) {
     console.error('Error fetching recharge history:', error);
+    if (error.name === 'SequelizeDatabaseError') {
+      console.error('Database error details:', error.original);
+    }
     return {
       success: false,
       message: 'Server error fetching recharge history.'
@@ -191,16 +266,30 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
 // Service to get withdrawal history
 const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
   try {
+    // Wait for database to be ready
+    await waitForDatabase();
+    
+    // Get initialized models
+    const models = await getModels();
+    if (!models) {
+      throw new Error('Models not initialized');
+    }
+
     const offset = (page - 1) * limit;
     
     // Get total count
-    const total = await WalletWithdrawal.count({
+    const total = await models.WalletWithdrawal.count({
       where: { user_id: userId }
     });
     
-    // Get withdrawals with pagination
-    const withdrawals = await WalletWithdrawal.findAll({
+    // Get withdrawals with pagination and payment gateway info
+    const withdrawals = await models.WalletWithdrawal.findAll({
       where: { user_id: userId },
+      include: [{
+        model: models.PaymentGateway,
+        as: 'paymentGateway',
+        attributes: ['name', 'code']
+      }],
       order: [['created_at', 'DESC']],
       limit: limit,
       offset: offset
@@ -208,16 +297,28 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
     
     return {
       success: true,
-      withdrawals: withdrawals,
+      withdrawals: withdrawals.map(withdrawal => ({
+        id: withdrawal.id,
+        amount: parseFloat(withdrawal.amount).toFixed(2),
+        status: withdrawal.status,
+        withdrawal_type: withdrawal.withdrawal_type,
+        payment_method: withdrawal.paymentGateway ? withdrawal.paymentGateway.name : 'Unknown',
+        payment_code: withdrawal.paymentGateway ? withdrawal.paymentGateway.code : null,
+        created_at: withdrawal.created_at,
+        updated_at: withdrawal.updated_at
+      })),
       pagination: {
         total: total,
-        page: page,
-        limit: limit,
+        page: parseInt(page),
+        limit: parseInt(limit),
         pages: Math.ceil(total / limit)
       }
     };
   } catch (error) {
     console.error('Error fetching withdrawal history:', error);
+    if (error.name === 'SequelizeDatabaseError') {
+      console.error('Database error details:', error.original);
+    }
     return {
       success: false,
       message: 'Server error fetching withdrawal history.'

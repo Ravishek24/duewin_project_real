@@ -114,7 +114,7 @@ const connectDB = async () => {
                 
                 // Check specifically for important tables
                 const tableNames = tables[0].map(t => Object.values(t)[0]);
-                const importantTables = ['users', 'game_periods', 'bet_result_wingos', 'payment_gateways'];
+                const importantTables = ['users', 'game_periods', 'bet_result_wingos', 'payment_gateways', 'wallet_recharges', 'wallet_withdrawals'];
                 const missingTables = importantTables.filter(table => !tableNames.includes(table));
                 
                 if (missingTables.length > 0) {
@@ -165,10 +165,39 @@ const connectDB = async () => {
     }
 };
 
+// Wait for database to be ready
+const waitForDatabase = async (maxWaitTime = 30000, retryInterval = 1000) => {
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitTime) {
+        try {
+            if (isConnected && isInitialized && sequelize) {
+                // Verify connection is still alive
+                await sequelize.authenticate();
+                return true;
+            }
+            
+            // If not connected, try to connect
+            if (!isConnected) {
+                await connectDB();
+                return true;
+            }
+            
+            // Wait before next attempt
+            await new Promise(resolve => setTimeout(resolve, retryInterval));
+        } catch (error) {
+            console.warn('⚠️ Database not ready, retrying...', error.message);
+            await new Promise(resolve => setTimeout(resolve, retryInterval));
+        }
+    }
+    
+    throw new Error('Database connection timeout');
+};
+
 // Get sequelize instance with validation
 const getSequelizeInstance = () => {
     if (!sequelize) {
-        throw new Error('Sequelize instance not created. Call connectDB() first.');
+        createSequelizeInstance();
     }
     
     if (!isConnected || !isInitialized) {
@@ -183,38 +212,33 @@ const getSequelizeInstance = () => {
     return sequelize;
 };
 
-// Check if database is ready for model initialization
-const isDatabaseReady = () => {
-    return sequelize && isConnected && isInitialized && 
-           sequelize.getQueryInterface && 
-           typeof sequelize.getQueryInterface === 'function';
+// Initialize database connection
+const initializeDatabase = async () => {
+    try {
+        await connectDB();
+        return true;
+    } catch (error) {
+        console.error('Failed to initialize database:', error);
+        return false;
+    }
 };
 
-// Wait for database to be ready
-const waitForDatabase = async (maxWaitTime = 30000) => {
-    const startTime = Date.now();
-    
-    while (!isDatabaseReady() && (Date.now() - startTime) < maxWaitTime) {
-        console.log('⏳ Waiting for database to be ready...');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
-    if (!isDatabaseReady()) {
-        throw new Error(`Database not ready after ${maxWaitTime}ms timeout`);
-    }
-    
-    console.log('✅ Database is ready for model initialization');
-    return true;
-};
-
-// Export the sequelize instance and connectDB function
+// Export everything
 module.exports = {
     get sequelize() {
         return getSequelizeInstance();
     },
-    connectDB,
-    isDatabaseReady,
-    waitForDatabase,
     Op,
-    DataTypes
+    DataTypes,
+    connectDB,
+    waitForDatabase,
+    initializeDatabase,
+    isDatabaseReady: async () => {
+        try {
+            await waitForDatabase();
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
 };

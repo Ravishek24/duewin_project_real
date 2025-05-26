@@ -3,137 +3,175 @@
 
 const fs = require('fs');
 const path = require('path');
-const { sequelize, connectDB } = require('../config/db');
+const { sequelize, waitForDatabase } = require('../config/db');
 
-// Initialize models object
-const models = {};
-
-// Read all model files
-const modelFiles = fs.readdirSync(__dirname)
-      .filter(file => {
-        return (
-          file.indexOf('.') !== 0 &&
-            file !== 'index.js' &&
-            file.slice(-3) === '.js'
-        );
-    });
-
-// Import all models
-for (const file of modelFiles) {
-    const model = require(path.join(__dirname, file));
-    // Handle both class-based and function-based models
-    if (model && (typeof model === 'function' || model.default)) {
-        const modelClass = model.default || model;
-        const modelName = modelClass.name || file.split('.')[0];
-        models[modelName] = modelClass;
+// Helper function to verify model methods
+const verifyModelMethods = (model, modelName) => {
+    const requiredMethods = ['findOne', 'create', 'update', 'findAll', 'destroy'];
+    const missingMethods = requiredMethods.filter(method => typeof model[method] !== 'function');
+    
+    if (missingMethods.length > 0) {
+        throw new Error(`Model ${modelName} is missing required methods: ${missingMethods.join(', ')}`);
     }
-}
+    return true;
+};
 
-// Initialize models and associations
-const initializeModels = async () => {
+// Helper function to initialize a single model
+const initializeModel = async (modelFile, modelName) => {
     try {
-        // First ensure database connection is established
-        await connectDB();
+        const model = require(modelFile);
         
-        // Verify Sequelize instance and wait for it to be ready
-        if (!sequelize || typeof sequelize.define !== 'function') {
-            throw new Error('Invalid Sequelize instance');
-        }
-
-        // Wait for Sequelize to be fully initialized
-        await new Promise((resolve, reject) => {
-            if (sequelize.authenticate) {
-                sequelize.authenticate()
-                    .then(() => resolve())
-                    .catch(reject);
+        // Handle different model types
+        if (typeof model === 'function') {
+            if (model.prototype && model.prototype.constructor.name === modelName) {
+                // Class-based model
+                if (typeof model.init === 'function') {
+                    // Initialize the model class first
+                    const initializedModel = model.init(sequelize, sequelize.constructor.DataTypes);
+                    verifyModelMethods(initializedModel, modelName);
+                    return initializedModel;
+                } else {
+                    throw new Error(`Class-based model ${modelName} is missing static init method`);
+                }
             } else {
-                resolve();
+                // Function-based model (module.exports = (sequelize, DataTypes) => { ... })
+                const initializedModel = model(sequelize, sequelize.constructor.DataTypes);
+                verifyModelMethods(initializedModel, modelName);
+                return initializedModel;
             }
-        });
-
-        // Initialize User model first since other models depend on it
-        if (models.User && typeof models.User.init === 'function') {
-            try {
-                const initializedUser = models.User.init(sequelize);
-                if (initializedUser) {
-                    models.User = initializedUser;
-                }
-            } catch (error) {
-                console.error('Error initializing User model:', error);
-                throw error;
-            }
+        } else if (model && typeof model.init === 'function') {
+            // Pre-initialized Sequelize model
+            const initializedModel = model.init(sequelize, sequelize.constructor.DataTypes);
+            verifyModelMethods(initializedModel, modelName);
+            return initializedModel;
+        } else {
+            // Pre-initialized model
+            verifyModelMethods(model, modelName);
+            return model;
         }
-
-        // Initialize other models
-        for (const modelName of Object.keys(models)) {
-            if (modelName === 'User') continue; // Skip User as it's already initialized
-            
-            const model = models[modelName];
-            if (typeof model.init === 'function') {
-                try {
-                    const initializedModel = model.init(sequelize);
-                    if (initializedModel) {
-                        models[modelName] = initializedModel;
-                        
-                        // Verify model methods
-                        const requiredMethods = ['findOne', 'create', 'update', 'findAll'];
-                        const missingMethods = requiredMethods.filter(method => typeof initializedModel[method] !== 'function');
-                        
-                        if (missingMethods.length > 0) {
-                            console.warn(`Model ${modelName} is missing methods: ${missingMethods.join(', ')}`);
-                            // Try to add missing methods
-                            for (const method of missingMethods) {
-                                initializedModel[method] = async function(...args) {
-                                    return await this[method](...args);
-                                };
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error(`Error initializing model ${modelName}:`, error);
-                    throw error;
-                }
-            }
-        }
-        
-        // Call associate method on each model if it exists
-        // This will handle all associations defined in individual model files
-        for (const modelName of Object.keys(models)) {
-            const model = models[modelName];
-            if (typeof model.associate === 'function') {
-                try {
-                    model.associate(models);
-                } catch (error) {
-                    console.error(`Error in model association for ${modelName}:`, error);
-                    throw error;
-                }
-            }
-        }
-        
-        // Sync models with database
-        await sequelize.sync();
-        
-        // Verify all models are properly initialized
-        const requiredModels = [
-            'User', 'GamePeriod', 'BetResultWingo', 'BetResult5D', 
-            'BetResultK3', 'BetResultTrxWix', 'BetRecordWingo', 
-            'BetRecord5D', 'BetRecordK3', 'BetRecordTrxWix'
-        ];
-        
-        const missingModels = requiredModels.filter(modelName => !models[modelName]);
-        if (missingModels.length > 0) {
-            throw new Error(`Missing required models: ${missingModels.join(', ')}`);
-        }
-        
-        console.log('✅ All models initialized successfully');
-        return models;
     } catch (error) {
-        console.error('Error initializing models:', error);
+        console.error(`Error initializing model ${modelName}:`, error);
         throw error;
     }
 };
 
+// Initialize models variable
+let models = {};
+let isInitialized = false;
+let initializationPromise = null;
+
+/**
+ * Initialize all models
+ * @returns {Promise<Object>} Initialized models
+ */
+const initializeModels = async () => {
+    // If already initialized, return models
+    if (isInitialized) {
+        return models;
+    }
+
+    // If initialization is in progress, return the existing promise
+    if (initializationPromise) {
+        return initializationPromise;
+    }
+
+    // Start initialization
+    initializationPromise = (async () => {
+        try {
+            console.log('🔄 Initializing models...');
+            
+            // Wait for database to be ready
+            await waitForDatabase();
+            
+            // Import all model files
+            const modelFiles = [
+                'User',
+                'GamePeriod',
+                'BetResultWingo',
+                'BetResult5D',
+                'BetResultK3',
+                'BetResultTrxWix',
+                'BetRecordWingo',
+                'BetRecord5D',
+                'BetRecordK3',
+                'BetRecordTrxWix',
+                'PaymentGateway',
+                'PaymentGatewaySettings',
+                'WalletRecharge',
+                'WalletWithdrawal',
+                'BankAccount',
+                'WithdrawalAdmin',
+                'OtpRequest',
+                'GameTransaction',
+                'GameSession',
+                'SeamlessTransaction',
+                'SeamlessGameSession'
+            ];
+
+            // Initialize each model
+            for (const modelName of modelFiles) {
+                try {
+                    models[modelName] = await initializeModel(`./${modelName}`, modelName);
+                    console.log(`✅ Initialized model: ${modelName}`);
+                } catch (error) {
+                    console.error(`❌ Error initializing model ${modelName}:`, error);
+                    throw error;
+                }
+            }
+
+            // Set up model associations
+            Object.values(models).forEach(model => {
+                if (model.associate) {
+                    model.associate(models);
+                }
+            });
+
+            isInitialized = true;
+            console.log('✅ All models initialized successfully');
+            return models;
+        } catch (error) {
+            console.error('❌ Error during model initialization:', error);
+            isInitialized = false;
+            initializationPromise = null;
+            throw error;
+        }
+    })();
+
+    return initializationPromise;
+};
+
+/**
+ * Get initialized models
+ * @returns {Promise<Object>} Initialized models
+ */
+const getModels = async () => {
+    if (!isInitialized) {
+        return await initializeModels();
+    }
+    return models;
+};
+
+/**
+ * Get models synchronously (throws error if not initialized)
+ * @returns {Object} Initialized models
+ */
+const getModelsSync = () => {
+    if (!isInitialized) {
+        throw new Error('Models not initialized. Call initializeModels() first.');
+    }
+    return models;
+};
+
+// Export models and functions
 module.exports = {
-    models,
-    initializeModels
+    initializeModels,
+    getModels,
+    getModelsSync,
+    // Add this getter only if you need backward compatibility
+    get models() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models;
+    }
 };

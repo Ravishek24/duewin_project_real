@@ -1,4 +1,4 @@
-const { User } = require('../../models');
+const { getModels } = require('../../models');
 const { generateToken, generateRefreshToken } = require('../../utils/jwt');
 const { Op } = require('sequelize');
 
@@ -13,6 +13,10 @@ const loginController = async (req, res) => {
                 message: 'Phone number and password are required'
             });
         }
+
+        // Get initialized models
+        const models = await getModels();
+        const User = models.User;
 
         // Check if User model is properly initialized
         if (!User || typeof User.findOne !== 'function') {

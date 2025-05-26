@@ -3,7 +3,7 @@ const { Model, DataTypes } = require('sequelize');
 
 class BetResultWingo extends Model {
   static init(sequelize) {
-    return super.init({
+    const model = super.init({
       bet_id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
@@ -54,10 +54,20 @@ class BetResultWingo extends Model {
         }
       ]
     });
+
+    // Ensure all required methods are available
+    const requiredMethods = ['findOne', 'create', 'update', 'findAll', 'destroy'];
+    for (const method of requiredMethods) {
+      if (typeof model[method] !== 'function') {
+        throw new Error(`Required method ${method} is not available on BetResultWingo model`);
+      }
+    }
+
+    return model;
   }
 
   static associate(models) {
-    // define associations here
+    // define associations here if needed
   }
 }
 

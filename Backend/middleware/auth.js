@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { verifyToken } = require('../utils/jwt');
 const { Op } = require('sequelize');
-const { JWT_SECRET } = require('../config/constants');
+const config = require('../config/config');
 
 // SQL injection protection middleware
 const sqlInjectionProtection = (req, res, next) => {
@@ -44,8 +44,8 @@ const auth = async (req, res, next) => {
         }
 
         // Verify token
-        const decoded = jwt.verify(token, JWT_SECRET);
-        const userId = decoded.id;
+        const decoded = jwt.verify(token, config.jwtSecret);
+        const userId = decoded.userId;
 
         // Get user
         const user = await User.findByPk(userId);

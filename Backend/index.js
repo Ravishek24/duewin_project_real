@@ -72,26 +72,19 @@ try {
     console.warn('⚠️ Socket config not available:', error.message);
 }
 
-// Database initialization function
+// Initialize database
 const initializeDatabase = async () => {
     try {
-        console.log('📊 Initializing database connection...');
-        
-        // Import database configuration
-        const { connectDB, waitForDatabase } = require('./config/db');
-        
-        // Connect to database
-        await connectDB();
-        console.log('✅ Database connected successfully');
-        
-        // Wait for database to be fully ready
-        await waitForDatabase();
-        console.log('✅ Database is ready for operations');
-        
+        const { initializeDatabase } = require('./config/db');
+        const success = await initializeDatabase();
+        if (!success) {
+            throw new Error('Failed to initialize database');
+        }
+        console.log('✅ Database initialized successfully');
         return true;
     } catch (error) {
-        console.error('❌ Database initialization failed:', error.message);
-        throw error;
+        console.error('❌ Database initialization failed:', error);
+        return false;
     }
 };
 
@@ -218,13 +211,16 @@ const setupErrorHandling = () => {
     console.log('✅ Error handling configured');
 };
 
-// Main server initialization
+// Start server
 const startServer = async () => {
     try {
         console.log('🚀 Starting server initialization sequence...');
         
         // Step 1: Initialize database (critical)
-        await initializeDatabase();
+        const dbInitialized = await initializeDatabase();
+        if (!dbInitialized) {
+            throw new Error('Database initialization failed');
+        }
         
         // Step 2: Initialize models (critical)
         await initializeModels();
@@ -245,9 +241,8 @@ const startServer = async () => {
             console.log(`📊 Database: Connected and ready`);
             console.log(`🎉 DueWin Backend Server is fully operational!`);
         });
-        
     } catch (error) {
-        console.error('❌ Server initialization failed:', error);
+        console.error('❌ Server startup failed:', error);
         console.error('Stack trace:', error.stack);
         
         // Try graceful cleanup
@@ -324,10 +319,7 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('🚨 Continuing execution despite unhandled rejection');
 });
 
-// Start the server
-startServer().catch(error => {
-    console.error('🚨 Failed to start server:', error);
-    process.exit(1);
-});
+// Start the application
+startServer();
 
 module.exports = app;

@@ -36,59 +36,25 @@ try {
 }
 
 // Initialize models variable
-let GamePeriod = null;
-let modelsInitialized = false;
+let serviceModels = null;
 
-// Function to ensure models are loaded
+// Helper function to ensure models are loaded
 const ensureModelsLoaded = async () => {
-    try {
-        if (!GamePeriod) {
-            // Import the models module
-            const { models, initializeModels } = require('../models');
-            
-            // Initialize models
-            await initializeModels();
-            
-            // Get GamePeriod model
-            GamePeriod = models.GamePeriod;
-            
-            if (!GamePeriod) {
-                throw new Error('GamePeriod model not found after initialization');
-            }
-            
-            // Verify model methods
-            const requiredMethods = ['findOne', 'create', 'update', 'findAll'];
-            const missingMethods = requiredMethods.filter(method => typeof GamePeriod[method] !== 'function');
-            
-            if (missingMethods.length > 0) {
-                // If methods are missing, try to reinitialize the model
-                const { sequelize } = require('../config/db');
-                const GamePeriodModel = require('../models/GamePeriod');
-                
-                // Reinitialize the model
-                GamePeriod = GamePeriodModel.init(sequelize);
-                
-                // Verify methods again
-                const stillMissing = requiredMethods.filter(method => typeof GamePeriod[method] !== 'function');
-                if (stillMissing.length > 0) {
-                    throw new Error(`GamePeriod model is missing required methods: ${stillMissing.join(', ')}`);
-                }
-            }
-            
-            logger.info('GamePeriod model initialized successfully');
+    if (!serviceModels) {
+        try {
+            const { getModels } = require('../models');
+            serviceModels = await getModels();
+            console.log('✅ Models loaded successfully in periodService');
+        } catch (error) {
+            console.error('❌ Failed to load models in periodService:', error);
+            throw new Error(`Failed to initialize GamePeriod model: ${error.message}`);
         }
-        return GamePeriod;
-    } catch (error) {
-        logger.error('Error loading GamePeriod model:', error);
-        throw error;
     }
+    return serviceModels;
 };
 
-// Call initialization immediately
-ensureModelsLoaded().catch(error => {
-    logger.error('Failed to initialize GamePeriod model:', error);
-    process.exit(1);
-});
+// REMOVED: Don't initialize models immediately on require
+// This was causing the circular dependency issue
 
 /**
  * Generate period ID based on game type, duration, and current time
@@ -112,7 +78,7 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
         const endTime = now.clone().endOf('day');
 
         // Find the last period for today
-        const lastPeriod = await LoadedGamePeriod.findOne({
+        const lastPeriod = await LoadedGamePeriod.GamePeriod.findOne({
             where: {
                 game_type: gameType,
                 duration: duration,
@@ -358,7 +324,7 @@ const initializePeriod = async (gameType, duration, periodId) => {
         // Also store in database for persistence
         try {
             // Check if period already exists
-            const existingPeriod = await LoadedGamePeriod.findOne({
+            const existingPeriod = await LoadedGamePeriod.GamePeriod.findOne({
                 where: {
                     period_id: periodId,
                     game_type: gameType,
@@ -367,7 +333,7 @@ const initializePeriod = async (gameType, duration, periodId) => {
             });
 
             if (!existingPeriod) {
-                await LoadedGamePeriod.create({
+                await LoadedGamePeriod.GamePeriod.create({
                     period_id: periodId,
                     game_type: gameType,
                     duration: duration,
@@ -559,6 +525,7 @@ const addPeriods = (activePeriods, gameType, duration, now) => {
     }
 };
 
+// Export the service with async model access
 module.exports = {
     generatePeriodId,
     calculatePeriodStartTime,
@@ -568,5 +535,10 @@ module.exports = {
     getActivePeriods,
     generateNextPeriodId,
     addPeriods,
-    ensureModelsLoaded
+    ensureModelsLoaded,
+    async getCurrentPeriod() {
+        const models = await ensureModelsLoaded();
+        const { GamePeriod } = models;
+        // ... rest of the function
+    }
 };

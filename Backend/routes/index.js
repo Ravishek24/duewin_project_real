@@ -20,7 +20,7 @@ const { auth, authenticateAdmin } = require('../middleware/auth');
 const router = express.Router();
 
 // Mount all route files with auth middleware where needed
-router.use('/users', auth, userRoutes);
+router.use('/users', userRoutes); // Remove auth middleware from here since it's handled in userRoutes.js
 router.use('/bank-accounts', auth, bankRoutes);
 router.use('/usdt-accounts', auth, usdtRoutes);
 router.use('/wallet', auth, walletRoutes);

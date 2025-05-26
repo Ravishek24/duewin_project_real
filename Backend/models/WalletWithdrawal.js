@@ -88,7 +88,6 @@ class WalletWithdrawal extends Model {
     }
 
     static associate(models) {
-        // Only set up associations if models exist
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',

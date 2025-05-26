@@ -37,16 +37,7 @@ async function initialize() {
     await sequelize.authenticate();
     console.log('✅ Database connected for game scheduler');
     
-    // Step 1.5: Import services after DB connection
-    console.log('🔄 Loading services...');
-    periodService = require('../services/periodService');
-    const websocketService = require('../services/websocketService');
-    broadcastToGame = websocketService.broadcastToGame;
-    seamlessService = require('../services/seamlessService');
-    tronHashService = require('../services/tronHashService');
-    console.log('✅ Services loaded');
-    
-    // Step 2: Wait for models to be fully initialized
+    // Step 2: Initialize models FIRST before any services
     console.log('🔄 Initializing models...');
     const modelsModule = require('../models');
     
@@ -60,18 +51,46 @@ async function initialize() {
         throw new Error('Models initialization failed - no models returned');
       }
       
+      // Verify critical models exist
+      if (!models.GamePeriod) {
+        throw new Error('GamePeriod model not found in initialized models');
+      }
+      
       // Verify Sequelize instance is properly initialized
       if (!sequelize.getQueryInterface) {
         throw new Error('Sequelize instance is not properly initialized');
       }
       
       console.log('✅ Models initialized for game scheduler');
+      console.log('📊 Available models:', Object.keys(models));
     } catch (error) {
       console.error('❌ Error initializing models:', error);
       throw error;
     }
     
-    // Step 3: Now that models are initialized, require gameLogicService
+    // Step 3: NOW load services after models are initialized
+    console.log('🔄 Loading services...');
+    
+    // Load period service
+    periodService = require('../services/periodService');
+    
+    // Test that periodService can access models
+    try {
+      await periodService.ensureModelsLoaded();
+      console.log('✅ Period service models verified');
+    } catch (error) {
+      console.error('❌ Period service models failed:', error);
+      throw error;
+    }
+    
+    // Load other services
+    const websocketService = require('../services/websocketService');
+    broadcastToGame = websocketService.broadcastToGame;
+    seamlessService = require('../services/seamlessService');
+    tronHashService = require('../services/tronHashService');
+    console.log('✅ Services loaded');
+    
+    // Step 4: Now that models are initialized, require gameLogicService
     console.log('🔄 Loading game logic service...');
     gameLogicService = require('../services/gameLogicService');
     
@@ -79,7 +98,7 @@ async function initialize() {
     await new Promise(resolve => setTimeout(resolve, 2000));
     console.log('✅ Game logic service loaded');
     
-    // Step 4: Initialize Redis
+    // Step 5: Initialize Redis
     if (!redis.status === 'ready') {
       console.log('🔄 Waiting for Redis to be ready...');
       await new Promise((resolve) => {
@@ -88,7 +107,7 @@ async function initialize() {
     }
     console.log('✅ Redis connection verified');
     
-    // Step 5: Initialize TRON hash collection
+    // Step 6: Initialize TRON hash collection
     try {
       console.log('🔄 Starting TRON hash collection...');
       await tronHashService.startHashCollection();
@@ -98,7 +117,7 @@ async function initialize() {
       console.log('⚠️ Game results will use fallback hash generation');
     }
     
-    // Step 6: Initialize game periods
+    // Step 7: Initialize game periods (ONLY after everything else is ready)
     console.log('🔄 Initializing game periods...');
     await initializeGamePeriods();
     console.log('✅ Game periods initialized');
@@ -170,13 +189,30 @@ const GAME_CONFIGS = {
 const initializeGamePeriods = async () => {
     try {
         console.log('Initializing game periods...');
+        
+        // CRITICAL: Verify periodService is ready before using it
+        if (!periodService) {
+            throw new Error('Period service not initialized');
+        }
+        
+        // Test period service works
+        try {
+            await periodService.ensureModelsLoaded();
+            console.log('✅ Period service ready for initialization');
+        } catch (error) {
+            console.error('❌ Period service not ready:', error);
+            throw error;
+        }
+        
         for (const [gameType, durations] of Object.entries(GAME_CONFIGS)) {
             for (const duration of durations) {
                 try {
                     console.log(`Initializing ${gameType} ${duration}s period...`);
-                    // Initialize current period
+                    
+                    // Initialize current period - ONLY call this after models are ready
                     const currentPeriod = await periodService.generatePeriodId(gameType, duration, new Date());
                     console.log(`Generated period ID for ${gameType} ${duration}s: ${currentPeriod}`);
+                    
                     await periodService.initializePeriod(gameType, duration, currentPeriod);
                     
                     // Schedule period processing using cron
@@ -270,9 +306,15 @@ const broadcastResult = async (gameType, data) => {
  */
 async function processPeriod(gameType, duration) {
   const now = new Date();
-  const periodId = await periodService.generatePeriodId(gameType, duration, now);
-
+  
   try {
+    // Ensure services are still available
+    if (!periodService || !gameLogicService) {
+      throw new Error('Required services not initialized');
+    }
+    
+    const periodId = await periodService.generatePeriodId(gameType, duration, now);
+
     console.log(`🔄 Closing and finalizing period: ${gameType} ${duration}s - ${periodId}`);
     
     // 1. Process the current period (generate result, process winners)
@@ -295,11 +337,10 @@ async function processPeriod(gameType, duration) {
     console.log(`✅ Next period initialized: ${gameType} ${duration}s - ${nextPeriodId}`);
     
   } catch (error) {
-    console.error(`❌ Error processing period ${periodId} for ${gameType} ${duration}s:`, error);
+    console.error(`❌ Error processing period for ${gameType} ${duration}s:`, error);
     logger.error('Error processing period:', {
       gameType,
       duration,
-      periodId,
       error: error.message,
       stack: error.stack
     });
