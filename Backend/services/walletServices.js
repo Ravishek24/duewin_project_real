@@ -84,7 +84,7 @@ const getWalletBalance = async (userId) => {
   }
 };
 
-// Service to get transaction history (both recharges and withdrawals)
+// Service to get transaction history (both recharges and withdrawals)// Service to get transaction history (both recharges and withdrawals)
 const getTransactionHistory = async (userId, page = 1, limit = 10) => {
   try {
     // Wait for database to be ready
@@ -104,7 +104,7 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
       include: [{
         model: models.PaymentGateway,
         as: 'paymentGateway',
-        attributes: ['name', 'code']
+        attributes: ['gateway_id', 'name', 'code']
       }],
       attributes: [
         ['id', 'recharge_id'],
@@ -119,13 +119,13 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
       order: [['created_at', 'DESC']]
     });
     
-    // Get withdrawals with payment gateway info
+    // Get withdrawals with payment gateway info - REMOVED withdrawal_type
     const withdrawals = await models.WalletWithdrawal.findAll({
       where: { user_id: userId },
       include: [{
         model: models.PaymentGateway,
         as: 'paymentGateway',
-        attributes: ['name', 'code']
+        attributes: ['gateway_id', 'name', 'code']
       }],
       attributes: [
         ['id', 'withdrawal_id'],
@@ -135,7 +135,7 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
         'status',
         ['id', 'order_id'],
         'payment_gateway_id',
-        'withdrawal_type',
+        // REMOVED 'withdrawal_type' since it doesn't exist in database
         [sequelize.literal('"withdrawal"'), 'type']
       ],
       order: [['created_at', 'DESC']]
@@ -157,9 +157,10 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
             order_id: transaction.order_id
           };
 
-          if (transaction.type === 'withdrawal') {
-            formattedTransaction.withdrawal_type = transaction.withdrawal_type;
-          }
+          // REMOVED withdrawal_type logic since column doesn't exist
+          // if (transaction.type === 'withdrawal') {
+          //   formattedTransaction.withdrawal_type = transaction.withdrawal_type;
+          // }
 
           return formattedTransaction;
         } catch (err) {
@@ -264,6 +265,7 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
 };
 
 // Service to get withdrawal history
+// Service to get withdrawal history
 const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
   try {
     // Wait for database to be ready
@@ -288,7 +290,7 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
       include: [{
         model: models.PaymentGateway,
         as: 'paymentGateway',
-        attributes: ['name', 'code']
+        attributes: ['gateway_id', 'name', 'code']
       }],
       order: [['created_at', 'DESC']],
       limit: limit,
@@ -301,7 +303,8 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
         id: withdrawal.id,
         amount: parseFloat(withdrawal.amount).toFixed(2),
         status: withdrawal.status,
-        withdrawal_type: withdrawal.withdrawal_type,
+        // REMOVED withdrawal_type since it doesn't exist in database
+        // withdrawal_type: withdrawal.withdrawal_type,
         payment_method: withdrawal.paymentGateway ? withdrawal.paymentGateway.name : 'Unknown',
         payment_code: withdrawal.paymentGateway ? withdrawal.paymentGateway.code : null,
         created_at: withdrawal.created_at,

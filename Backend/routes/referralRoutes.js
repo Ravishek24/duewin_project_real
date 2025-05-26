@@ -19,7 +19,6 @@ const {
     claimAttendanceBonus,
     getInvitationBonusStatus,
     claimInvitationBonus
-    // ...other imports
 } = require('../services/referralService');
 
 const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
@@ -36,26 +35,23 @@ router.get('/direct', getDirectReferralsController);
 router.get('/team', getTeamReferralsController);
 
 // Direct referral deposits
-router.get('/direct/deposits', getDirectReferralDepositsController);
+router.get('/direct/deposits', requirePhoneVerification, getDirectReferralDepositsController);
 
 // Team referral deposits
-router.get('/team/deposits', getTeamReferralDepositsController);
+router.get('/team/deposits', requirePhoneVerification, getTeamReferralDepositsController);
 
 // Commission earnings
-router.get('/commissions', getCommissionEarningsController);
+router.get('/commissions', requirePhoneVerification, getCommissionEarningsController);
 
 // Referral tree details
 router.get('/tree', getReferralTreeDetailsController);
-
-// Record attendance
-router.post('/attendance', recordAttendanceController);
 
 // Analytics
 router.get('/analytics/direct', getDirectReferralAnalyticsController);
 router.get('/analytics/team', getTeamReferralAnalyticsController);
 
 // Attendance bonus endpoints
-router.post('/attendance', auth, async (req, res) => {
+router.post('/attendance', requirePhoneVerification, async (req, res) => {
     const userId = req.user.user_id;
     const result = await recordAttendance(userId);
 
@@ -66,7 +62,7 @@ router.post('/attendance', auth, async (req, res) => {
     }
 });
 
-router.get('/attendance/unclaimed', auth, async (req, res) => {
+router.get('/attendance/unclaimed', requirePhoneVerification, async (req, res) => {
     const userId = req.user.user_id;
     const result = await getUnclaimedAttendanceBonuses(userId);
 
@@ -77,7 +73,7 @@ router.get('/attendance/unclaimed', auth, async (req, res) => {
     }
 });
 
-router.post('/attendance/claim', auth, async (req, res) => {
+router.post('/attendance/claim', requirePhoneVerification, async (req, res) => {
     const userId = req.user.user_id;
     const { attendanceDate } = req.body;
 
@@ -90,9 +86,8 @@ router.post('/attendance/claim', auth, async (req, res) => {
     }
 });
 
-
 // Invitation bonus endpoints
-router.get('/invitation/status', auth, async (req, res) => {
+router.get('/invitation/status', requirePhoneVerification, async (req, res) => {
     const userId = req.user.user_id;
     const result = await getInvitationBonusStatus(userId);
     
@@ -103,7 +98,7 @@ router.get('/invitation/status', auth, async (req, res) => {
     }
 });
 
-router.post('/invitation/claim', auth, async (req, res) => {
+router.post('/invitation/claim', requirePhoneVerification, async (req, res) => {
     const userId = req.user.user_id;
     const result = await claimInvitationBonus(userId);
     
@@ -113,6 +108,5 @@ router.post('/invitation/claim', auth, async (req, res) => {
         return res.status(400).json(result);
     }
 });
-
 
 module.exports = router;

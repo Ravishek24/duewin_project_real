@@ -15,7 +15,7 @@ const referralRoutes = require('./referralRoutes');
 const otpRoutes = require('./otpRoutes');
 const adminRoutes = require('./adminRoutes');
 const mxPayRoutes = require('./mxPayRoutes'); // Add MxPay routes
-const { auth, authenticateAdmin } = require('../middleware/auth');
+const { auth, isAdmin } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -32,7 +32,7 @@ router.use('/seamless', auth, seamlessWalletRoutes);
 router.use('/seamless-games', auth, seamlessRoutes);
 router.use('/referrals', auth, referralRoutes);
 router.use('/otp', otpRoutes); // OTP routes typically don't need auth
-router.use('/admin', authenticateAdmin, adminRoutes);
+router.use('/admin', isAdmin, adminRoutes);
 router.use('/payments/mxpay', mxPayRoutes); // MxPay routes handle their own auth
 
 module.exports = router;

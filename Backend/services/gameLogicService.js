@@ -102,6 +102,29 @@ const RISK_THRESHOLDS = {
     }
 };
 
+
+// Add this new function to the module
+/**
+ * Get deterministic color based on number
+ * @param {number} number - Number (0-9)
+ * @returns {string} - Corresponding color
+ */
+const getColorForNumber = (number) => {
+    const colorMap = {
+        0: 'red_violet',
+        1: 'green',
+        2: 'red',
+        3: 'green',
+        4: 'red',
+        5: 'green_violet',
+        6: 'red',
+        7: 'green',
+        8: 'red',
+        9: 'green'
+    };
+    return colorMap[number];
+};
+
 /**
  * Validate result against 60/40 criteria
  * @param {Object} result - Result object with payout information
@@ -1780,7 +1803,7 @@ const startRound = async (gameType, duration) => {
 };
 
 /**
- * Approximate Wingo/TRX_WIX payout based on betting patterns
+ * Approximate Wingo/TRX_WIX payout based on betting patterns (UPDATED)
  * @param {Object} result - Game result
  * @param {Object} pattern - Betting pattern analysis
  * @returns {number} - Approximated payout
@@ -1794,7 +1817,7 @@ const approximateWingoPayout = (result, pattern) => {
         // Estimate based on common bet distributions
         const commonDistribution = {
             NUMBER: 0.15,    // 15% of bets typically on numbers
-            COLOR: 0.35,     // 35% on colors
+            COLOR: 0.35,     // 35% on colors  
             SIZE: 0.30,      // 30% on size
             PARITY: 0.20     // 20% on parity
         };
@@ -1811,21 +1834,44 @@ const approximateWingoPayout = (result, pattern) => {
                     break;
 
                 case 'COLOR':
-                    // Complex color logic - approximate 45% win rate
-                    let colorMultiplier = 2.0; // Default
-                    if (result.color.includes('violet')) {
-                        colorMultiplier = 3.0; // Mixed multiplier average
+                    // UPDATED: With deterministic colors, calculate based on actual result
+                    let colorWinRate = 0;
+                    let colorMultiplier = 0;
+                    
+                    // Calculate win rates for each color based on deterministic mapping
+                    const numberColorMap = {
+                        'red': [2, 4, 6, 8],           // 4 numbers = 40% chance
+                        'green': [1, 3, 7, 9],         // 4 numbers = 40% chance  
+                        'red_violet': [0],             // 1 number = 10% chance
+                        'green_violet': [5]            // 1 number = 10% chance
+                    };
+                    
+                    if (result.color === 'red') {
+                        colorWinRate = 0.4;  // 40% of numbers are red
+                        colorMultiplier = 2.0;
+                    } else if (result.color === 'green') {
+                        colorWinRate = 0.4;  // 40% of numbers are green
+                        colorMultiplier = 2.0;
+                    } else if (result.color === 'red_violet') {
+                        // Both red bets and violet bets win
+                        colorWinRate = 0.4 + 0.1; // Red bets (1.5x) + Violet bets (4.5x)
+                        colorMultiplier = (0.4 * 1.5 + 0.1 * 4.5) / 0.5; // Weighted average
+                    } else if (result.color === 'green_violet') {
+                        // Both green bets and violet bets win
+                        colorWinRate = 0.4 + 0.1; // Green bets (1.5x) + Violet bets (4.5x)
+                        colorMultiplier = (0.4 * 1.5 + 0.1 * 4.5) / 0.5; // Weighted average
                     }
-                    estimatedPayout += (estimatedAmountOfType * 0.45) * colorMultiplier;
+                    
+                    estimatedPayout += (estimatedAmountOfType * colorWinRate) * colorMultiplier;
                     break;
 
                 case 'SIZE':
-                    // 50% win rate for size
+                    // 50% win rate for size (unchanged)
                     estimatedPayout += (estimatedAmountOfType * 0.5) * 2.0;
                     break;
 
                 case 'PARITY':
-                    // 50% win rate for parity
+                    // 50% win rate for parity (unchanged)
                     estimatedPayout += (estimatedAmountOfType * 0.5) * 2.0;
                     break;
             }
@@ -2827,31 +2873,26 @@ const getUniqueUserCount = async (gameType, duration, periodId) => {
 
 /**
  * Check if current period should use minimum bet result (every 20 periods)
- * @param {string} periodId - Period ID (format: YYYYMMDDHHMM-G-DURATION-NUMBER)
+ * NEW FORMAT: Extract sequence from last 9 digits
+ * @param {string} periodId - Period ID (YYYYMMDD000000000)
  * @returns {Promise<boolean>} - Whether this is a minimum bet period
  */
 const isMinimumBetPeriod = async (periodId) => {
     try {
-        // Extract the sequential number from period ID
-        // Format: 202505252029-W-30-405 -> extract 405
-        const parts = periodId.split('-');
-        if (parts.length >= 4) {
-            const sequentialNumber = parseInt(parts[3]);
+        // Extract the sequential number from period ID (last 9 digits)
+        const sequenceStr = periodId.substring(8);
+        const sequentialNumber = parseInt(sequenceStr, 10);
 
-            // Every 20th period (20, 40, 60, 80, etc.)
-            const isMinimumPeriod = sequentialNumber % 20 === 0;
+        // Every 20th period (20, 40, 60, 80, etc.)
+        const isMinimumPeriod = sequentialNumber % 20 === 0;
 
-            logger.info('Minimum bet period check', {
-                periodId,
-                sequentialNumber,
-                isMinimumPeriod
-            });
+        logger.info('Minimum bet period check', {
+            periodId,
+            sequentialNumber,
+            isMinimumPeriod
+        });
 
-            return isMinimumPeriod;
-        }
-
-        logger.warn('Invalid period ID format for minimum bet check', { periodId });
-        return false;
+        return isMinimumPeriod;
     } catch (error) {
         logger.error('Error checking minimum bet period', {
             error: error.message,
@@ -2862,7 +2903,7 @@ const isMinimumBetPeriod = async (periodId) => {
 };
 
 /**
- * Generate result where all users lose (for < 10 users rule)
+ * Generate result where all users lose (UPDATED - for < 10 users rule)
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds
  * @param {string} periodId - Period ID
@@ -2892,7 +2933,7 @@ const generateAllLoseResult = async (gameType, duration, periodId) => {
             }
         }
 
-        // Generate all possible results
+        // Generate all possible results (now with deterministic colors)
         const allPossibleResults = await generateAllPossibleResults(gameType);
 
         // Find results that don't match any placed bets
@@ -2937,10 +2978,11 @@ const generateAllLoseResult = async (gameType, duration, periodId) => {
             periodId
         });
 
-        // Ultimate fallback: random result
+        // Ultimate fallback: random result (with deterministic colors)
         return await generateRandomResult(gameType);
     }
 };
+
 
 /**
  * Override result for a period (admin only)
@@ -4123,30 +4165,30 @@ const cleanupRedisData = async (aggressive = false) => {
 
 /**
  * Calculate the end time for a period
+ * NEW FORMAT: Parse YYYYMMDD000000000
  * @param {string} periodId - Period ID
  * @param {number} duration - Duration in seconds
  * @returns {Date} - End time of the period
  */
 const calculatePeriodEndTime = (periodId, duration) => {
     try {
-        // Parse period ID to get start time
-        // Format: YYYYMMDDHHMM-G-DURATION-NUMBER
-        const [dateTime, gameType, durationStr, number] = periodId.split('-');
+        // Parse period ID to get date and sequence
+        const dateStr = periodId.substring(0, 8);
+        const sequenceStr = periodId.substring(8);
+        
+        const year = parseInt(dateStr.substring(0, 4), 10);
+        const month = parseInt(dateStr.substring(4, 6), 10) - 1; // 0-indexed
+        const day = parseInt(dateStr.substring(6, 8), 10);
+        const sequenceNumber = parseInt(sequenceStr, 10);
 
-        // Parse date and time components
-        const year = dateTime.substring(0, 4);
-        const month = dateTime.substring(4, 6);
-        const day = dateTime.substring(6, 8);
-        const hour = dateTime.substring(8, 10);
-        const minute = dateTime.substring(10, 12);
-
-        // Create start time
-        const startTime = new Date(`${year}-${month}-${day}T${hour}:${minute}:00Z`);
-
+        // Create start time (base time = 2 AM IST + sequence * duration)
+        const baseTime = moment.tz([year, month, day, 2, 0, 0], 'Asia/Kolkata');
+        const startTime = baseTime.add(sequenceNumber * duration, 'seconds');
+        
         // Add duration to get end time
-        const endTime = new Date(startTime.getTime() + (duration * 1000));
+        const endTime = startTime.clone().add(duration, 'seconds');
 
-        return endTime;
+        return endTime.toDate();
     } catch (error) {
         logger.error('Error calculating period end time', {
             error: error.message,
@@ -4159,6 +4201,7 @@ const calculatePeriodEndTime = (periodId, duration) => {
         return new Date(Date.now() + (duration * 1000));
     }
 };
+
 
 /**
  * Check if betting is frozen for the current period
@@ -4589,7 +4632,7 @@ const calculateOptimizedResult = async (gameType, duration, periodId) => {
 };
 
 /**
- * Validate a fallback result for a game type
+ * Validate a fallback result for a game type (UPDATED)
  * @param {Object} result - Result to validate
  * @param {string} gameType - Game type
  * @returns {Object} - Validation result
@@ -4612,6 +4655,14 @@ const validateFallbackResult = async (result, gameType) => {
                 if (!['big', 'small'].includes(result.size?.toLowerCase())) {
                     warnings.push('Invalid size in result');
                 }
+                
+                // UPDATED: Validate color matches the deterministic rule
+                const expectedColor = getColorForNumber(result.number);
+                if (result.color !== expectedColor) {
+                    warnings.push(`Color mismatch: number ${result.number} should have color ${expectedColor}, got ${result.color}`);
+                }
+                
+                // Validate color is one of the valid colors
                 if (!['red', 'green', 'red_violet', 'green_violet'].includes(result.color?.toLowerCase())) {
                     warnings.push('Invalid color in result');
                 }
@@ -4739,7 +4790,7 @@ const checkSuspiciousPatterns = async (result, gameType) => {
 };
 
 /**
- * Generate a fallback result for a game type
+ * Generate a fallback result for a game type (UPDATED)
  * @param {string} gameType - Game type
  * @returns {Object} - Generated fallback result
  */
@@ -4748,10 +4799,11 @@ const generateFallbackResult = async (gameType) => {
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
+                const number = Math.floor(Math.random() * 10); // 0-9
                 return {
-                    number: Math.floor(Math.random() * 10), // 0-9
-                    size: Math.random() < 0.5 ? 'big' : 'small',
-                    color: ['red', 'green', 'red_violet', 'green_violet'][Math.floor(Math.random() * 4)]
+                    number: number,
+                    size: number >= 5 ? 'big' : 'small',
+                    color: getColorForNumber(number) // Use deterministic color
                 };
 
             case 'fived':
@@ -4802,7 +4854,7 @@ const generateFallbackResult = async (gameType) => {
 };
 
 /**
- * Generate a random result for a game type
+ * Generate a random result for a game type (UPDATED)
  * @param {string} gameType - Game type
  * @returns {Object} - Generated random result
  */
@@ -4814,10 +4866,11 @@ const generateRandomResult = async (gameType) => {
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
+                const number = Math.floor(Math.random() * 10); // 0-9
                 result = {
-                    number: Math.floor(Math.random() * 10), // 0-9
-                    size: Math.random() < 0.5 ? 'big' : 'small',
-                    color: ['red', 'green', 'red_violet', 'green_violet'][Math.floor(Math.random() * 4)]
+                    number: number,
+                    size: number >= 5 ? 'big' : 'small',
+                    color: getColorForNumber(number) // Use deterministic color
                 };
                 break;
 
@@ -4888,7 +4941,7 @@ const generateRandomResult = async (gameType) => {
 };
 
 /**
- * Generate all possible results for a game type
+ * Generate all possible results for a game type (UPDATED)
  * @param {string} gameType - Game type
  * @returns {Array} - Array of all possible results
  */
@@ -4900,23 +4953,22 @@ const generateAllPossibleResults = async (gameType) => {
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
-                // Generate all combinations of number, size, and color
+                // Generate combinations with deterministic colors
                 for (let number = 0; number <= 9; number++) {
+                    const color = getColorForNumber(number); // Use deterministic color
                     for (const size of ['big', 'small']) {
-                        for (const color of ['red', 'green', 'red_violet', 'green_violet']) {
-                            results.push({
-                                number,
-                                size,
-                                color
-                            });
-                        }
+                        results.push({
+                            number,
+                            size,
+                            color
+                        });
                     }
                 }
                 break;
 
             case 'fived':
             case '5d':
-                // Generate all possible combinations of 5 dice
+                // Generate all possible combinations of 5 dice (unchanged)
                 for (let a = 1; a <= 6; a++) {
                     for (let b = 1; b <= 6; b++) {
                         for (let c = 1; c <= 6; c++) {
@@ -4938,7 +4990,7 @@ const generateAllPossibleResults = async (gameType) => {
                 break;
 
             case 'k3':
-                // Generate all possible combinations of 3 dice
+                // Generate all possible combinations of 3 dice (unchanged)
                 for (let d1 = 1; d1 <= 6; d1++) {
                     for (let d2 = 1; d2 <= 6; d2++) {
                         for (let d3 = 1; d3 <= 6; d3++) {
@@ -5527,6 +5579,7 @@ module.exports = {
     schedulePeriodCleanup,
     cleanupPeriodData,
     getPeriodOptimizationStats,
+    getColorForNumber,
 
     // Model management
     ensureModelsInitialized,

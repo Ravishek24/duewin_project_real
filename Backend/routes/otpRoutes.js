@@ -1,7 +1,7 @@
 // routes/otpRoutes.js
 const express = require('express');
 const router = express.Router();
-const { auth } = require('../middleware/auth');
+const { auth } = require('../middlewares/authMiddleware');
 const { validateInput } = require('../middleware/inputValidation');
 const { body } = require('express-validator');
 const rateLimiters = require('../middleware/rateLimiter');

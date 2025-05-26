@@ -129,6 +129,106 @@ async function initialize() {
   }
 }
 
+/**
+ * Reset all sequence counters at 2 AM IST (NEW FUNCTION)
+ * This function runs daily to reset period sequence numbers
+ */
+const resetDailySequences = async () => {
+    const lockKey = 'daily_sequence_reset_lock';
+    const lockValue = `${Date.now()}_${process.pid}`;
+    
+    try {
+        console.log('🔄 Starting daily sequence reset at 2 AM IST...');
+        
+        // Try to acquire lock (expires in 10 minutes)
+        const acquired = await redis.set(lockKey, lockValue, 'EX', 600, 'NX');
+        
+        if (!acquired) {
+            console.log('⚠️ Daily reset already running on another instance, skipping...');
+            return;
+        }
+
+        console.log('🔒 Acquired reset lock, proceeding with daily sequence reset');
+        
+        const today = moment.tz('Asia/Kolkata').format('YYYYMMDD');
+        
+        const gameConfigs = {
+            'wingo': ['30s', '1m', '3m', '5m'],
+            'trx_wix': ['30s', '1m', '3m', '5m'],
+            'k3': ['1m', '3m', '5m', '10m'],
+            'fiveD': ['1m', '3m', '5m', '10m']
+        };
+
+        console.log(`🔄 Resetting daily sequences for ${today}`);
+
+        let resetCount = 0;
+        for (const [gameType, durations] of Object.entries(gameConfigs)) {
+            for (const duration of durations) {
+                try {
+                    const sequenceKey = `${gameType}:${duration}:daily_sequence:${today}`;
+                    await redis.set(sequenceKey, '0');
+                    
+                    // Set expiry for next day 2 AM
+                    const tomorrow2AM = moment.tz('Asia/Kolkata')
+                        .add(1, 'day')
+                        .hour(2)
+                        .minute(0)
+                        .second(0);
+                    const expirySeconds = Math.max(3600, tomorrow2AM.diff(moment.tz('Asia/Kolkata'), 'seconds'));
+                    await redis.expire(sequenceKey, expirySeconds);
+                    
+                    resetCount++;
+                    console.log(`✅ Reset sequence for ${gameType}:${duration} (expires in ${expirySeconds}s)`);
+                } catch (sequenceError) {
+                    console.error(`❌ Failed to reset sequence for ${gameType}:${duration}:`, sequenceError);
+                }
+            }
+        }
+
+        console.log(`✅ Daily sequence reset completed! Reset ${resetCount} sequences`);
+        logger.info('Daily sequence reset completed', {
+            date: today,
+            resetCount,
+            timestamp: moment.tz('Asia/Kolkata').toISOString()
+        });
+
+    } catch (error) {
+        console.error('❌ Error in daily sequence reset:', error);
+        logger.error('Error in daily sequence reset:', {
+            error: error.message,
+            stack: error.stack,
+            timestamp: moment.tz('Asia/Kolkata').toISOString()
+        });
+    } finally {
+        // Release lock
+        try {
+            const currentValue = await redis.get(lockKey);
+            if (currentValue === lockValue) {
+                await redis.del(lockKey);
+                console.log('🔓 Released reset lock');
+            }
+        } catch (lockError) {
+            console.error('❌ Error releasing reset lock:', lockError);
+        }
+    }
+};
+
+// Schedule daily period sequence reset at 2 AM IST (NEW CRON JOB)
+cron.schedule('0 2 * * *', async () => {
+    console.log('🕐 2 AM IST - Starting daily period sequence reset...');
+    try {
+        await resetDailySequences();
+    } catch (error) {
+        console.error('❌ Failed to run daily sequence reset:', error);
+        logger.error('Failed to run daily sequence reset:', {
+            error: error.message,
+            stack: error.stack
+        });
+    }
+}, {
+    timezone: "Asia/Kolkata" // IST timezone
+});
+
 // Schedule weekly games list refresh (Every Monday at 4 AM IST)
 function scheduleWeeklyRefresh() {
   cron.schedule('0 4 * * 1', async () => {
@@ -373,6 +473,15 @@ const startGameScheduler = async () => {
         
         logger.info('Game scheduler running. Press Ctrl+C to stop.');
         logger.info('✅ Game scheduler started successfully');
+        
+        // Log all scheduled cron jobs
+        console.log('\n📅 SCHEDULED CRON JOBS:');
+        console.log('⏰ 2:00 AM IST - Daily period sequence reset');
+        console.log('⏰ 12:00 AM IST - Daily Redis cleanup');
+        console.log('⏰ Every hour - TRON hash collection refresh');
+        console.log('⏰ 4:00 AM IST (Monday) - Weekly games list refresh');
+        console.log('⏰ Various intervals - Game period processing\n');
+        
     } catch (error) {
         logger.error('❌ Error starting game scheduler:', error);
         process.exit(1);
@@ -387,7 +496,8 @@ process.on('SIGINT', () => {
 
 // Export for use in other files
 module.exports = {
-    startGameScheduler
+    startGameScheduler,
+    resetDailySequences // Export for manual testing if needed
 };
 
 // Start the game scheduler

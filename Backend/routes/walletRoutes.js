@@ -9,7 +9,7 @@ const {
   getAllWalletBalances,
   transferFromThirdPartyToMain
 } = require('../controllers/walletController');
-const { auth, requirePhoneVerification } = require('../middleware/auth');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 

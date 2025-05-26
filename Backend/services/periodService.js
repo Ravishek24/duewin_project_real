@@ -58,6 +58,7 @@ const ensureModelsLoaded = async () => {
 
 /**
  * Generate period ID based on game type, duration, and current time
+ * NEW FORMAT: YYYYMMDD000000000 (17 digits)
  * @param {string} gameType - Game type (wingo, fiveD, k3, trx_wix)
  * @param {number} duration - Period duration in seconds
  * @param {Date} timestamp - Current date/time
@@ -65,56 +66,50 @@ const ensureModelsLoaded = async () => {
  */
 const generatePeriodId = async (gameType, duration, timestamp) => {
     try {
-        console.log('\n=== GENERATING PERIOD ID ===');
+        console.log('\n=== GENERATING NEW FORMAT PERIOD ID ===');
         console.log(`Game Type: ${gameType}`);
         console.log(`Duration: ${duration}s`);
         console.log(`Timestamp: ${timestamp.toISOString()}`);
         
         // Ensure models are loaded
-        const LoadedGamePeriod = await ensureModelsLoaded();
+        await ensureModelsLoaded();
 
-        const now = moment();
-        const startTime = now.clone().startOf('day');
-        const endTime = now.clone().endOf('day');
-
-        // Find the last period for today
-        const lastPeriod = await LoadedGamePeriod.GamePeriod.findOne({
-            where: {
-                game_type: gameType,
-                duration: duration,
-                start_time: {
-                    [Op.between]: [startTime.toDate(), endTime.toDate()]
-                }
-            },
-            order: [['period_id', 'DESC']]
-        });
+        // Get current date in IST
+        const istMoment = moment(timestamp).tz('Asia/Kolkata');
+        const dateStr = istMoment.format('YYYYMMDD');
         
-        let sequence = 1;
-        if (lastPeriod) {
-            const lastSequence = parseInt(lastPeriod.period_id.split('-')[3]) || 0;
-            sequence = lastSequence + 1;
-        }
+        // Create duration key
+        const durationKey = duration === 30 ? '30s' :
+                           duration === 60 ? '1m' :
+                           duration === 180 ? '3m' :
+                           duration === 300 ? '5m' : '10m';
         
-        // Get game type prefix (first letter of each word)
-        const gameTypePrefix = gameType.split('_')
-            .map(word => word.charAt(0).toUpperCase())
-            .join('');
-            
-        // Get duration prefix
-        const durationPrefix = duration === 30 ? '30' :
-                             duration === 60 ? '60' :
-                             duration === 180 ? '180' :
-                             duration === 300 ? '300' : '600';
+        // Get sequence counter from Redis
+        const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
         
-        // Get base period ID (YYYYMMDDHHMM)
-        const basePeriodId = timestamp.toISOString()
-            .replace(/[-T:]/g, '')
-            .slice(0, 12);
-            
-        // Format: YYYYMMDDHHMM-GAME-DURATION-SEQ
-        const periodId = `${basePeriodId}-${gameTypePrefix}-${durationPrefix}-${sequence.toString().padStart(3, '0')}`;
+        // Get current sequence number (atomic increment)
+        let sequenceNumber = await redisClient.incr(sequenceKey);
+        
+        // Set expiry for sequence key (expires at 2 AM next day)
+        const tomorrow2AM = moment.tz('Asia/Kolkata')
+            .add(1, 'day')
+            .hour(2)
+            .minute(0)
+            .second(0)
+            .millisecond(0);
+        const expirySeconds = Math.max(3600, tomorrow2AM.diff(istMoment, 'seconds'));
+        await redisClient.expire(sequenceKey, expirySeconds);
+        
+        // Convert sequence to 0-based (Redis INCR starts from 1)
+        sequenceNumber = sequenceNumber - 1;
+        
+        // Format: YYYYMMDD + 9-digit sequence (zero-padded)
+        const periodId = `${dateStr}${sequenceNumber.toString().padStart(9, '0')}`;
         
         console.log(`Generated period ID: ${periodId}`);
+        console.log(`Sequence number: ${sequenceNumber}`);
+        console.log(`Sequence key: ${sequenceKey}`);
+        console.log(`Expires in: ${expirySeconds} seconds`);
         console.log('=== PERIOD ID GENERATION COMPLETE ===\n');
         
         return periodId;
@@ -126,29 +121,61 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
     }
 };
 
+
+/**
+ * Get current sequence number for a game-duration combination
+ * @param {string} gameType - Game type
+ * @param {string} duration - Duration key (30s, 1m, etc.)
+ * @param {string} dateStr - Date string (YYYYMMDD)
+ * @returns {number} - Current sequence number
+ */
+const getCurrentSequence = async (gameType, duration, dateStr) => {
+    try {
+        const sequenceKey = `${gameType}:${duration}:daily_sequence:${dateStr}`;
+        const currentSequence = await redisClient.get(sequenceKey);
+        return parseInt(currentSequence || '0', 10);
+    } catch (error) {
+        logger.error('Error getting current sequence:', {
+            error: error.message,
+            gameType,
+            duration,
+            dateStr
+        });
+        return 0;
+    }
+};
+
 /**
  * Calculate start time for a period
+ * NEW FORMAT: YYYYMMDD000000000
  * @param {string} periodId - Period ID
  * @param {number} duration - Duration in seconds
  * @returns {Date} - Start time
  */
 const calculatePeriodStartTime = (periodId, duration) => {
     try {
-        // Extract date and time from period ID (first 12 characters)
-        const dateTimeStr = periodId.substring(0, 12);
-        const year = parseInt(dateTimeStr.substring(0, 4), 10);
-        const month = parseInt(dateTimeStr.substring(4, 6), 10) - 1; // Months are 0-indexed
-        const day = parseInt(dateTimeStr.substring(6, 8), 10);
-        const hour = parseInt(dateTimeStr.substring(8, 10), 10);
-        const minute = parseInt(dateTimeStr.substring(10, 12), 10);
+        // Extract date from period ID (first 8 characters)
+        const dateStr = periodId.substring(0, 8);
+        const year = parseInt(dateStr.substring(0, 4), 10);
+        const month = parseInt(dateStr.substring(4, 6), 10) - 1; // Months are 0-indexed
+        const day = parseInt(dateStr.substring(6, 8), 10);
         
-        // Create date in IST
-        const startTime = moment.tz([year, month, day, hour, minute], 'Asia/Kolkata');
+        // Extract sequence number (last 9 characters)
+        const sequenceStr = periodId.substring(8);
+        const sequenceNumber = parseInt(sequenceStr, 10);
+        
+        // Calculate start time based on sequence and duration
+        // Start from 2 AM IST of the date + (sequence * duration)
+        const baseTime = moment.tz([year, month, day, 2, 0, 0], 'Asia/Kolkata');
+        const startTime = baseTime.add(sequenceNumber * duration, 'seconds');
         
         console.log('Calculated period start time:', {
             periodId,
             duration,
-            startTime: startTime.toISOString()
+            dateStr,
+            sequenceNumber,
+            baseTime: baseTime.format(),
+            startTime: startTime.format()
         });
         
         return startTime.toDate();
@@ -180,8 +207,8 @@ const calculatePeriodEndTime = (periodId, duration) => {
         logger.debug('Calculated period end time:', {
             periodId,
             duration,
-            startTime: moment(startTime).tz('Asia/Kolkata').toISOString(),
-            endTime: endTime.toISOString()
+            startTime: moment(startTime).tz('Asia/Kolkata').format(),
+            endTime: endTime.format()
         });
         
         return endTime.toDate();
@@ -424,6 +451,7 @@ const getActivePeriods = async (gameType) => {
 
 /**
  * Generate next period ID
+ * NEW FORMAT: Simply increment the sequence number
  * @param {string} currentPeriodId - Current period ID
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds
@@ -431,21 +459,26 @@ const getActivePeriods = async (gameType) => {
  */
 const generateNextPeriodId = async (currentPeriodId, gameType, duration) => {
     try {
-        // Format date as YYYYMMDD
+        // Extract date and sequence from current period ID
         const dateStr = currentPeriodId.substring(0, 8);
+        const currentSequence = parseInt(currentPeriodId.substring(8), 10);
         
-        // Get sequence number from the last 9 digits
-        const sequenceNumber = parseInt(currentPeriodId.substring(8), 10);
+        // Generate next sequence number
+        const nextSequence = currentSequence + 1;
         
-        // Generate next period ID by incrementing the sequence number
-        const nextSequenceNumber = sequenceNumber + 1;
-        const nextPeriodId = `${dateStr}${nextSequenceNumber.toString().padStart(9, '0')}`;
+        // Create next period ID
+        const nextPeriodId = `${dateStr}${nextSequence.toString().padStart(9, '0')}`;
+        
+        // Update Redis sequence counter
+        const durationKey = duration === 30 ? '30s' :
+                           duration === 60 ? '1m' :
+                           duration === 180 ? '3m' :
+                           duration === 300 ? '5m' : '10m';
+        
+        const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
+        await redisClient.set(sequenceKey, nextSequence + 1); // +1 because Redis INCR will be used next
         
         // Store this as the last period ID
-        const durationKey = duration === 30 ? '30s' : 
-                          duration === 60 ? '1m' : 
-                          duration === 180 ? '3m' : 
-                          duration === 300 ? '5m' : '10m';
         const lastPeriodKey = `${gameType}:${durationKey}:lastPeriod`;
         await redisClient.set(lastPeriodKey, nextPeriodId);
         
@@ -456,7 +489,9 @@ const generateNextPeriodId = async (currentPeriodId, gameType, duration) => {
             gameType,
             duration: durationKey,
             currentPeriodId,
-            nextPeriodId
+            nextPeriodId,
+            currentSequence,
+            nextSequence
         });
         
         return nextPeriodId;

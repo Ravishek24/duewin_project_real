@@ -9,7 +9,7 @@ const {
   checkMxPayMerchantBalanceController,
   processMxPayPayoutController
 } = require('../controllers/mxPayController');
-const { auth, authenticateAdmin, requirePhoneVerification } = require('../middleware/auth');
+const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
@@ -18,9 +18,9 @@ router.post('/deposit', auth, requirePhoneVerification, mxPayDepositController);
 router.get('/order-status/:order_id', auth, requirePhoneVerification, checkMxPayOrderStatusController);
 
 // Admin-only routes
-router.get('/banks', auth, authenticateAdmin, getMxPayBankListController);
-router.get('/balance', auth, authenticateAdmin, checkMxPayMerchantBalanceController);
-router.post('/payout/:withdrawal_id', auth, authenticateAdmin, processMxPayPayoutController);
+router.get('/banks', auth, getMxPayBankListController);
+router.get('/balance', auth, checkMxPayMerchantBalanceController);
+router.post('/payout/:withdrawal_id', auth, processMxPayPayoutController);
 
 // Callback routes for MxPay (public, accessed by payment gateway)
 router.post('/collection-callback', mxPayCollectionCallbackController);

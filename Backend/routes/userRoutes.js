@@ -17,7 +17,7 @@ const {
     getUserRebateEarnings,
     getUserDetails
 } = require('../controllers/userController/index');
-const { auth } = require('../middleware/auth');
+const { auth, isAdmin, requirePhoneVerification } = require('../middlewares/authMiddleware');
 const validationRules = require('../middleware/inputValidator');
 
 const router = express.Router();
@@ -34,13 +34,7 @@ router.get('/profile', auth, getProfileController);
 router.put('/profile', auth, updateProfileController);
 
 // Protected routes that require phone verification
-router.get('/dashboard', auth, (req, res) => {
-    if (!req.user.is_phone_verified) {
-        return res.status(403).json({
-            success: false,
-            message: 'Phone verification required'
-        });
-    }
+router.get('/dashboard', auth, requirePhoneVerification, (req, res) => {
     res.status(200).json({
         success: true,
         message: 'This is a protected route that requires phone verification.'
@@ -48,13 +42,13 @@ router.get('/dashboard', auth, (req, res) => {
 });
 
 // Admin routes
-router.get('/admin/users', auth, getUserDetailsForAdmin);
-router.get('/admin/users/:user_id/bet-history', auth, getUserBetHistory);
-router.get('/admin/users/:user_id/deposit-history', auth, getUserDepositHistory);
-router.get('/admin/users/:user_id/withdrawal-history', auth, getUserWithdrawalHistory);
-router.get('/admin/users/:user_id/bank-details', auth, getUserBankDetails);
-router.get('/admin/users/:user_id/transaction-history', auth, getUserTransactionHistory);
-router.get('/admin/users/:user_id/team-summary', auth, getUserTeamSummary);
-router.get('/admin/users/:user_id/rebate-earnings', auth, getUserRebateEarnings);
+router.get('/admin/users', auth, isAdmin, getUserDetailsForAdmin);
+router.get('/admin/users/:user_id/bet-history', auth, isAdmin, getUserBetHistory);
+router.get('/admin/users/:user_id/deposit-history', auth, isAdmin, getUserDepositHistory);
+router.get('/admin/users/:user_id/withdrawal-history', auth, isAdmin, getUserWithdrawalHistory);
+router.get('/admin/users/:user_id/bank-details', auth, isAdmin, getUserBankDetails);
+router.get('/admin/users/:user_id/transaction-history', auth, isAdmin, getUserTransactionHistory);
+router.get('/admin/users/:user_id/team-summary', auth, isAdmin, getUserTeamSummary);
+router.get('/admin/users/:user_id/rebate-earnings', auth, isAdmin, getUserRebateEarnings);
 
 module.exports = router;

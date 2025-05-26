@@ -19,7 +19,7 @@ const {
   sendAdminOtpController,
   verifyAdminOtpController
 } = require('../controllers/adminController/adminOtpController');
-const { auth, authenticateAdmin } = require('../middleware/auth');
+const { auth, isAdmin } = require('../middlewares/authMiddleware');
 const adminIpWhitelist = require('../middleware/adminIpWhitelist');
 const { 
   loginSystemConfig,
@@ -138,7 +138,6 @@ router.post('/system-config/login', loginSystemConfig);
 
 // All other admin routes require authentication and admin privileges
 router.use(auth);
-router.use(authenticateAdmin);
 
 // Admin profile management routes
 router.get('/profile', getAdminProfileController);
