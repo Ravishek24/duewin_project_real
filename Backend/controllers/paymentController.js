@@ -16,6 +16,9 @@ const {
 // Import the new MxPay service
 const { createMxPayCollectionOrder } = require('../services/mxPayService');
 
+const { autoProcessRechargeForAttendance } = require('../services/referralService');
+
+
 // Import the new OKPAY service
 const { 
   createOkPayCollectionOrder,
@@ -645,6 +648,11 @@ const getWithdrawalHistory = async (req, res) => {
         });
     }
 };
+
+// After successful recharge/deposit:
+const attendanceResult = await autoProcessRechargeForAttendance(userId, rechargeAmount);
+console.log('Attendance processed for recharge:', attendanceResult);
+
 
 module.exports = {
   payInController,

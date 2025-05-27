@@ -488,6 +488,22 @@ const startGameScheduler = async () => {
     }
 };
 
+// ADD THIS TO THE END OF Backend/scripts/gameScheduler.js
+
+// Import master cron system
+const { initializeMasterCronJobs } = require('./masterCronJobs');
+
+// MODIFY the existing startGameScheduler function to include this code:
+// Find the existing startGameScheduler function and add this line after initialize():
+
+        // Initialize master cron job system
+        console.log('🔄 Initializing master cron job system...');
+        initializeMasterCronJobs();
+        console.log('✅ Master cron job system initialized');
+
+// This should be added after the line: await initialize();
+// and before the line: scheduleWeeklyRefresh();
+
 // Handle process termination
 process.on('SIGINT', () => {
     logger.info('Game scheduler stopped');

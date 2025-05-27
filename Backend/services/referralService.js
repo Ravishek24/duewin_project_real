@@ -760,100 +760,140 @@ const getReferralTreeDetails = async (userId, maxLevel = 5) => {
 };
 
 /**
- * Record VIP experience points from betting
+ * Record VIP experience points from betting (UPDATED VERSION)
  * @param {number} userId - User ID
  * @param {number} betAmount - Bet amount
+ * @param {string} gameType - Game type
+ * @param {string} gameId - Game ID (optional)
  * @returns {Object} - Operation result
  */
-const recordBetExperience = async (userId, betAmount) => {
+const recordBetExperience = async (userId, betAmount, gameType = 'unknown', gameId = null) => {
+    try {
+        // Import the auto VIP service
+        const { recordVipExperience } = require('./autoVipService');
+        
+        // Record VIP experience with full tracking
+        const result = await recordVipExperience(userId, betAmount, gameType, gameId);
+        
+        return {
+            success: true,
+            message: 'VIP experience recorded successfully',
+            expGained: result.expGained,
+            newTotalExp: result.newTotalExp,
+            levelUp: result.leveledUp,
+            levelUpDetails: result.leveledUp ? {
+                oldLevel: result.oldLevel,
+                newLevel: result.newLevel,
+                rewardAmount: result.levelUpReward
+            } : null
+        };
+    } catch (error) {
+        console.error('Error recording bet experience:', error);
+        return {
+            success: false,
+            message: 'Error recording VIP experience: ' + error.message
+        };
+    }
+};
+
+
+/**
+ * Auto-record referral when user signs up (SHOULD BE CALLED FROM REGISTRATION)
+ * @param {number} newUserId - Newly registered user ID
+ * @param {string} referralCode - Referral code used during registration
+ * @returns {Object} - Operation result
+ */
+const autoRecordReferral = async (newUserId, referralCode) => {
     const t = await sequelize.transaction();
 
     try {
-        const user = await User.findByPk(userId, {
-            attributes: ['user_id', 'vip_exp', 'vip_level'],
+        console.log(`🔗 Auto-recording referral for new user ${newUserId} with code: ${referralCode}`);
+
+        // Find the referrer
+        const referrer = await User.findOne({
+            where: { referring_code: referralCode },
             transaction: t
         });
 
-        if (!user) {
+        if (!referrer) {
             await t.rollback();
             return {
                 success: false,
-                message: 'User not found'
+                message: 'Invalid referral code'
             };
         }
 
-        const expToAdd = Math.floor(betAmount);
-        const newExp = user.vip_exp + expToAdd;
-        await user.update({ vip_exp: newExp }, { transaction: t });
+        // Update the new user's referral_code field
+        await User.update(
+            { referral_code: referralCode },
+            { where: { user_id: newUserId }, transaction: t }
+        );
 
-        // Check for VIP level up if VipLevel model exists
-        let levelUpDetails = null;
-        if (VipLevel) {
-            const vipLevels = await VipLevel.findAll({
-                order: [['required_exp', 'ASC']],
-                transaction: t
-            });
+        // Increment referrer's direct referral count
+        await User.increment('direct_referral_count', {
+            by: 1,
+            where: { user_id: referrer.user_id },
+            transaction: t
+        });
 
-            let newVipLevel = 0;
-            for (const vipLevel of vipLevels) {
-                if (newExp >= vipLevel.required_exp) {
-                    newVipLevel = vipLevel.level;
-                } else {
-                    break;
-                }
-            }
-
-            if (newVipLevel > user.vip_level) {
-                const levelDetails = vipLevels.find(l => l.level === newVipLevel);
-
-                if (VipReward) {
-                    const existingReward = await VipReward.findOne({
-                        where: {
-                            user_id: userId,
-                            level: newVipLevel,
-                            reward_type: 'level_up'
-                        },
-                        transaction: t
-                    });
-
-                    if (!existingReward) {
-                        await user.update({ vip_level: newVipLevel }, { transaction: t });
-
-                        await VipReward.create({
-                            user_id: userId,
-                            level: newVipLevel,
-                            reward_type: 'level_up',
-                            reward_amount: levelDetails.bonus_amount,
-                            status: 'pending'
-                        }, { transaction: t });
-
-                        await updateWalletBalance(userId, levelDetails.bonus_amount, 'add', t);
-
-                        levelUpDetails = {
-                            oldLevel: user.vip_level,
-                            newLevel: newVipLevel,
-                            bonusAmount: levelDetails.bonus_amount
-                        };
-                    }
-                }
+        // Create referral tree entry if model exists
+        if (ReferralTree) {
+            try {
+                await ReferralTree.create({
+                    user_id: newUserId,
+                    referrer_id: referrer.user_id,
+                    created_at: new Date(),
+                    updated_at: new Date()
+                }, { transaction: t });
+            } catch (treeError) {
+                console.warn('Could not create referral tree entry:', treeError.message);
             }
         }
 
         await t.commit();
 
+        console.log(`✅ Referral auto-recorded: User ${newUserId} referred by ${referrer.user_id}`);
+
         return {
             success: true,
-            expAdded: expToAdd,
-            newExp,
-            levelUp: levelUpDetails !== null,
-            levelUpDetails
+            message: 'Referral recorded successfully',
+            referrerId: referrer.user_id,
+            referrerName: referrer.user_name,
+            newDirectReferralCount: (referrer.direct_referral_count || 0) + 1
         };
+
     } catch (error) {
         await t.rollback();
-        console.error('Error recording bet experience:', error);
+        console.error('💥 Error auto-recording referral:', error);
         return {
             success: false,
-            message: 'Error recording bet experience'
+            message: 'Error recording referral: ' + error.message
+        };
+    }
+};
+
+// ADD this NEW function for auto-processing recharge for attendance:
+
+/**
+ * Auto-process recharge for attendance (SHOULD BE CALLED FROM RECHARGE PROCESSING)
+ * @param {number} userId - User ID
+ * @param {number} rechargeAmount - Recharge amount
+ * @returns {Object} - Operation result
+ */
+const autoProcessRechargeForAttendance = async (userId, rechargeAmount) => {
+    try {
+        // Import the auto attendance service
+        const { autoProcessRechargeForAttendance } = require('./autoAttendanceService');
+        
+        // Process recharge for attendance
+        const result = await autoProcessRechargeForAttendance(userId, rechargeAmount);
+        
+        return result;
+    } catch (error) {
+        console.error('💥 Error in auto-process recharge for attendance:', error);
+        return {
+            success: false,
+            message: 'Error processing recharge for attendance: ' + error.message
         };
     }
 };
@@ -983,216 +1023,7 @@ const processDirectInvitationBonus = async (userId) => {
     }
 };
 
-/**
- * Record user attendance - FIXED TO INCLUDE REQUIRED DATE FIELD
- * @param {number} userId - User ID
- * @returns {Object} - Operation result
- */
-const recordAttendance = async (userId) => {
-    const t = await sequelize.transaction();
 
-    try {
-        console.log('📅 Recording attendance for user:', userId);
-        console.log('🔧 AttendanceRecord model available:', !!AttendanceRecord);
-        
-        const user = await User.findByPk(userId, {
-            transaction: t
-        });
-
-        if (!user) {
-            await t.rollback();
-            return {
-                success: false,
-                message: 'User not found'
-            };
-        }
-
-        console.log('👤 User found:', user.user_name);
-
-        // Check if AttendanceRecord model is usable
-        if (!AttendanceRecord) {
-            console.log('⚠️ AttendanceRecord model not available');
-            await t.commit();
-            return {
-                success: true,
-                message: 'Attendance recorded (simplified - model not available)',
-                streak: 1,
-                attendanceDate: new Date().toISOString().split('T')[0]
-            };
-        }
-
-        // Check if already attended today
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayDateString = today.toISOString().split('T')[0]; // YYYY-MM-DD format
-
-        console.log('📅 Checking attendance for date:', todayDateString);
-
-        let todayAttendance;
-        try {
-            // Check using attendance_date if it exists, fallback to date
-            todayAttendance = await AttendanceRecord.findOne({
-                where: {
-                    user_id: userId,
-                    [Op.or]: [
-                        { attendance_date: todayDateString },
-                        { date: todayDateString }
-                    ]
-                },
-                transaction: t
-            });
-        } catch (findError) {
-            console.log('⚠️ Error querying AttendanceRecord:', findError.message);
-            // Try simpler query with just date field
-            try {
-                todayAttendance = await AttendanceRecord.findOne({
-                    where: {
-                        user_id: userId,
-                        date: todayDateString
-                    },
-                    transaction: t
-                });
-            } catch (simpleFindError) {
-                console.log('⚠️ Error with simple query too:', simpleFindError.message);
-                await t.commit();
-                return {
-                    success: true,
-                    message: 'Attendance recorded (simplified - query error)',
-                    attendanceDate: todayDateString,
-                    error: findError.message
-                };
-            }
-        }
-
-        if (todayAttendance) {
-            await t.rollback();
-            console.log('✅ Already attended today');
-            return {
-                success: true,
-                message: 'Already attended today',
-                attendanceDate: todayDateString,
-                streak: todayAttendance.streak_count || 1,
-                hasRecharged: todayAttendance.has_recharged || false,
-                claimEligible: todayAttendance.claim_eligible || false,
-                bonusClaimed: todayAttendance.bonus_claimed || false,
-                alreadyRecorded: true
-            };
-        }
-
-        // Get yesterday's attendance to check streak
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayDateString = yesterday.toISOString().split('T')[0];
-
-        console.log('📅 Checking yesterday attendance for date:', yesterdayDateString);
-
-        let yesterdayAttendance;
-        try {
-            yesterdayAttendance = await AttendanceRecord.findOne({
-                where: {
-                    user_id: userId,
-                    [Op.or]: [
-                        { attendance_date: yesterdayDateString },
-                        { date: yesterdayDateString }
-                    ]
-                },
-                transaction: t
-            });
-        } catch (findError) {
-            console.log('⚠️ Error querying yesterday attendance, using default streak');
-            yesterdayAttendance = null;
-        }
-
-        let streak = 1;
-        if (yesterdayAttendance && (yesterdayAttendance.has_recharged || yesterdayAttendance.has_recharged === undefined)) {
-            streak = (yesterdayAttendance.streak_count || 0) + 1;
-        }
-
-        console.log('🔥 Calculated streak:', streak);
-
-        // Create attendance record with BOTH date fields to ensure compatibility
-        let attendanceRecord;
-        try {
-            const recordData = {
-                user_id: userId,
-                date: todayDateString,                    // Required field
-                attendance_date: todayDateString,         // New field (if column exists)
-                streak_count: streak,
-                has_recharged: false,
-                recharge_amount: 0,
-                additional_bonus: 0,
-                bonus_amount: 0,
-                bonus_claimed: false,
-                claim_eligible: false,
-                reward: 0,                               // Legacy field
-                created_at: new Date(),
-                updated_at: new Date()
-            };
-
-            console.log('💾 Creating attendance record with data:', recordData);
-            
-            attendanceRecord = await AttendanceRecord.create(recordData, { transaction: t });
-
-            console.log('✅ Attendance record created with ID:', attendanceRecord.id);
-        } catch (createError) {
-            console.log('⚠️ Error creating attendance record:', createError.message);
-            
-            // Try with minimal required fields only
-            try {
-                const minimalData = {
-                    user_id: userId,
-                    date: todayDateString,
-                    reward: 0
-                };
-                
-                console.log('💾 Trying minimal record creation:', minimalData);
-                attendanceRecord = await AttendanceRecord.create(minimalData, { transaction: t });
-                console.log('✅ Minimal attendance record created');
-                
-            } catch (minimalError) {
-                console.log('⚠️ Even minimal creation failed:', minimalError.message);
-                await t.commit();
-                return {
-                    success: true,
-                    message: 'Attendance recorded (simplified - could not save to database)',
-                    streak: streak,
-                    hasRecharged: false,
-                    claimEligible: false,
-                    bonusClaimed: false,
-                    attendanceDate: todayDateString,
-                    error: 'Could not save to attendance table: ' + createError.message
-                };
-            }
-        }
-
-        await t.commit();
-
-        return {
-            success: true,
-            message: 'Attendance recorded successfully. Recharge required to earn bonus.',
-            streak,
-            hasRecharged: false,
-            claimEligible: false,
-            bonusClaimed: false,
-            attendanceDate: todayDateString,
-            attendanceRecord: {
-                id: attendanceRecord.id,
-                streak_count: streak,
-                has_recharged: false,
-                bonus_amount: 0
-            }
-        };
-    } catch (error) {
-        await t.rollback();
-        console.error('💥 Error recording attendance:', error);
-        console.error('📋 Error message:', error.message);
-        console.error('📋 Error stack:', error.stack);
-        return {
-            success: false,
-            message: 'Error recording attendance: ' + error.message
-        };
-    }
-};
 
 /**
  * Process first recharge bonus
@@ -1390,139 +1221,7 @@ const processRechargeForAttendance = async (userId, rechargeAmount) => {
     }
 };
 
-/**
- * Claim attendance bonus for a specific date - FIXED
- * @param {number} userId - User ID
- * @param {string} attendanceDate - Date to claim bonus for
- * @returns {Object} - Result of claim operation
- */
-const claimAttendanceBonus = async (userId, attendanceDate) => {
-    const t = await sequelize.transaction();
 
-    try {
-        console.log('📅 Claiming attendance bonus for user:', userId);
-        console.log('🔧 AttendanceRecord model available:', !!AttendanceRecord);
-        
-        // If AttendanceRecord doesn't exist, return error
-        if (!AttendanceRecord) {
-            await t.rollback();
-            console.log('⚠️ AttendanceRecord model not available');
-            return {
-                success: false,
-                message: 'Attendance feature not available - attendance table missing'
-            };
-        }
-
-        let targetDate;
-        if (attendanceDate) {
-            targetDate = new Date(attendanceDate);
-            targetDate.setHours(0, 0, 0, 0);
-        } else {
-            targetDate = new Date();
-            targetDate.setHours(0, 0, 0, 0);
-        }
-
-        console.log('📅 Target date for claim:', targetDate);
-
-        const attendanceRecord = await AttendanceRecord.findOne({
-            where: {
-                user_id: userId,
-                attendance_date: targetDate,
-                claim_eligible: true,
-                bonus_claimed: false
-            },
-            transaction: t
-        });
-
-        if (!attendanceRecord) {
-            await t.rollback();
-            console.log('❌ No eligible unclaimed attendance bonus found');
-            return {
-                success: false,
-                message: 'No eligible unclaimed attendance bonus found for this date'
-            };
-        }
-
-        const totalBonus = parseFloat(attendanceRecord.bonus_amount || 0);
-        console.log('💰 Total bonus to claim:', totalBonus);
-
-        if (totalBonus > 0) {
-            await updateWalletBalance(userId, totalBonus, 'add', t);
-            console.log('✅ Added bonus to wallet');
-        }
-
-        await attendanceRecord.update({
-            bonus_claimed: true
-        }, { transaction: t });
-
-        await t.commit();
-
-        return {
-            success: true,
-            message: 'Attendance bonus claimed successfully',
-            bonusAmount: totalBonus,
-            date: targetDate.toISOString().split('T')[0]
-        };
-    } catch (error) {
-        await t.rollback();
-        console.error('💥 Error claiming attendance bonus:', error);
-        return {
-            success: false,
-            message: 'Error claiming attendance bonus: ' + error.message
-        };
-    }
-};
-
-/**
- * Get all unclaimed attendance bonuses for a user - FIXED
- * @param {number} userId - User ID
- * @returns {Object} - List of unclaimed bonuses
- */
-const getUnclaimedAttendanceBonuses = async (userId) => {
-    try {
-        console.log('📅 Getting unclaimed attendance bonuses for user:', userId);
-        console.log('🔧 AttendanceRecord model available:', !!AttendanceRecord);
-        
-        // If AttendanceRecord doesn't exist, return empty list
-        if (!AttendanceRecord) {
-            console.log('⚠️ AttendanceRecord model not available');
-            return {
-                success: true,
-                message: 'Attendance feature not available - attendance table missing',
-                unclaimedBonuses: []
-            };
-        }
-
-        const unclaimed = await AttendanceRecord.findAll({
-            where: {
-                user_id: userId,
-                claim_eligible: true,
-                bonus_claimed: false
-            },
-            order: [['attendance_date', 'DESC']]
-        });
-
-        console.log('📊 Found unclaimed bonuses:', unclaimed.length);
-
-        return {
-            success: true,
-            unclaimedBonuses: unclaimed.map(record => ({
-                date: record.attendance_date,
-                streak: record.streak_count,
-                rechargeAmount: parseFloat(record.recharge_amount || 0),
-                streakBonus: parseFloat(record.bonus_amount || 0) - parseFloat(record.additional_bonus || 0),
-                additionalBonus: parseFloat(record.additional_bonus || 0),
-                totalBonus: parseFloat(record.bonus_amount || 0)
-            }))
-        };
-    } catch (error) {
-        console.error('💥 Error getting unclaimed attendance bonuses:', error);
-        return {
-            success: false,
-            message: 'Error getting unclaimed attendance bonuses: ' + error.message
-        };
-    }
-};
 
 /**
  * Update referral status when a user recharges
@@ -2079,399 +1778,12 @@ const getTotalDeposits = async (userId) => {
 };
 
 
-// Modified attendance functions - Auto recording & simplified bonuses
 
-/**
- * Auto-record user attendance (to be called by daily cron job)
- * @param {number} userId - User ID
- * @returns {Object} - Operation result
- */
-const autoRecordAttendance = async (userId) => {
-    const t = await sequelize.transaction();
-
-    try {
-        console.log('📅 Auto-recording attendance for user:', userId);
-        
-        const user = await User.findByPk(userId, {
-            transaction: t
-        });
-
-        if (!user) {
-            await t.rollback();
-            return {
-                success: false,
-                message: 'User not found'
-            };
-        }
-
-        // If AttendanceRecord model doesn't exist, return simplified response
-        if (!AttendanceRecord) {
-            await t.commit();
-            return {
-                success: true,
-                message: 'Attendance auto-recorded (simplified - model not available)',
-                streak: 1,
-                attendanceDate: new Date().toISOString().split('T')[0]
-            };
-        }
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayDateString = today.toISOString().split('T')[0];
-
-        // Check if already attended today
-        const todayAttendance = await AttendanceRecord.findOne({
-            where: {
-                user_id: userId,
-                [Op.or]: [
-                    { attendance_date: todayDateString },
-                    { date: todayDateString }
-                ]
-            },
-            transaction: t
-        });
-
-        if (todayAttendance) {
-            await t.commit();
-            return {
-                success: true,
-                message: 'Already attended today',
-                attendanceDate: todayDateString,
-                streak: todayAttendance.streak_count || 1,
-                alreadyRecorded: true
-            };
-        }
-
-        // Get yesterday's attendance for streak calculation
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayDateString = yesterday.toISOString().split('T')[0];
-
-        const yesterdayAttendance = await AttendanceRecord.findOne({
-            where: {
-                user_id: userId,
-                [Op.or]: [
-                    { attendance_date: yesterdayDateString },
-                    { date: yesterdayDateString }
-                ]
-            },
-            transaction: t
-        });
-
-        // Calculate streak (only continues if user recharged yesterday)
-        let streak = 1;
-        if (yesterdayAttendance && yesterdayAttendance.has_recharged) {
-            streak = (yesterdayAttendance.streak_count || 0) + 1;
-        }
-
-        // Create attendance record
-        const attendanceRecord = await AttendanceRecord.create({
-            user_id: userId,
-            date: todayDateString,
-            attendance_date: todayDateString,
-            streak_count: streak,
-            has_recharged: false,
-            recharge_amount: 0,
-            additional_bonus: 0,        // Always 0 now (no extra recharge bonus)
-            bonus_amount: 0,            // Will be set when user recharges
-            bonus_claimed: false,
-            claim_eligible: false,      // Becomes true only after recharge
-            created_at: new Date(),
-            updated_at: new Date()
-        }, { transaction: t });
-
-        await t.commit();
-
-        return {
-            success: true,
-            message: 'Attendance auto-recorded successfully. Recharge required to earn bonus.',
-            streak,
-            attendanceDate: todayDateString,
-            attendanceRecord: {
-                id: attendanceRecord.id,
-                streak_count: streak,
-                has_recharged: false,
-                bonus_amount: 0
-            }
-        };
-    } catch (error) {
-        await t.rollback();
-        console.error('💥 Error auto-recording attendance:', error);
-        return {
-            success: false,
-            message: 'Error auto-recording attendance: ' + error.message
-        };
-    }
-};
-
-/**
- * Auto-process recharge for attendance (to be called when user makes any recharge)
- * @param {number} userId - User ID
- * @param {number} rechargeAmount - Amount of recharge
- * @returns {Object} - Processing result
- */
-const autoProcessRechargeForAttendance = async (userId, rechargeAmount) => {
-    const t = await sequelize.transaction();
-
-    try {
-        console.log('💰 Auto-processing recharge for attendance - User:', userId, 'Amount:', rechargeAmount);
-
-        // If AttendanceRecord doesn't exist, return simple response
-        if (!AttendanceRecord) {
-            await t.commit();
-            return {
-                success: true,
-                message: 'Recharge processed (attendance feature not available)'
-            };
-        }
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayDateString = today.toISOString().split('T')[0];
-
-        // Find today's attendance record
-        let attendanceRecord = await AttendanceRecord.findOne({
-            where: {
-                user_id: userId,
-                [Op.or]: [
-                    { attendance_date: todayDateString },
-                    { date: todayDateString }
-                ]
-            },
-            transaction: t
-        });
-
-        // If no attendance record for today, create one automatically
-        if (!attendanceRecord) {
-            console.log('📅 No attendance record found, creating one automatically');
-            
-            // Get yesterday's attendance for streak calculation
-            const yesterday = new Date(today);
-            yesterday.setDate(yesterday.getDate() - 1);
-            const yesterdayDateString = yesterday.toISOString().split('T')[0];
-
-            const yesterdayAttendance = await AttendanceRecord.findOne({
-                where: {
-                    user_id: userId,
-                    [Op.or]: [
-                        { attendance_date: yesterdayDateString },
-                        { date: yesterdayDateString }
-                    ]
-                },
-                transaction: t
-            });
-
-            let streak = 1;
-            if (yesterdayAttendance && yesterdayAttendance.has_recharged) {
-                streak = (yesterdayAttendance.streak_count || 0) + 1;
-            }
-
-            attendanceRecord = await AttendanceRecord.create({
-                user_id: userId,
-                date: todayDateString,
-                attendance_date: todayDateString,
-                streak_count: streak,
-                has_recharged: true,                    // Auto-set to true since user recharged
-                recharge_amount: rechargeAmount,
-                additional_bonus: 0,                    // No extra recharge bonus
-                bonus_amount: 0,                        // Will be calculated below
-                bonus_claimed: false,
-                claim_eligible: true,                   // Auto-eligible since recharged
-                created_at: new Date(),
-                updated_at: new Date()
-            }, { transaction: t });
-        } else {
-            // Update existing record
-            await attendanceRecord.update({
-                has_recharged: true,
-                recharge_amount: parseFloat(attendanceRecord.recharge_amount) + parseFloat(rechargeAmount),
-                claim_eligible: true
-            }, { transaction: t });
-        }
-
-        // Calculate ONLY streak bonus (no additional recharge bonus)
-        const bonusAmounts = [7, 20, 100, 200, 450, 2400, 6400];
-        const bonusIndex = Math.min(attendanceRecord.streak_count - 1, bonusAmounts.length - 1);
-        const streakBonus = bonusAmounts[bonusIndex];
-
-        // Update bonus amount (only streak bonus, no additional bonus)
-        await attendanceRecord.update({
-            additional_bonus: 0,                        // Removed extra recharge bonus
-            bonus_amount: streakBonus,                  // Only streak bonus
-            claim_eligible: true
-        }, { transaction: t });
-
-        await t.commit();
-
-        return {
-            success: true,
-            message: 'Recharge auto-processed for attendance bonus',
-            streak: attendanceRecord.streak_count,
-            streakBonus: streakBonus,
-            additionalBonus: 0,                         // Always 0 now
-            totalBonus: streakBonus,                    // Same as streak bonus
-            isEligible: true,
-            attendanceDate: todayDateString
-        };
-    } catch (error) {
-        await t.rollback();
-        console.error('💥 Error auto-processing recharge for attendance:', error);
-        return {
-            success: false,
-            message: 'Error auto-processing recharge for attendance: ' + error.message
-        };
-    }
-};
-
-/**
- * Daily cron job to auto-record attendance for all active users
- * @returns {Object} - Processing result
- */
-const dailyAttendanceCron = async () => {
-    try {
-        console.log('🕐 Starting daily attendance cron job');
-
-        // Get all users who were active in the last 7 days (or all users)
-        const activeUsers = await User.findAll({
-            where: {
-                // Add your criteria for "active" users, e.g.:
-                // last_login: {
-                //     [Op.gte]: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) // Last 7 days
-                // }
-                // For now, we'll process all users
-            },
-            attributes: ['user_id', 'user_name'],
-            limit: 1000 // Process in batches to avoid memory issues
-        });
-
-        console.log(`📊 Processing attendance for ${activeUsers.length} users`);
-
-        let successCount = 0;
-        let errorCount = 0;
-
-        for (const user of activeUsers) {
-            try {
-                const result = await autoRecordAttendance(user.user_id);
-                if (result.success) {
-                    successCount++;
-                } else {
-                    errorCount++;
-                    console.log(`❌ Failed to record attendance for user ${user.user_id}: ${result.message}`);
-                }
-            } catch (error) {
-                errorCount++;
-                console.error(`💥 Error processing user ${user.user_id}:`, error.message);
-            }
-        }
-
-        console.log(`✅ Daily attendance cron completed: ${successCount} success, ${errorCount} errors`);
-
-        return {
-            success: true,
-            message: 'Daily attendance cron completed',
-            processed: activeUsers.length,
-            successful: successCount,
-            errors: errorCount
-        };
-    } catch (error) {
-        console.error('💥 Error in daily attendance cron:', error);
-        return {
-            success: false,
-            message: 'Error in daily attendance cron: ' + error.message
-        };
-    }
-};
-
-/**
- * Simplified claim attendance bonus (no additional recharge bonus)
- * @param {number} userId - User ID
- * @param {string} attendanceDate - Date to claim bonus for (optional)
- * @returns {Object} - Result of claim operation
- */
-const claimAttendanceBonusSimplified = async (userId, attendanceDate = null) => {
-    const t = await sequelize.transaction();
-
-    try {
-        console.log('📅 Claiming simplified attendance bonus for user:', userId);
-        
-        if (!AttendanceRecord) {
-            await t.rollback();
-            return {
-                success: false,
-                message: 'Attendance feature not available - attendance table missing'
-            };
-        }
-
-        let targetDate;
-        if (attendanceDate) {
-            targetDate = new Date(attendanceDate);
-            targetDate.setHours(0, 0, 0, 0);
-        } else {
-            targetDate = new Date();
-            targetDate.setHours(0, 0, 0, 0);
-        }
-
-        const targetDateString = targetDate.toISOString().split('T')[0];
-
-        const attendanceRecord = await AttendanceRecord.findOne({
-            where: {
-                user_id: userId,
-                [Op.or]: [
-                    { attendance_date: targetDateString },
-                    { date: targetDateString }
-                ],
-                claim_eligible: true,
-                bonus_claimed: false
-            },
-            transaction: t
-        });
-
-        if (!attendanceRecord) {
-            await t.rollback();
-            return {
-                success: false,
-                message: 'No eligible unclaimed attendance bonus found for this date'
-            };
-        }
-
-        // Only streak bonus (no additional bonus)
-        const streakBonus = parseFloat(attendanceRecord.bonus_amount || 0);
-        console.log('💰 Streak bonus to claim:', streakBonus);
-
-        if (streakBonus > 0) {
-            await updateWalletBalance(userId, streakBonus, 'add', t);
-        }
-
-        await attendanceRecord.update({
-            bonus_claimed: true
-        }, { transaction: t });
-
-        await t.commit();
-
-        return {
-            success: true,
-            message: 'Attendance bonus claimed successfully',
-            bonusAmount: streakBonus,
-            date: targetDateString,
-            streak: attendanceRecord.streak_count
-        };
-    } catch (error) {
-        await t.rollback();
-        console.error('💥 Error claiming attendance bonus:', error);
-        return {
-            success: false,
-            message: 'Error claiming attendance bonus: ' + error.message
-        };
-    }
-};
 
 module.exports = {
 
     // New/modified attendance functions
-    autoRecordAttendance,
     autoProcessRechargeForAttendance,
-    dailyAttendanceCron,
-    claimAttendanceBonusSimplified,
 
     // Old attendance functions
     createReferralTree,
@@ -2484,16 +1796,14 @@ module.exports = {
     getReferralTreeDetails,
     recordBetExperience,
     processDirectInvitationBonus,
-    recordAttendance,
     processFirstRechargeBonus,
-    processRechargeForAttendance,
-    claimAttendanceBonus,
-    getUnclaimedAttendanceBonuses,
     updateReferralOnRecharge,
     updateInvitationTier,
     claimInvitationBonus,
     getInvitationBonusStatus,
     processReferrals,
     getTotalDeposits,
-    updateWalletBalance
+    updateWalletBalance,
+
+    autoRecordReferral,
 };

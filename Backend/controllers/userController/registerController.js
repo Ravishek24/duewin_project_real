@@ -2,6 +2,8 @@ const { User } = require('../../models');
 const { generateToken, generateRefreshToken } = require('../../utils/jwt');
 const { Op } = require('sequelize');
 const crypto = require('crypto');
+const { autoRecordReferral } = require('../services/referralService');
+
 
 // Fallback function to generate referral code if utility is not available
 const generateReferringCode = () => {
@@ -139,5 +141,11 @@ const registerController = async (req, res) => {
         });
     }
 };
+
+// After successful user creation, if referral code was used:
+if (referralCode) {
+    const referralResult = await autoRecordReferral(newUser.user_id, referralCode);
+    console.log('Referral auto-recorded:', referralResult);
+}
 
 module.exports = registerController; 

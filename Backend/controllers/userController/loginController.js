@@ -1,7 +1,7 @@
 const { getModels } = require('../../models');
 const { generateToken, generateRefreshToken } = require('../../utils/jwt');
 const { Op } = require('sequelize');
-
+const { getTodayAttendanceStatus } = require('../../services/autoAttendanceService');
 const loginController = async (req, res) => {
     try {
         // Basic validation
@@ -103,5 +103,10 @@ const loginController = async (req, res) => {
         });
     }
 };
+
+// ==================== 4. LOGIN CONTROLLER (Optional) ====================
+// If you want to show attendance status on login
+// In login response:
+const attendanceStatus = await getTodayAttendanceStatus(userId);
 
 module.exports = loginController;

@@ -128,6 +128,7 @@ const initializeModels = async () => {
                 // VIP & Rebate Models  
                 'VipLevel',
                 'VipReward',
+                'VipExperienceHistory',
                 'RebateLevel',
                 'UserRebateLevel',
 

@@ -7,6 +7,8 @@ const winston = require('winston');
 const path = require('path');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
+const { recordVipExperience } = require('../services/autoVipService');
+
 
 // Configure Winston logger for game results
 const gameResultsLogger = winston.createLogger({
@@ -5469,6 +5471,16 @@ const storeHourlyMinimumCombinations = async (gameType, duration, periodId, resu
         return false;
     }
 };
+
+
+// After successful bet placement:
+const vipResult = await recordVipExperience(
+    userId, 
+    betAmount, 
+    gameType, // 'wingo', 'k3', '5d', 'trx_wix', 'casino'
+    gameId    // specific game identifier (optional)
+);
+console.log('VIP experience recorded:', vipResult);
 
 
 module.exports = {
