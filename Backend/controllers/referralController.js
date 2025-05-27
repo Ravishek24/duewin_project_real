@@ -1,16 +1,56 @@
-// controllers/referralController.js
-const referralService = require('../services/referralService');
+// controllers/referralController.js - DEBUG VERSION
 const { Op } = require('sequelize');
 
+// Add detailed error logging for referralService import
+let referralService;
+try {
+    referralService = require('../services/referralService');
+    console.log('✅ ReferralService imported successfully');
+    console.log('🔧 Available functions:', Object.keys(referralService));
+} catch (error) {
+    console.error('❌ Failed to import referralService:', error);
+    console.error('📋 Error stack:', error.stack);
+}
+
 /**
- * Get direct referrals
+ * Get direct referrals - DEBUG VERSION
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
 const getDirectReferralsController = async (req, res) => {
     try {
+        console.log('🔍 DEBUG: getDirectReferralsController started');
+        console.log('👤 User from req.user:', req.user);
+        console.log('🆔 User ID:', req.user?.user_id);
+        console.log('📊 Query params:', req.query);
+        
+        if (!referralService) {
+            console.error('❌ ReferralService not available');
+            return res.status(500).json({
+                success: false,
+                message: 'ReferralService not available'
+            });
+        }
+
+        if (!referralService.getDirectReferrals) {
+            console.error('❌ getDirectReferrals function not found in service');
+            return res.status(500).json({
+                success: false,
+                message: 'getDirectReferrals function not found'
+            });
+        }
+
         const userId = req.user.user_id;
+        if (!userId) {
+            console.error('❌ No user ID found');
+            return res.status(400).json({
+                success: false,
+                message: 'User ID not found'
+            });
+        }
+
         const { start_date, end_date } = req.query;
+        console.log('📅 Date parameters:', { start_date, end_date });
         
         let dateFilter = null;
         if (start_date && end_date) {
@@ -27,31 +67,81 @@ const getDirectReferralsController = async (req, res) => {
             };
         }
         
+        console.log('🔍 Date filter created:', dateFilter);
+        console.log('📞 Calling referralService.getDirectReferrals...');
+        
         const result = await referralService.getDirectReferrals(userId, dateFilter);
+        console.log('📋 Service result received:', result);
         
         if (result.success) {
+            console.log('✅ Returning success response');
             return res.status(200).json(result);
         } else {
+            console.log('❌ Service returned error:', result.message);
             return res.status(400).json(result);
         }
     } catch (error) {
-        console.error('Error in getDirectReferralsController:', error);
+        console.error('💥 DETAILED ERROR in getDirectReferralsController:');
+        console.error('📋 Error message:', error.message);
+        console.error('📋 Error name:', error.name);
+        console.error('📋 Error stack:', error.stack);
+        console.error('📋 Error cause:', error.cause);
+        console.error('📋 Full error object:', error);
+        
         res.status(500).json({
             success: false,
-            message: 'Server error fetching direct referrals'
+            message: 'Server error fetching direct referrals',
+            debug: {
+                errorMessage: error.message,
+                errorName: error.name,
+                errorStack: error.stack,
+                userId: req.user?.user_id,
+                hasReferralService: !!referralService,
+                hasGetDirectReferrals: !!(referralService && referralService.getDirectReferrals)
+            }
         });
     }
 };
 
 /**
- * Get team referrals
+ * Get team referrals - DEBUG VERSION
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
 const getTeamReferralsController = async (req, res) => {
     try {
+        console.log('🏆 DEBUG: getTeamReferralsController started');
+        console.log('👤 User from req.user:', req.user);
+        console.log('🆔 User ID:', req.user?.user_id);
+        console.log('📊 Query params:', req.query);
+        
+        if (!referralService) {
+            console.error('❌ ReferralService not available');
+            return res.status(500).json({
+                success: false,
+                message: 'ReferralService not available'
+            });
+        }
+
+        if (!referralService.getTeamReferrals) {
+            console.error('❌ getTeamReferrals function not found in service');
+            return res.status(500).json({
+                success: false,
+                message: 'getTeamReferrals function not found'
+            });
+        }
+
         const userId = req.user.user_id;
+        if (!userId) {
+            console.error('❌ No user ID found');
+            return res.status(400).json({
+                success: false,
+                message: 'User ID not found'
+            });
+        }
+
         const { start_date, end_date } = req.query;
+        console.log('📅 Date parameters:', { start_date, end_date });
         
         let dateFilter = null;
         if (start_date && end_date) {
@@ -68,31 +158,81 @@ const getTeamReferralsController = async (req, res) => {
             };
         }
         
+        console.log('🔍 Date filter created:', dateFilter);
+        console.log('📞 Calling referralService.getTeamReferrals...');
+        
         const result = await referralService.getTeamReferrals(userId, dateFilter);
+        console.log('📋 Service result received:', result);
         
         if (result.success) {
+            console.log('✅ Returning success response');
             return res.status(200).json(result);
         } else {
+            console.log('❌ Service returned error:', result.message);
             return res.status(400).json(result);
         }
     } catch (error) {
-        console.error('Error in getTeamReferralsController:', error);
+        console.error('💥 DETAILED ERROR in getTeamReferralsController:');
+        console.error('📋 Error message:', error.message);
+        console.error('📋 Error name:', error.name);
+        console.error('📋 Error stack:', error.stack);
+        console.error('📋 Error cause:', error.cause);
+        console.error('📋 Full error object:', error);
+        
         res.status(500).json({
             success: false,
-            message: 'Server error fetching team referrals'
+            message: 'Server error fetching team referrals',
+            debug: {
+                errorMessage: error.message,
+                errorName: error.name,
+                errorStack: error.stack,
+                userId: req.user?.user_id,
+                hasReferralService: !!referralService,
+                hasGetTeamReferrals: !!(referralService && referralService.getTeamReferrals)
+            }
         });
     }
 };
 
 /**
- * Get direct referral deposits
+ * Get direct referral deposits - DEBUG VERSION
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
 const getDirectReferralDepositsController = async (req, res) => {
     try {
+        console.log('💰 DEBUG: getDirectReferralDepositsController started');
+        console.log('👤 User from req.user:', req.user);
+        console.log('🆔 User ID:', req.user?.user_id);
+        console.log('📊 Query params:', req.query);
+        
+        if (!referralService) {
+            console.error('❌ ReferralService not available');
+            return res.status(500).json({
+                success: false,
+                message: 'ReferralService not available'
+            });
+        }
+
+        if (!referralService.getDirectReferralDeposits) {
+            console.error('❌ getDirectReferralDeposits function not found in service');
+            return res.status(500).json({
+                success: false,
+                message: 'getDirectReferralDeposits function not found'
+            });
+        }
+
         const userId = req.user.user_id;
+        if (!userId) {
+            console.error('❌ No user ID found');
+            return res.status(400).json({
+                success: false,
+                message: 'User ID not found'
+            });
+        }
+
         const { start_date, end_date } = req.query;
+        console.log('📅 Date parameters:', { start_date, end_date });
         
         let dateFilter = null;
         if (start_date && end_date) {
@@ -109,27 +249,43 @@ const getDirectReferralDepositsController = async (req, res) => {
             };
         }
         
+        console.log('🔍 Date filter created:', dateFilter);
+        console.log('📞 Calling referralService.getDirectReferralDeposits...');
+        
         const result = await referralService.getDirectReferralDeposits(userId, dateFilter);
+        console.log('📋 Service result received:', result);
         
         if (result.success) {
+            console.log('✅ Returning success response');
             return res.status(200).json(result);
         } else {
+            console.log('❌ Service returned error:', result.message);
             return res.status(400).json(result);
         }
     } catch (error) {
-        console.error('Error in getDirectReferralDepositsController:', error);
+        console.error('💥 DETAILED ERROR in getDirectReferralDepositsController:');
+        console.error('📋 Error message:', error.message);
+        console.error('📋 Error name:', error.name);
+        console.error('📋 Error stack:', error.stack);
+        console.error('📋 Error cause:', error.cause);
+        console.error('📋 Full error object:', error);
+        
         res.status(500).json({
             success: false,
-            message: 'Server error fetching direct referral deposits'
+            message: 'Server error fetching direct referral deposits',
+            debug: {
+                errorMessage: error.message,
+                errorName: error.name,
+                errorStack: error.stack,
+                userId: req.user?.user_id,
+                hasReferralService: !!referralService,
+                hasGetDirectReferralDeposits: !!(referralService && referralService.getDirectReferralDeposits)
+            }
         });
     }
 };
 
-/**
- * Get team referral deposits
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
+// Keep other controller functions as they were, but add similar debugging
 const getTeamReferralDepositsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
@@ -166,13 +322,11 @@ const getTeamReferralDepositsController = async (req, res) => {
     }
 };
 
-/**
- * Get commission earnings
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
 const getCommissionEarningsController = async (req, res) => {
     try {
+        console.log('💸 DEBUG: getCommissionEarningsController started');
+        console.log('🆔 User ID:', req.user?.user_id);
+        
         const userId = req.user.user_id;
         const { start_date, end_date } = req.query;
         
@@ -191,7 +345,9 @@ const getCommissionEarningsController = async (req, res) => {
             };
         }
         
+        console.log('📞 Calling referralService.getCommissionEarnings...');
         const result = await referralService.getCommissionEarnings(userId, dateFilter);
+        console.log('📋 Service result received:', result);
         
         if (result.success) {
             return res.status(200).json(result);
@@ -199,47 +355,73 @@ const getCommissionEarningsController = async (req, res) => {
             return res.status(400).json(result);
         }
     } catch (error) {
-        console.error('Error in getCommissionEarningsController:', error);
+        console.error('💥 DETAILED ERROR in getCommissionEarningsController:');
+        console.error('📋 Error message:', error.message);
+        console.error('📋 Error stack:', error.stack);
+        
         res.status(500).json({
             success: false,
-            message: 'Server error fetching commission earnings'
+            message: 'Server error fetching commission earnings',
+            debug: {
+                errorMessage: error.message,
+                errorStack: error.stack,
+                userId: req.user?.user_id
+            }
         });
     }
 };
 
-/**
- * Get referral tree details
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
 const getReferralTreeDetailsController = async (req, res) => {
     try {
+        console.log('🌳 DEBUG: getReferralTreeDetailsController started');
+        console.log('🆔 User ID:', req.user?.user_id);
+        
+        if (!referralService) {
+            console.error('❌ ReferralService not available');
+            return res.status(500).json({
+                success: false,
+                message: 'ReferralService not available'
+            });
+        }
+
+        if (!referralService.getReferralTreeDetails) {
+            console.error('❌ getReferralTreeDetails function not found in service');
+            return res.status(500).json({
+                success: false,
+                message: 'getReferralTreeDetails function not found'
+            });
+        }
+
         const userId = req.user.user_id;
         const { level } = req.query;
         
         const maxLevel = level ? parseInt(level) : 6;
         
+        console.log('📞 Calling referralService.getReferralTreeDetails...');
         const result = await referralService.getReferralTreeDetails(userId, maxLevel);
+        console.log('📋 Service result received:', result);
         
-        if (result.success) {
-            return res.status(200).json(result);
+        if (result.success !== false) {
+            return res.status(200).json({
+                success: true,
+                ...result
+            });
         } else {
             return res.status(400).json(result);
         }
     } catch (error) {
-        console.error('Error in getReferralTreeDetailsController:', error);
+        console.error('💥 ERROR in getReferralTreeDetailsController:', error);
         res.status(500).json({
             success: false,
-            message: 'Server error fetching referral tree details'
+            message: 'Server error fetching referral tree details',
+            debug: {
+                errorMessage: error.message,
+                errorStack: error.stack
+            }
         });
     }
 };
 
-/**
- * Record attendance
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
 const recordAttendanceController = async (req, res) => {
     try {
         const userId = req.user.user_id;
@@ -260,16 +442,10 @@ const recordAttendanceController = async (req, res) => {
     }
 };
 
-/**
- * Get direct referral analytics
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
 const getDirectReferralAnalyticsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         
-        // Get today's date range
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
@@ -280,22 +456,18 @@ const getDirectReferralAnalyticsController = async (req, res) => {
             [Op.between]: [today, endOfToday]
         };
         
-        // Get direct referrals for today
         const directReferralsToday = await referralService.getDirectReferrals(
             userId, 
             { created_at: todayFilter }
         );
         
-        // Get direct referral deposits for today
         const directDepositsToday = await referralService.getDirectReferralDeposits(
             userId, 
             { time_of_request: todayFilter }
         );
         
-        // Get all-time direct referrals
         const allTimeDirectReferrals = await referralService.getDirectReferrals(userId);
         
-        // Get all-time direct deposits
         const allTimeDirectDeposits = await referralService.getDirectReferralDeposits(userId);
         
         return res.status(200).json({
@@ -328,16 +500,10 @@ const getDirectReferralAnalyticsController = async (req, res) => {
     }
 };
 
-/**
- * Get team referral analytics
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
 const getTeamReferralAnalyticsController = async (req, res) => {
     try {
         const userId = req.user.user_id;
         
-        // Get today's date range
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         
@@ -348,25 +514,20 @@ const getTeamReferralAnalyticsController = async (req, res) => {
             [Op.between]: [today, endOfToday]
         };
         
-        // Get team referrals for today
         const teamReferralsToday = await referralService.getTeamReferrals(
             userId, 
             { created_at: todayFilter }
         );
         
-        // Get team referral deposits for today
         const teamDepositsToday = await referralService.getTeamReferralDeposits(
             userId, 
             { time_of_request: todayFilter }
         );
         
-        // Get all-time team referrals
         const allTimeTeamReferrals = await referralService.getTeamReferrals(userId);
         
-        // Get all-time team deposits
         const allTimeTeamDeposits = await referralService.getTeamReferralDeposits(userId);
         
-        // Get commission earnings
         const commissionsToday = await referralService.getCommissionEarnings(
             userId,
             { created_at: todayFilter }

@@ -9,7 +9,7 @@ const { sequelize, waitForDatabase } = require('../config/db');
 const verifyModelMethods = (model, modelName) => {
     const requiredMethods = ['findOne', 'create', 'update', 'findAll', 'destroy'];
     const missingMethods = requiredMethods.filter(method => typeof model[method] !== 'function');
-    
+
     if (missingMethods.length > 0) {
         throw new Error(`Model ${modelName} is missing required methods: ${missingMethods.join(', ')}`);
     }
@@ -20,7 +20,7 @@ const verifyModelMethods = (model, modelName) => {
 const initializeModel = async (modelFile, modelName) => {
     try {
         const model = require(modelFile);
-        
+
         // Handle different model types
         if (typeof model === 'function') {
             if (model.prototype && model.prototype.constructor.name === modelName) {
@@ -79,13 +79,22 @@ const initializeModels = async () => {
     initializationPromise = (async () => {
         try {
             console.log('🔄 Initializing models...');
-            
+
             // Wait for database to be ready
             await waitForDatabase();
-            
+
             // Import all model files
+            // Update your models/index.js with this exact modelFiles array:
+
             const modelFiles = [
+                // Core User & Authentication
                 'User',
+                'RefreshToken',
+                'UserSession',
+                'SystemConfig',
+
+                // Game Models
+                'GameConfig',
                 'GamePeriod',
                 'BetResultWingo',
                 'BetResult5D',
@@ -95,17 +104,45 @@ const initializeModels = async () => {
                 'BetRecord5D',
                 'BetRecordK3',
                 'BetRecordTrxWix',
+                'GameTransaction',
+                'GameSession',
+                'SeamlessTransaction',
+                'SeamlessGameSession',
+
+                // Payment & Wallet Models
                 'PaymentGateway',
                 'PaymentGatewaySettings',
                 'WalletRecharge',
                 'WalletWithdrawal',
-                'BankAccount',
                 'WithdrawalAdmin',
+                'BankAccount',
+                'UsdtAccount',
+                'ThirdPartyWallet',
+                'Transaction',
+
+                // Referral System Models
+                'ReferralTree',
+                'ReferralCommission',
+                'ValidReferral',
+
+                // VIP & Rebate Models  
+                'VipLevel',
+                'VipReward',
+                'RebateLevel',
+                'UserRebateLevel',
+
+                // Attendance & Bonus Models
+                'AttendanceRecord',
+
+                // Rate Limiting & Security
+                'RateLimitViolation',
+
+                // OTP & Requests
                 'OtpRequest',
-                'GameTransaction',
-                'GameSession',
-                'SeamlessTransaction',
-                'SeamlessGameSession'
+
+                // Gift System
+                'GiftCode',
+                'GiftCodeClaim'
             ];
 
             // Initialize each model
@@ -175,3 +212,5 @@ module.exports = {
         return models;
     }
 };
+
+
