@@ -28,6 +28,7 @@ router.use('/bank-accounts', auth, bankRoutes);
 router.use('/usdt-accounts', auth, usdtRoutes);
 router.use('/wallet', auth, walletRoutes);
 router.use('/games', auth, gameRoutes);
+router.use('/internal', auth, internalGameRoutes);
 router.use('/payments', auth, paymentRoutes);
 router.use('/payment-gateways', auth, paymentGatewayRoutes);
 router.use('/spribe', auth, spribeRoutes);
@@ -38,7 +39,6 @@ router.use('/otp', otpRoutes); // OTP routes typically don't need auth
 router.use('/admin', isAdmin, adminRoutes);
 router.use('/payments/mxpay', mxPayRoutes); // MxPay routes handle their own auth
 router.use('/vip', vipRoutes); // VIP routes handle their own auth
-router.use('/private', internalGameRoutes);
 
 // Debug routes
 router.get('/debug/token', (req, res) => {

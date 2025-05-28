@@ -3132,20 +3132,9 @@ const getBetDistribution = async (gameType, duration, periodId) => {
  */
 const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
     try {
-        // Input validation and logging
-        if (!gameType) {
-            throw new Error('Game type is required');
-        }
+        // CRITICAL: Ensure models are initialized
+        const models = await ensureModelsInitialized();
 
-        if (!duration || ![30, 60, 180, 300, 600].includes(parseInt(duration))) {
-            throw new Error('Valid duration is required (30, 60, 180, 300, or 600 seconds)');
-        }
-
-        // Ensure limit and offset are integers
-        limit = parseInt(limit);
-        offset = parseInt(offset);
-
-        // Log request parameters for debugging
         logger.info('Getting game history', {
             gameType,
             duration,
@@ -3154,113 +3143,161 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
             timestamp: new Date().toISOString()
         });
 
-        // Get duration key for Redis
-        const durationKey = duration === 30 ? '30s' :
-            duration === 60 ? '1m' :
-                duration === 180 ? '3m' :
-                    duration === 300 ? '5m' : '10m';
+        // Validate inputs
+        if (!gameType || !duration) {
+            throw new Error('Game type and duration are required');
+        }
 
-        // Create Redis keys
-        const historyKey = `${gameType}:${durationKey}:history`;
-        const recentResultsKey = `${gameType}:${durationKey}:recent_results`;
+        const validDurations = {
+            'wingo': [30, 60, 180, 300],
+            'trx_wix': [30, 60, 180, 300],
+            'k3': [60, 180, 300, 600],
+            'fiveD': [60, 180, 300, 600]
+        };
 
-        // Try to get from Redis first
+        if (!validDurations[gameType]?.includes(duration)) {
+            throw new Error(`Invalid duration ${duration} for game type ${gameType}`);
+        }
+
         let results = [];
         let totalCount = 0;
 
-        try {
-            // Get from sorted set (most recent first)
-            const redisResults = await redisClient.zrevrange(recentResultsKey, offset, offset + limit - 1);
-            results = redisResults.map(item => JSON.parse(item));
+        // Get data from appropriate model
+        switch (gameType) {
+            case 'wingo':
+                const wingoResults = await models.BetResultWingo.findAll({
+                    where: { duration: duration },
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                
+                totalCount = await models.BetResultWingo.count({
+                    where: { duration: duration }
+                });
 
-            // Get total count
-            totalCount = await redisClient.zcard(recentResultsKey);
-
-            logger.info('Retrieved results from Redis', {
-                count: results.length,
-                totalCount
-            });
-        } catch (redisError) {
-            logger.warn('Error getting results from Redis, falling back to database', {
-                error: redisError.message
-            });
-
-            // Fall back to database if Redis fails
-            const durationValue = parseInt(duration);
-            const whereCondition = { time: durationValue };
-
-            // Special case for trx_wix which stores duration differently
-            const finalWhereCondition = gameType.toLowerCase() === 'trx_wix' ? {} : whereCondition;
-
-            // Standardize game type for database queries
-            const mappedGameType = {
-                'wingo': 'wingo',
-                'fived': 'fiveD',
-                '5d': 'fiveD',
-                'k3': 'k3',
-                'trx_wix': 'trx_wix'
-            }[gameType.toLowerCase()] || gameType;
-
-            // Select appropriate model based on game type
-            let Model;
-            switch (mappedGameType) {
-                case 'wingo':
-                    Model = BetResultWingo;
-                    break;
-                case 'fiveD':
-                    Model = BetResult5D;
-                    break;
-                case 'k3':
-                    Model = BetResultK3;
-                    break;
-                case 'trx_wix':
-                    Model = BetResultTrxWix;
-                    break;
-                default:
-                    throw new Error(`Unsupported game type: ${gameType}`);
-            }
-
-            // Query for results
-            results = await Model.findAll({
-                where: finalWhereCondition,
-                order: [['created_at', 'DESC']],
-                limit: limit,
-                offset: offset
-            });
-
-            // Get total count
-            totalCount = await Model.count({
-                where: finalWhereCondition
-            });
-
-            logger.info('Retrieved results from database', {
-                count: results.length,
-                totalCount
-            });
-        }
-
-        // Format results
-        const formattedResults = results.map(result => {
-            if (result instanceof Model) {
-                // Database result
-                return {
+                results = wingoResults.map(result => ({
                     periodId: result.bet_number,
                     result: {
-                        ...result.toJSON(),
-                        created_at: result.created_at
+                        number: result.result_of_number,
+                        color: result.result_of_color,
+                        size: result.result_of_size
                     },
-                    timestamp: result.created_at
-                };
-            } else {
-                // Redis result
-                return result;
-            }
+                    createdAt: result.created_at,
+                    duration: result.duration,
+                    timeline: result.timeline
+                }));
+                break;
+
+            case 'trx_wix':
+                const trxResults = await models.BetResultTrxWix.findAll({
+                    where: { duration: duration },
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                
+                totalCount = await models.BetResultTrxWix.count({
+                    where: { duration: duration }
+                });
+
+                results = trxResults.map(result => {
+                    let resultData;
+                    try {
+                        resultData = typeof result.result === 'string' ? 
+                            JSON.parse(result.result) : result.result;
+                    } catch (err) {
+                        resultData = { number: 0, color: 'red', size: 'Small' };
+                    }
+
+                    return {
+                        periodId: result.period,
+                        result: resultData,
+                        verification: {
+                            hash: result.verification_hash,
+                            link: result.verification_link
+                        },
+                        createdAt: result.created_at,
+                        duration: result.duration,
+                        timeline: result.timeline
+                    };
+                });
+                break;
+
+            case 'k3':
+                const k3Results = await models.BetResultK3.findAll({
+                    where: { duration: duration },
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                
+                totalCount = await models.BetResultK3.count({
+                    where: { duration: duration }
+                });
+
+                results = k3Results.map(result => ({
+                    periodId: result.bet_number,
+                    result: {
+                        dice_1: result.dice_1,
+                        dice_2: result.dice_2,
+                        dice_3: result.dice_3,
+                        sum: result.sum,
+                        has_pair: result.has_pair,
+                        has_triple: result.has_triple,
+                        is_straight: result.is_straight,
+                        sum_size: result.sum_size,
+                        sum_parity: result.sum_parity
+                    },
+                    createdAt: result.created_at,
+                    duration: result.duration,
+                    timeline: result.timeline
+                }));
+                break;
+
+            case 'fiveD':
+                const fiveDResults = await models.BetResult5D.findAll({
+                    where: { duration: duration },
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                
+                totalCount = await models.BetResult5D.count({
+                    where: { duration: duration }
+                });
+
+                results = fiveDResults.map(result => ({
+                    periodId: result.bet_number,
+                    result: {
+                        A: result.result_a,
+                        B: result.result_b,
+                        C: result.result_c,
+                        D: result.result_d,
+                        E: result.result_e,
+                        sum: result.total_sum
+                    },
+                    createdAt: result.created_at,
+                    duration: result.duration,
+                    timeline: result.timeline
+                }));
+                break;
+
+            default:
+                throw new Error(`Unsupported game type: ${gameType}`);
+        }
+
+        logger.info('Game history retrieved successfully', {
+            gameType,
+            duration,
+            resultsCount: results.length,
+            totalCount
         });
 
         return {
             success: true,
             data: {
-                results: formattedResults,
+                results: results,
                 pagination: {
                     total: totalCount,
                     limit,
@@ -3269,12 +3306,15 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                 }
             }
         };
+
     } catch (error) {
         logger.error('Error getting game history', {
             error: error.message,
             stack: error.stack,
             gameType,
-            duration
+            duration,
+            limit,
+            offset
         });
 
         return {
@@ -3284,6 +3324,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
         };
     }
 };
+
 
 
 /**
@@ -5205,7 +5246,31 @@ const storeBetInRedis = async (betData) => {
  */
 const processBet = async (betData) => {
     try {
-        // Validate bet
+        const {
+            userId,
+            gameType,
+            duration,
+            periodId,
+            betType,
+            betValue,
+            betAmount,
+            odds
+        } = betData;
+
+        // CRITICAL: Ensure models are initialized
+        const models = await ensureModelsInitialized();
+
+        logger.info('Processing bet', {
+            userId,
+            gameType,
+            duration,
+            periodId,
+            betType,
+            betValue,
+            betAmount
+        });
+
+        // Validate bet data
         const validation = await validateBet(betData);
         if (!validation.valid) {
             return {
@@ -5214,48 +5279,167 @@ const processBet = async (betData) => {
             };
         }
 
-        // Store bet in Redis
-        const stored = await storeBetInRedis(betData);
-        if (!stored) {
+        // Check user balance
+        const user = await models.User.findByPk(userId);
+        if (!user) {
             return {
                 success: false,
-                message: 'Failed to store bet'
+                message: 'User not found'
             };
         }
 
-        // Update user's bet count
-        const betCount = await getUserBetCount(betData.userId, betData.gameType, betData.periodId);
+        if (parseFloat(user.wallet_balance) < betAmount) {
+            return {
+                success: false,
+                message: 'Insufficient balance'
+            };
+        }
 
-        // Deduct bet amount from user's balance
-        await User.decrement('wallet_balance', {
-            by: betData.betAmount,
-            where: { user_id: betData.userId }
-        });
+        // Check if period is still active
+        const periodStatus = await getPeriodStatus(gameType, duration, periodId);
+        if (!periodStatus.active || periodStatus.timeRemaining <= 5) {
+            return {
+                success: false,
+                message: 'Betting period has ended'
+            };
+        }
 
-        logger.info('Bet processed successfully', {
-            userId: betData.userId,
-            gameType: betData.gameType,
-            periodId: betData.periodId,
-            betAmount: betData.betAmount
-        });
+        // Start transaction
+        const t = await sequelize.transaction();
+        
+        try {
+            // Deduct amount from user balance
+            await models.User.decrement('wallet_balance', {
+                by: betAmount,
+                where: { user_id: userId },
+                transaction: t
+            });
 
-        return {
-            success: true,
-            message: 'Bet processed successfully',
-            betCount: betCount + 1
-        };
+            // Store bet in Redis for real-time optimization
+            const redisStored = await storeBetInRedis(betData);
+            if (!redisStored) {
+                throw new Error('Failed to store bet in Redis');
+            }
+
+            // Store bet in appropriate database table
+            let betRecord;
+            const betTypeFormatted = `${betType}:${betValue}`;
+            
+            switch (gameType) {
+                case 'wingo':
+                    betRecord = await models.BetRecordWingo.create({
+                        user_id: userId,
+                        period: periodId,
+                        bet_type: betTypeFormatted,
+                        bet_amount: betAmount,
+                        odds: odds,
+                        status: 'pending',
+                        created_at: new Date()
+                    }, { transaction: t });
+                    break;
+
+                case 'trx_wix':
+                    betRecord = await models.BetRecordTrxWix.create({
+                        user_id: userId,
+                        period: periodId,
+                        bet_type: betTypeFormatted,
+                        bet_amount: betAmount,
+                        odds: odds,
+                        status: 'pending',
+                        created_at: new Date()
+                    }, { transaction: t });
+                    break;
+
+                case 'k3':
+                    betRecord = await models.BetRecordK3.create({
+                        user_id: userId,
+                        period: periodId,
+                        bet_type: betTypeFormatted,
+                        bet_amount: betAmount,
+                        odds: odds,
+                        status: 'pending',
+                        created_at: new Date()
+                    }, { transaction: t });
+                    break;
+
+                case 'fiveD':
+                    betRecord = await models.BetRecord5D.create({
+                        user_id: userId,
+                        period: periodId,
+                        bet_type: betTypeFormatted,
+                        bet_amount: betAmount,
+                        odds: odds,
+                        status: 'pending',
+                        created_at: new Date()
+                    }, { transaction: t });
+                    break;
+
+                default:
+                    throw new Error(`Unsupported game type: ${gameType}`);
+            }
+
+            // Commit transaction
+            await t.commit();
+
+            // Record VIP experience
+            try {
+                await recordVipExperience(userId, betAmount, gameType, periodId);
+            } catch (vipError) {
+                // Don't fail bet processing if VIP recording fails
+                logger.warn('VIP experience recording failed', {
+                    error: vipError.message,
+                    userId,
+                    betAmount,
+                    gameType
+                });
+            }
+
+            logger.info('Bet processed successfully', {
+                userId,
+                gameType,
+                periodId,
+                betAmount,
+                betId: betRecord.bet_id || betRecord.id
+            });
+
+            return {
+                success: true,
+                message: 'Bet placed successfully',
+                data: {
+                    betId: betRecord.bet_id || betRecord.id,
+                    gameType,
+                    duration,
+                    periodId,
+                    betType,
+                    betValue,
+                    betAmount,
+                    odds,
+                    expectedWin: betAmount * odds,
+                    timeRemaining: periodStatus.timeRemaining,
+                    userBalance: parseFloat(user.wallet_balance) - betAmount
+                }
+            };
+
+        } catch (error) {
+            await t.rollback();
+            throw error;
+        }
+
     } catch (error) {
         logger.error('Error processing bet', {
             error: error.message,
             stack: error.stack,
             betData
         });
+
         return {
             success: false,
-            message: 'Error processing bet'
+            message: 'Failed to process bet',
+            error: error.message
         };
     }
 };
+
 
 /**
  * Calculate odds for a bet type
@@ -5472,6 +5656,338 @@ const storeHourlyMinimumCombinations = async (gameType, duration, periodId, resu
     }
 };
 
+const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
+    try {
+        // CRITICAL: Ensure models are initialized
+        const models = await ensureModelsInitialized();
+
+        const {
+            page = 1,
+            limit = 10,
+            periodId = null,
+            status = null
+        } = options;
+
+        const offset = (page - 1) * limit;
+        
+        logger.info('Getting user bet history', {
+            userId,
+            gameType,
+            duration,
+            page,
+            limit,
+            periodId,
+            status
+        });
+
+        // Build where clause
+        const whereClause = {
+            user_id: userId
+        };
+
+        if (periodId) {
+            whereClause.period = periodId;
+        }
+
+        if (status) {
+            whereClause.status = status;
+        }
+
+        // Add duration filter if the model supports it
+        if (duration && ['wingo', 'trx_wix'].includes(gameType)) {
+            // For wingo and trx_wix, we might need to filter by period ID pattern
+            // or add duration field to bet record models
+        }
+
+        let bets = [];
+        let totalCount = 0;
+
+        // Get bets from appropriate model
+        switch (gameType) {
+            case 'wingo':
+                bets = await models.BetRecordWingo.findAll({
+                    where: whereClause,
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                totalCount = await models.BetRecordWingo.count({
+                    where: whereClause
+                });
+                break;
+
+            case 'trx_wix':
+                bets = await models.BetRecordTrxWix.findAll({
+                    where: whereClause,
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                totalCount = await models.BetRecordTrxWix.count({
+                    where: whereClause
+                });
+                break;
+
+            case 'k3':
+                bets = await models.BetRecordK3.findAll({
+                    where: whereClause,
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                totalCount = await models.BetRecordK3.count({
+                    where: whereClause
+                });
+                break;
+
+            case 'fiveD':
+                bets = await models.BetRecord5D.findAll({
+                    where: whereClause,
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                totalCount = await models.BetRecord5D.count({
+                    where: whereClause
+                });
+                break;
+
+            default:
+                throw new Error(`Unsupported game type: ${gameType}`);
+        }
+
+        // Format bets for response
+        const formattedBets = bets.map(bet => {
+            const [betType, betValue] = bet.bet_type.split(':');
+            
+            return {
+                betId: bet.bet_id || bet.id,
+                periodId: bet.period,
+                betType: betType,
+                betValue: betValue,
+                betAmount: parseFloat(bet.bet_amount),
+                odds: parseFloat(bet.odds || 0),
+                status: bet.status,
+                winAmount: bet.win_amount ? parseFloat(bet.win_amount) : 0,
+                profitLoss: bet.win_amount ? 
+                    parseFloat(bet.win_amount) - parseFloat(bet.bet_amount) : 
+                    -parseFloat(bet.bet_amount),
+                createdAt: bet.created_at,
+                updatedAt: bet.updated_at,
+                gameType,
+                duration
+            };
+        });
+
+        return {
+            success: true,
+            data: {
+                bets: formattedBets,
+                pagination: {
+                    total: totalCount,
+                    page: page,
+                    limit: limit,
+                    offset: offset,
+                    hasMore: offset + limit < totalCount,
+                    totalPages: Math.ceil(totalCount / limit)
+                }
+            }
+        };
+
+    } catch (error) {
+        logger.error('Error getting user bet history', {
+            error: error.message,
+            stack: error.stack,
+            userId,
+            gameType,
+            duration
+        });
+
+        return {
+            success: false,
+            message: 'Failed to get user bet history',
+            error: error.message
+        };
+    }
+};
+
+/**
+ * NEW FUNCTION: Enhanced period status with betting window info
+ * ADD this function to gameLogicService.js
+ */
+const getEnhancedPeriodStatus = async (gameType, duration, periodId) => {
+    try {
+        const endTime = calculatePeriodEndTime(periodId, duration);
+        const now = new Date();
+        const timeRemaining = Math.max(0, (endTime - now) / 1000);
+        
+        // Betting closes 5 seconds before period ends
+        const bettingTimeRemaining = Math.max(0, timeRemaining - 5);
+        const isBettingOpen = bettingTimeRemaining > 0;
+
+        // Get total bets and unique users for this period
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        const totalBetKey = `${gameType}:${durationKey}:${periodId}:total`;
+        const totalBetAmount = parseFloat(await redisClient.get(totalBetKey) || 0);
+        
+        const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId);
+
+        return {
+            success: true,
+            data: {
+                periodId,
+                gameType,
+                duration,
+                active: timeRemaining > 0,
+                timeRemaining: Math.round(timeRemaining),
+                bettingTimeRemaining: Math.round(bettingTimeRemaining),
+                isBettingOpen,
+                endTime: endTime.toISOString(),
+                totalBetAmount,
+                uniqueUserCount,
+                bettingCloseTime: new Date(endTime.getTime() - 5000).toISOString()
+            }
+        };
+
+    } catch (error) {
+        logger.error('Error getting enhanced period status', {
+            error: error.message,
+            gameType,
+            duration,
+            periodId
+        });
+
+        return {
+            success: false,
+            message: 'Failed to get period status',
+            error: error.message
+        };
+    }
+};
+
+/**
+ * NEW FUNCTION: Get user's current balance across all wallets
+ * ADD this function to gameLogicService.js
+ */
+const getUserGameBalance = async (userId) => {
+    try {
+        // CRITICAL: Ensure models are initialized
+        const models = await ensureModelsInitialized();
+
+        // Get user's main wallet balance
+        const user = await models.User.findByPk(userId);
+        if (!user) {
+            return {
+                success: false,
+                message: 'User not found'
+            };
+        }
+
+        const mainWalletBalance = parseFloat(user.wallet_balance || 0);
+
+        // Get third-party wallet balance if exists
+        let thirdPartyWalletBalance = 0;
+        try {
+            const thirdPartyWallet = await models.ThirdPartyWallet.findOne({
+                where: { user_id: userId, is_active: true }
+            });
+            
+            if (thirdPartyWallet) {
+                thirdPartyWalletBalance = parseFloat(thirdPartyWallet.balance || 0);
+            }
+        } catch (thirdPartyError) {
+            logger.warn('Error getting third-party wallet balance', {
+                error: thirdPartyError.message,
+                userId
+            });
+        }
+
+        const totalAvailable = mainWalletBalance + thirdPartyWalletBalance;
+
+        return {
+            success: true,
+            data: {
+                mainWallet: mainWalletBalance,
+                thirdPartyWallet: thirdPartyWalletBalance,
+                totalAvailable: totalAvailable,
+                currency: 'INR', // or get from user preferences
+                canPlay: totalAvailable > 0
+            }
+        };
+
+    } catch (error) {
+        logger.error('Error getting user game balance', {
+            error: error.message,
+            stack: error.stack,
+            userId
+        });
+
+        return {
+            success: false,
+            message: 'Failed to get user balance',
+            error: error.message
+        };
+    }
+};
+
+/**
+ * ENHANCED FUNCTION: WebSocket result broadcasting
+ * ADD this function to gameLogicService.js
+ */
+const broadcastGameResult = async (gameType, duration, periodId, result) => {
+    try {
+        // Get socket.io instance
+        const { getIo } = require('../config/socketConfig');
+        const io = getIo();
+        
+        if (!io) {
+            logger.warn('Socket.IO not available for broadcasting');
+            return;
+        }
+
+        // Format result for broadcast based on game type
+        let broadcastData = {
+            gameType,
+            duration,
+            periodId,
+            result,
+            timestamp: new Date().toISOString()
+        };
+
+        // Add verification for trx_wix
+        if (gameType === 'trx_wix' && result.verification) {
+            broadcastData.verification = result.verification;
+        }
+
+        // Broadcast to all clients in the game room
+        const roomName = `${gameType}_${duration}`;
+        io.to(roomName).emit('gameResult', broadcastData);
+
+        // Also broadcast to general game room
+        io.to('games').emit('gameResult', broadcastData);
+
+        logger.info('Game result broadcasted', {
+            gameType,
+            duration,
+            periodId,
+            roomName
+        });
+
+    } catch (error) {
+        logger.error('Error broadcasting game result', {
+            error: error.message,
+            gameType,
+            duration,
+            periodId
+        });
+    }
+};
+
+
 
 // After successful bet placement:
 const vipResult = await recordVipExperience(
@@ -5592,6 +6108,13 @@ module.exports = {
     cleanupPeriodData,
     getPeriodOptimizationStats,
     getColorForNumber,
+
+    // New functions
+    getUserBetHistory,
+    getEnhancedPeriodStatus,
+    getUserGameBalance,
+    broadcastGameResult,
+
 
     // Model management
     ensureModelsInitialized,
