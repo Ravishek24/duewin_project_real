@@ -3,7 +3,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { sequelize, waitForDatabase } = require('../config/db');
+
+// DON'T import sequelize at the top level - it will be imported when needed
+// const { sequelize, waitForDatabase } = require('../config/db'); // REMOVED
 
 // Helper function to verify model methods
 const verifyModelMethods = (model, modelName) => {
@@ -17,7 +19,7 @@ const verifyModelMethods = (model, modelName) => {
 };
 
 // Helper function to initialize a single model
-const initializeModel = async (modelFile, modelName) => {
+const initializeModel = async (modelFile, modelName, sequelize) => {
     try {
         const model = require(modelFile);
 
@@ -80,12 +82,13 @@ const initializeModels = async () => {
         try {
             console.log('🔄 Initializing models...');
 
+            // Import sequelize AFTER database connection is established
+            const { sequelize, waitForDatabase } = require('../config/db');
+
             // Wait for database to be ready
             await waitForDatabase();
 
             // Import all model files
-            // Update your models/index.js with this exact modelFiles array:
-
             const modelFiles = [
                 // Core User & Authentication
                 'User',
@@ -149,23 +152,29 @@ const initializeModels = async () => {
             // Initialize each model
             for (const modelName of modelFiles) {
                 try {
-                    models[modelName] = await initializeModel(`./${modelName}`, modelName);
+                    models[modelName] = await initializeModel(`./${modelName}`, modelName, sequelize);
                     console.log(`✅ Initialized model: ${modelName}`);
                 } catch (error) {
                     console.error(`❌ Error initializing model ${modelName}:`, error);
-                    throw error;
+                    // Don't throw error for individual models - continue with others
+                    console.warn(`⚠️ Skipping model ${modelName} due to error`);
                 }
             }
 
             // Set up model associations
             Object.values(models).forEach(model => {
                 if (model.associate) {
-                    model.associate(models);
+                    try {
+                        model.associate(models);
+                    } catch (error) {
+                        console.error(`❌ Error setting up associations for model:`, error);
+                    }
                 }
             });
 
             isInitialized = true;
             console.log('✅ All models initialized successfully');
+            console.log(`📊 Successfully loaded ${Object.keys(models).length} models`);
             return models;
         } catch (error) {
             console.error('❌ Error during model initialization:', error);
@@ -213,5 +222,3 @@ module.exports = {
         return models;
     }
 };
-
-

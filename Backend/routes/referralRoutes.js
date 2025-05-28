@@ -1,4 +1,4 @@
-// routes/referralRoutes.js - CORRECTED VERSION
+// routes/referralRoutes.js - FIXED VERSION
 const express = require('express');
 
 // Import controller functions
@@ -22,18 +22,18 @@ const { auth, requirePhoneVerification } = require('../middlewares/authMiddlewar
 const router = express.Router();
 
 // Direct referrals
-router.get('/direct',auth, getDirectReferralsController);
+router.get('/direct', auth, getDirectReferralsController);
 
 // Team referrals
 router.get('/team', auth, getTeamReferralsController);
 
 // Direct referral deposits - both singular and plural paths
-router.get('/direct/deposits',  auth, requirePhoneVerification, getDirectReferralDepositsController);
+router.get('/direct/deposits', auth, requirePhoneVerification, getDirectReferralDepositsController);
 router.get('/direct/deposit', auth, requirePhoneVerification, getDirectReferralDepositsController);
 
 // Team referral deposits
 router.get('/team/deposits', auth, requirePhoneVerification, getTeamReferralDepositsController);
-router.get('/team/deposit',  auth, requirePhoneVerification, getTeamReferralDepositsController);
+router.get('/team/deposit', auth, requirePhoneVerification, getTeamReferralDepositsController);
 
 // Commission earnings
 router.get('/commissions', auth, requirePhoneVerification, getCommissionEarningsController);
@@ -45,7 +45,7 @@ router.get('/tree', auth, getReferralTreeDetailsController);
 router.get('/analytics/direct', auth, getDirectReferralAnalyticsController);
 router.get('/analytics/team', auth, getTeamReferralAnalyticsController);
 
-// Attendance bonus endpoints - FIXED WITH AUTH MIDDLEWARE
+// Attendance bonus endpoints - FIXED WITH PROPER ASYNC HANDLERS
 router.post('/attendance', auth, requirePhoneVerification, async (req, res) => {
     try {
         console.log('📅 DEBUG: Attendance route hit');
@@ -76,7 +76,6 @@ router.post('/attendance', auth, requirePhoneVerification, async (req, res) => {
         });
     }
 });
-
 
 router.get('/attendance/unclaimed', auth, requirePhoneVerification, async (req, res) => {
     try {
@@ -136,7 +135,6 @@ router.post('/attendance/claim', auth, requirePhoneVerification, async (req, res
         });
     }
 });
-
 
 router.get('/invitation/status', auth, requirePhoneVerification, async (req, res) => {
     try {
@@ -199,7 +197,5 @@ router.post('/invitation/claim', auth, requirePhoneVerification, async (req, res
         });
     }
 });
-
-
 
 module.exports = router;

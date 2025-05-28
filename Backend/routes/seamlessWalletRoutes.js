@@ -1,4 +1,4 @@
-// routes/seamlessWalletRoutes.js
+// routes/seamlessWalletRoutes.js - FIXED VERSION
 const express = require('express');
 const {
   getGamesController,
@@ -33,6 +33,7 @@ router.get('/iframe/:gameId', auth, requirePhoneVerification, serveGameInIframeC
 router.get('/redirect/:gameId', auth, requirePhoneVerification, redirectToGameController);
 
 // Debug routes - direct access to the game URL without middleware or frontend formatting
+// FIXED: Ensure this route handler is properly async
 router.get('/debug-game/:gameId', auth, async (req, res) => {
   try {
     const { gameId } = req.params;
@@ -107,6 +108,7 @@ router.get('/debug-game/:gameId', auth, async (req, res) => {
 router.get('/test', auth, testPageController);
 
 // Route to transfer funds to third-party wallet
+// FIXED: Ensure this route handler is properly async
 router.post('/transfer-to-third-party', auth, requirePhoneVerification, async (req, res) => {
   try {
     const userId = req.user.user_id;

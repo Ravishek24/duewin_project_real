@@ -1,6 +1,7 @@
 // routes/index.js - FIXED VERSION
 
 const express = require('express');
+const jwt = require('jsonwebtoken'); // ADD THIS LINE - Missing import
 const userRoutes = require('./userRoutes');
 const bankRoutes = require('./bankRoutes');
 const usdtRoutes = require('./usdtRoutes');

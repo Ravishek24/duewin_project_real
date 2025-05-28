@@ -1,14 +1,9 @@
-// Backend/index.js - Minimal startup with robust error handling
+// Backend/index.js - SIMPLIFIED VERSION
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
-const { sequelize } = require('./config/db');
-const { initializeModels } = require('./models');
-const { setupPaymentGateways } = require('./services/paymentGatewayService');
-const { setupScheduledJobs } = require('./services/schedulerService');
-const { setupRoutes } = require('./routes');
 
 // Load environment variables first
 dotenv.config();
@@ -77,48 +72,56 @@ try {
     console.warn('⚠️ Socket config not available:', error.message);
 }
 
-// Initialize database
-const initializeDatabase = async () => {
+// Variables to hold initialized components
+let sequelize = null;
+let models = null;
+
+// Complete database and model initialization
+const initializeDatabaseAndModels = async () => {
     try {
+        console.log('🔧 Starting database initialization...');
+        
+        // Step 1: Connect to database first
+        console.log('📡 Connecting to database...');
+        const { connectDB } = require('./config/db');
+        await connectDB();
+        console.log('✅ Database connected');
+        
+        // Step 2: Initialize database structure
+        console.log('🏗️ Initializing database structure...');
         const { initializeDatabase } = require('./config/db');
-        const success = await initializeDatabase();
-        if (!success) {
-            throw new Error('Failed to initialize database');
+        const dbInitSuccess = await initializeDatabase();
+        if (!dbInitSuccess) {
+            throw new Error('Database initialization failed');
         }
-        console.log('✅ Database initialized successfully');
+        console.log('✅ Database structure initialized');
+        
+        // Step 3: Get sequelize instance (now it's safe to access)
+        const { sequelize: dbSequelize } = require('./config/db');
+        sequelize = dbSequelize;
+        console.log('✅ Sequelize instance obtained');
+        
+        // Step 4: Initialize models (now sequelize is available)
+        console.log('🔧 Initializing models...');
+        const { initializeModels } = require('./models');
+        models = await initializeModels();
+        console.log('✅ Models initialized successfully');
+        console.log(`📊 Loaded ${Object.keys(models).length} models`);
+        
         return true;
     } catch (error) {
-        console.error('❌ Database initialization failed:', error);
+        console.error('❌ Database and models initialization failed:', error);
+        console.error('Stack trace:', error.stack);
         return false;
     }
 };
 
-// Model initialization function
-const initializeModels = async () => {
-    try {
-        console.log('🔧 Initializing models...');
-        
-        // Import model initialization
-        const { initializeModels } = require('./models');
-        
-        // Initialize models
-        const models = await initializeModels();
-        console.log('✅ Models initialized successfully');
-        console.log(`📊 Loaded ${Object.keys(models).length - 2} models`);
-        
-        return models;
-    } catch (error) {
-        console.error('❌ Model initialization failed:', error.message);
-        throw error;
-    }
-};
-
 // Routes setup function
-const setupRoutes = () => {
+const setupAppRoutes = () => {
     try {
         console.log('🛣️ Setting up routes...');
         
-        // Import routes
+        // Import routes after models are initialized
         const apiRoutes = require('./routes/index');
         
         // Mount API routes
@@ -128,6 +131,7 @@ const setupRoutes = () => {
         return true;
     } catch (error) {
         console.error('❌ Routes setup failed:', error.message);
+        console.error('❌ Error stack:', error.stack);
         // Don't throw - server can still run with basic routes
         return false;
     }
@@ -140,20 +144,26 @@ const setupAdditionalServices = async () => {
         
         // Install hack fixes
         try {
-            const { installHackFix } = require('./config/hackFix');
-            const hackFixInstalled = await installHackFix(sequelize);
-            if (hackFixInstalled) {
-                console.log('✅ Hack fixes installed');
+            if (sequelize) {
+                const { installHackFix } = require('./config/hackFix');
+                const hackFixInstalled = await installHackFix(sequelize);
+                if (hackFixInstalled) {
+                    console.log('✅ Hack fixes installed');
+                }
+            } else {
+                console.warn('⚠️ Sequelize not available, cannot install hack fixes');
             }
         } catch (hackError) {
             console.warn('⚠️ Hack fixes not installed:', hackError.message);
         }
         
         // Initialize payment gateways
+        const { setupPaymentGateways } = require('./services/paymentGatewayService');
         await setupPaymentGateways();
         console.log('✅ Payment gateways initialized');
         
         // Set up cron jobs
+        const { setupScheduledJobs } = require('./services/schedulerService');
         await setupScheduledJobs();
         console.log('✅ Scheduled jobs configured');
         
@@ -199,25 +209,22 @@ const startServer = async () => {
     try {
         console.log('🚀 Starting server initialization sequence...');
         
-        // Step 1: Initialize database (critical)
-        const dbInitialized = await initializeDatabase();
-        if (!dbInitialized) {
-            throw new Error('Database initialization failed');
+        // Step 1: Initialize database and models (critical)
+        const dbSuccess = await initializeDatabaseAndModels();
+        if (!dbSuccess) {
+            throw new Error('Database and models initialization failed');
         }
         
-        // Step 2: Initialize models (critical)
-        await initializeModels();
+        // Step 2: Setup routes (important but not critical)
+        setupAppRoutes();
         
-        // Step 3: Setup routes (important but not critical)
-        setupRoutes();
-        
-        // Step 4: Setup additional services (optional)
+        // Step 3: Setup additional services (optional)
         await setupAdditionalServices();
         
-        // Step 5: Setup error handling
+        // Step 4: Setup error handling
         setupErrorHandling();
         
-        // Step 6: Start the server
+        // Step 5: Start the server
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`✅ Server running successfully on http://0.0.0.0:${PORT}`);
             console.log(`🌐 Health check: http://0.0.0.0:${PORT}/health`);

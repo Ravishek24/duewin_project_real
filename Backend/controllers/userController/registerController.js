@@ -2,8 +2,7 @@ const { User } = require('../../models');
 const { generateToken, generateRefreshToken } = require('../../utils/jwt');
 const { Op } = require('sequelize');
 const crypto = require('crypto');
-const { autoRecordReferral } = require('../services/referralService');
-
+const { autoRecordReferral } = require('../../services/referralService'); // Fixed path
 
 // Fallback function to generate referral code if utility is not available
 const generateReferringCode = () => {
@@ -99,6 +98,17 @@ const registerController = async (req, res) => {
             last_login_ip: req.ip || req.connection.remoteAddress
         });
 
+        // FIXED: Handle referral recording inside the async function
+        if (referred_by) {
+            try {
+                const referralResult = await autoRecordReferral(user.user_id, referred_by);
+                console.log('Referral auto-recorded:', referralResult);
+            } catch (referralError) {
+                console.error('Failed to record referral:', referralError.message);
+                // Don't fail registration if referral recording fails
+            }
+        }
+
         // Generate tokens
         const accessToken = generateToken(user);
         const refreshToken = generateRefreshToken(user);
@@ -142,10 +152,11 @@ const registerController = async (req, res) => {
     }
 };
 
-// After successful user creation, if referral code was used:
-if (referralCode) {
-    const referralResult = await autoRecordReferral(newUser.user_id, referralCode);
-    console.log('Referral auto-recorded:', referralResult);
-}
+// REMOVED PROBLEMATIC CODE:
+// This was causing the error:
+// if (referralCode) {
+//     const referralResult = await autoRecordReferral(newUser.user_id, referralCode);
+//     console.log('Referral auto-recorded:', referralResult);
+// }
 
-module.exports = registerController; 
+module.exports = registerController;

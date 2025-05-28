@@ -18,7 +18,6 @@ const { createMxPayCollectionOrder } = require('../services/mxPayService');
 
 const { autoProcessRechargeForAttendance } = require('../services/referralService');
 
-
 // Import the new OKPAY service
 const { 
   createOkPayCollectionOrder,
@@ -373,6 +372,18 @@ const wePayCollectionCallbackController = async (req, res) => {
 const wePayTransferCallbackController = async (req, res) => {
   try {
     const result = await processWePayTransferCallback(req.body);
+    
+    // FIXED: Handle attendance processing after successful recharge/deposit callback
+    if (result.success && result.userId && result.amount) {
+      try {
+        const attendanceResult = await autoProcessRechargeForAttendance(result.userId, result.amount);
+        console.log('Attendance processed for recharge:', attendanceResult);
+      } catch (attendanceError) {
+        console.error('Failed to process attendance for recharge:', attendanceError.message);
+        // Don't fail the callback if attendance processing fails
+      }
+    }
+    
     return res.status(200).json(result);
   } catch (error) {
     console.error('Error processing WePay transfer callback:', error);
@@ -402,6 +413,17 @@ const okPayCallbackController = async (req, res) => {
   try {
     console.log('OKPAY Callback Received:', req.body);
     const result = await processOkPayCallback(req.body);
+    
+    // FIXED: Handle attendance processing after successful payment callback
+    if (result.success && result.userId && result.amount) {
+      try {
+        const attendanceResult = await autoProcessRechargeForAttendance(result.userId, result.amount);
+        console.log('Attendance processed for recharge:', attendanceResult);
+      } catch (attendanceError) {
+        console.error('Failed to process attendance for recharge:', attendanceError.message);
+        // Don't fail the callback if attendance processing fails
+      }
+    }
     
     if (result.success) {
       // OKPAY requires the string "success" as response
@@ -491,6 +513,15 @@ const initiateDeposit = async (req, res) => {
         }
 
         if (result.success) {
+            // FIXED: Handle attendance processing after successful deposit initiation
+            try {
+                const attendanceResult = await autoProcessRechargeForAttendance(userId, parseFloat(amount));
+                console.log('Attendance processed for deposit:', attendanceResult);
+            } catch (attendanceError) {
+                console.error('Failed to process attendance for deposit:', attendanceError.message);
+                // Don't fail the deposit if attendance processing fails
+            }
+            
             return res.status(200).json(result);
         } else {
             return res.status(400).json(result);
@@ -649,10 +680,10 @@ const getWithdrawalHistory = async (req, res) => {
     }
 };
 
-// After successful recharge/deposit:
-const attendanceResult = await autoProcessRechargeForAttendance(userId, rechargeAmount);
-console.log('Attendance processed for recharge:', attendanceResult);
-
+// REMOVED PROBLEMATIC CODE:
+// This was causing the error:
+// const attendanceResult = await autoProcessRechargeForAttendance(userId, rechargeAmount);
+// console.log('Attendance processed for recharge:', attendanceResult);
 
 module.exports = {
   payInController,

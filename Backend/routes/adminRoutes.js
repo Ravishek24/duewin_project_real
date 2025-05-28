@@ -1,4 +1,4 @@
-// routes/adminRoutes.js
+// routes/adminRoutes.js - FIXED VERSION
 const express = require('express');
 const { 
   getPendingWithdrawalsController,
@@ -74,6 +74,7 @@ router.post('/otp/send', sendAdminOtpController);
 router.post('/otp/verify', verifyAdminOtpController);
 
 // TESTING ONLY: Direct admin login without OTP (bypass for testing)
+// FIXED: Make sure this is properly async
 router.post('/direct-login', async (req, res) => {
   try {
     const { email } = req.body;
