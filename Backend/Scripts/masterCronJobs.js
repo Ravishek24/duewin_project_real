@@ -1,24 +1,77 @@
-// Backend/scripts/masterCronJobs.js - Master Cron System
+// Backend/scripts/masterCronJobs.js - Master Cron System - FIXED VERSION
 const cron = require('node-cron');
-const { sequelize } = require('../config/db');
 const { Op } = require('sequelize');
 const moment = require('moment-timezone');
 const logger = require('../utils/logger');
 
-// Import models
-const User = require('../models/User');
-const AttendanceRecord = require('../models/AttendanceRecord');
-const ReferralCommission = require('../models/ReferralCommission');
-const VipLevel = require('../models/VipLevel');
-const VipReward = require('../models/VipReward');
-const WalletRecharge = require('../models/WalletRecharge');
-const GameTransaction = require('../models/GameTransaction');
-const RebateLevel = require('../models/RebateLevel');
-const UserRebateLevel = require('../models/UserRebateLevel');
-const Transaction = require('../models/Transaction');
+// Database and models will be initialized when needed
+let sequelize = null;
+let models = {};
+let isInitialized = false;
 
-// Import services
-const { updateWalletBalance } = require('../services/referralService');
+/**
+ * Initialize database connection and models for cron jobs
+ */
+const initializeDatabaseForCron = async () => {
+    if (isInitialized) {
+        return { sequelize, models };
+    }
+
+    try {
+        console.log('🔄 Initializing database connection for cron jobs...');
+        
+        // Import database config and connect
+        const { connectDB, waitForDatabase, getSequelize } = require('../config/db');
+        
+        // Connect to database
+        await connectDB();
+        console.log('✅ Database connected for cron jobs');
+        
+        // Wait for database to be fully ready
+        await waitForDatabase();
+        console.log('✅ Database is ready for cron jobs');
+        
+        // Get sequelize instance
+        sequelize = await getSequelize();
+        console.log('✅ Sequelize instance obtained for cron jobs');
+        
+        // Initialize models
+        const { getModels } = require('../models');
+        models = await getModels();
+        console.log('✅ Models initialized for cron jobs');
+        
+        isInitialized = true;
+        return { sequelize, models };
+        
+    } catch (error) {
+        console.error('❌ Failed to initialize database for cron jobs:', error);
+        throw error;
+    }
+};
+
+/**
+ * Get initialized sequelize and models
+ */
+const getDatabaseInstances = async () => {
+    if (!isInitialized) {
+        return await initializeDatabaseForCron();
+    }
+    return { sequelize, models };
+};
+
+/**
+ * Import services dynamically when needed
+ */
+const getServices = () => {
+    try {
+        return {
+            updateWalletBalance: require('../services/referralService').updateWalletBalance
+        };
+    } catch (error) {
+        console.error('❌ Error importing services:', error);
+        throw error;
+    }
+};
 
 /**
  * Auto-record attendance for all users (runs once daily at 12:30 AM IST)
@@ -29,6 +82,9 @@ const autoRecordDailyAttendance = async () => {
     
     try {
         console.log('🕐 Starting daily attendance auto-record at 12:30 AM IST...');
+        
+        // Initialize database if needed
+        const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         // Try to acquire lock (expires in 30 minutes)
         const redis = require('../config/redis');
@@ -44,11 +100,9 @@ const autoRecordDailyAttendance = async () => {
         const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
         console.log('📅 Recording attendance for date:', today);
 
-        // Get all active users (you can add criteria for "active" users)
-        const users = await User.findAll({
+        // Get all active users
+        const users = await dbModels.User.findAll({
             attributes: ['user_id', 'user_name'],
-            // Add criteria for active users if needed
-            // where: { last_login: { [Op.gte]: moment().subtract(30, 'days').toDate() } }
         });
 
         console.log(`👥 Processing attendance for ${users.length} users`);
@@ -60,7 +114,7 @@ const autoRecordDailyAttendance = async () => {
         for (const user of users) {
             try {
                 // Check if attendance already recorded for today
-                const existingAttendance = await AttendanceRecord.findOne({
+                const existingAttendance = await dbModels.AttendanceRecord.findOne({
                     where: {
                         user_id: user.user_id,
                         attendance_date: today
@@ -74,7 +128,7 @@ const autoRecordDailyAttendance = async () => {
 
                 // Get yesterday's attendance for streak calculation
                 const yesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').format('YYYY-MM-DD');
-                const yesterdayAttendance = await AttendanceRecord.findOne({
+                const yesterdayAttendance = await dbModels.AttendanceRecord.findOne({
                     where: {
                         user_id: user.user_id,
                         attendance_date: yesterday
@@ -88,17 +142,17 @@ const autoRecordDailyAttendance = async () => {
                 }
 
                 // Create attendance record (auto-record, no recharge yet)
-                await AttendanceRecord.create({
+                await dbModels.AttendanceRecord.create({
                     user_id: user.user_id,
                     date: today,
                     attendance_date: today,
                     streak_count: streak,
                     has_recharged: false,
                     recharge_amount: 0,
-                    additional_bonus: 0,    // No additional bonus anymore
-                    bonus_amount: 0,        // Will be set when user recharges
+                    additional_bonus: 0,
+                    bonus_amount: 0,
                     bonus_claimed: false,
-                    claim_eligible: false,  // Becomes true only after recharge
+                    claim_eligible: false,
                     created_at: new Date(),
                     updated_at: new Date()
                 });
@@ -153,6 +207,10 @@ const processAttendanceBonuses = async () => {
     try {
         console.log('💰 Starting attendance bonus processing at 12:30 AM IST...');
         
+        // Initialize database if needed
+        const { sequelize: db, models: dbModels } = await getDatabaseInstances();
+        const { updateWalletBalance } = getServices();
+        
         const redis = require('../config/redis');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
@@ -165,8 +223,8 @@ const processAttendanceBonuses = async () => {
         
         const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
 
-        // Get all eligible attendance records (recharged but bonus not claimed)
-        const eligibleRecords = await AttendanceRecord.findAll({
+        // Get all eligible attendance records
+        const eligibleRecords = await dbModels.AttendanceRecord.findAll({
             where: {
                 attendance_date: today,
                 has_recharged: true,
@@ -175,7 +233,7 @@ const processAttendanceBonuses = async () => {
                 bonus_amount: { [Op.gt]: 0 }
             },
             include: [{
-                model: User,
+                model: dbModels.User,
                 as: 'attendance_user',
                 attributes: ['user_id', 'user_name', 'wallet_balance']
             }]
@@ -188,7 +246,7 @@ const processAttendanceBonuses = async () => {
         let totalBonusAmount = 0;
 
         for (const record of eligibleRecords) {
-            const t = await sequelize.transaction();
+            const t = await db.transaction();
             
             try {
                 const bonusAmount = parseFloat(record.bonus_amount);
@@ -203,7 +261,7 @@ const processAttendanceBonuses = async () => {
                 }, { transaction: t });
 
                 // Create transaction record
-                await Transaction.create({
+                await dbModels.Transaction.create({
                     user_id: userId,
                     type: 'attendance_bonus',
                     amount: bonusAmount,
@@ -272,6 +330,9 @@ const processDailyRebates = async () => {
     try {
         console.log('💸 Starting daily rebate processing at 12:30 AM IST...');
         
+        // Initialize database if needed
+        await getDatabaseInstances();
+        
         const redis = require('../config/redis');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
@@ -313,7 +374,9 @@ const processDailyRebates = async () => {
  * Process rebate commission for specific type (lottery/casino)
  */
 const processRebateCommissionType = async (gameType) => {
-    const t = await sequelize.transaction();
+    const { sequelize: db, models: dbModels } = await getDatabaseInstances();
+    const { updateWalletBalance } = getServices();
+    const t = await db.transaction();
 
     try {
         console.log(`🎰 Processing ${gameType} rebates...`);
@@ -326,7 +389,7 @@ const processRebateCommissionType = async (gameType) => {
 
         if (gameType === 'lottery') {
             // Internal games (Wingo, 5D, K3, TRX_WIX)
-            betRecords = await sequelize.query(`
+            betRecords = await db.query(`
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
                     SELECT user_id, bet_amount FROM bet_record_wingo 
@@ -345,12 +408,12 @@ const processRebateCommissionType = async (gameType) => {
                 HAVING total_bet_amount > 0
             `, {
                 replacements: { start: yesterday, end: endOfYesterday },
-                type: sequelize.QueryTypes.SELECT,
+                type: db.QueryTypes.SELECT,
                 transaction: t
             });
         } else if (gameType === 'casino') {
             // External/third-party games
-            betRecords = await sequelize.query(`
+            betRecords = await db.query(`
                 SELECT user_id, SUM(amount) as total_bet_amount
                 FROM seamless_transactions
                 WHERE type = 'debit' AND created_at BETWEEN :start AND :end
@@ -358,7 +421,7 @@ const processRebateCommissionType = async (gameType) => {
                 HAVING total_bet_amount > 0
             `, {
                 replacements: { start: yesterday, end: endOfYesterday },
-                type: sequelize.QueryTypes.SELECT,
+                type: db.QueryTypes.SELECT,
                 transaction: t
             });
         }
@@ -374,13 +437,13 @@ const processRebateCommissionType = async (gameType) => {
             const betAmount = parseFloat(record.total_bet_amount);
 
             // Find the user and their referrer
-            const user = await User.findByPk(userId, { transaction: t });
+            const user = await dbModels.User.findByPk(userId, { transaction: t });
             if (!user || !user.referral_code) continue;
 
-            const referrer = await User.findOne({
+            const referrer = await dbModels.User.findOne({
                 where: { referring_code: user.referral_code },
                 include: [{
-                    model: UserRebateLevel,
+                    model: dbModels.UserRebateLevel,
                     required: false,
                     as: 'userrebateleveluser'
                 }],
@@ -391,7 +454,7 @@ const processRebateCommissionType = async (gameType) => {
 
             // Get rebate level details
             const rebateLevel = referrer.userrebateleveluser?.rebate_level || 'L0';
-            const rebateLevelDetails = await RebateLevel.findOne({
+            const rebateLevelDetails = await dbModels.RebateLevel.findOne({
                 where: { level: rebateLevel },
                 transaction: t
             });
@@ -407,7 +470,7 @@ const processRebateCommissionType = async (gameType) => {
 
             if (level1Commission > 0) {
                 // Create commission record
-                await ReferralCommission.create({
+                await dbModels.ReferralCommission.create({
                     user_id: referrer.user_id,
                     referred_user_id: userId,
                     level: 1,
@@ -423,7 +486,7 @@ const processRebateCommissionType = async (gameType) => {
                 await updateWalletBalance(referrer.user_id, level1Commission, 'add', t);
 
                 // Create transaction record
-                await Transaction.create({
+                await dbModels.Transaction.create({
                     user_id: referrer.user_id,
                     type: 'referral_commission',
                     amount: level1Commission,
@@ -471,6 +534,10 @@ const processVipLevelUpRewards = async () => {
     try {
         console.log('👑 Starting VIP level-up reward processing at 12:30 AM IST...');
         
+        // Initialize database if needed
+        const { sequelize: db, models: dbModels } = await getDatabaseInstances();
+        const { updateWalletBalance } = getServices();
+        
         const redis = require('../config/redis');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
@@ -482,13 +549,13 @@ const processVipLevelUpRewards = async () => {
         console.log('🔒 Acquired VIP lock, processing level-up rewards');
         
         // Get all pending VIP level-up rewards
-        const pendingRewards = await VipReward.findAll({
+        const pendingRewards = await dbModels.VipReward.findAll({
             where: {
                 reward_type: 'level_up',
                 status: 'pending'
             },
             include: [{
-                model: User,
+                model: dbModels.User,
                 as: 'viprewarduser',
                 attributes: ['user_id', 'user_name', 'vip_level']
             }]
@@ -501,7 +568,7 @@ const processVipLevelUpRewards = async () => {
         let totalRewardAmount = 0;
 
         for (const reward of pendingRewards) {
-            const t = await sequelize.transaction();
+            const t = await db.transaction();
             
             try {
                 const rewardAmount = parseFloat(reward.reward_amount);
@@ -516,7 +583,7 @@ const processVipLevelUpRewards = async () => {
                 }, { transaction: t });
 
                 // Create transaction record
-                await Transaction.create({
+                await dbModels.Transaction.create({
                     user_id: userId,
                     type: 'vip_reward',
                     amount: rewardAmount,
@@ -583,6 +650,10 @@ const processMonthlyVipRewards = async () => {
     try {
         console.log('🗓️ Starting monthly VIP reward processing...');
         
+        // Initialize database if needed
+        const { sequelize: db, models: dbModels } = await getDatabaseInstances();
+        const { updateWalletBalance } = getServices();
+        
         const redis = require('../config/redis');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
@@ -596,7 +667,7 @@ const processMonthlyVipRewards = async () => {
         const currentMonth = moment.tz('Asia/Kolkata').format('YYYY-MM');
 
         // Get all VIP users (level > 0)
-        const vipUsers = await User.findAll({
+        const vipUsers = await dbModels.User.findAll({
             where: {
                 vip_level: { [Op.gt]: 0 }
             },
@@ -610,11 +681,11 @@ const processMonthlyVipRewards = async () => {
         let totalRewardAmount = 0;
 
         for (const user of vipUsers) {
-            const t = await sequelize.transaction();
+            const t = await db.transaction();
             
             try {
                 // Check if monthly reward already claimed this month
-                const existingReward = await VipReward.findOne({
+                const existingReward = await dbModels.VipReward.findOne({
                     where: {
                         user_id: user.user_id,
                         level: user.vip_level,
@@ -632,7 +703,7 @@ const processMonthlyVipRewards = async () => {
                 }
 
                 // Get VIP level details
-                const vipLevel = await VipLevel.findOne({
+                const vipLevel = await dbModels.VipLevel.findOne({
                     where: { level: user.vip_level },
                     transaction: t
                 });
@@ -645,7 +716,7 @@ const processMonthlyVipRewards = async () => {
                 const monthlyReward = parseFloat(vipLevel.monthly_reward);
 
                 // Create VIP reward record
-                await VipReward.create({
+                await dbModels.VipReward.create({
                     user_id: user.user_id,
                     level: user.vip_level,
                     reward_type: 'monthly',
@@ -657,7 +728,7 @@ const processMonthlyVipRewards = async () => {
                 await updateWalletBalance(user.user_id, monthlyReward, 'add', t);
 
                 // Create transaction record
-                await Transaction.create({
+                await dbModels.Transaction.create({
                     user_id: user.user_id,
                     type: 'vip_reward',
                     amount: monthlyReward,
@@ -719,9 +790,13 @@ const processMonthlyVipRewards = async () => {
 /**
  * Initialize all master cron jobs
  */
-const initializeMasterCronJobs = () => {
+const initializeMasterCronJobs = async () => {
     try {
         console.log('🚀 Initializing Master Cron Job System...');
+        
+        // Initialize database connection first
+        await initializeDatabaseForCron();
+        console.log('✅ Database initialized for cron jobs');
 
         // Daily cron at 12:30 AM IST
         cron.schedule('30 0 * * *', async () => {
@@ -774,6 +849,7 @@ const initializeMasterCronJobs = () => {
             error: error.message,
             stack: error.stack
         });
+        throw error;
     }
 };
 

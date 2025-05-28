@@ -1,4 +1,4 @@
-// config/db.js
+// config/db.js - FIXED VERSION
 const { Sequelize, Op, DataTypes } = require('sequelize');
 const { SequelizeObserver } = require('./sequelizeObserver');
 const config = require('./config.js');
@@ -194,14 +194,12 @@ const waitForDatabase = async (maxWaitTime = 30000, retryInterval = 1000) => {
     throw new Error('Database connection timeout');
 };
 
-// Get sequelize instance with validation
-const getSequelizeInstance = () => {
-    if (!sequelize) {
-        createSequelizeInstance();
-    }
-    
-    if (!isConnected || !isInitialized) {
-        throw new Error('Database not connected or not fully initialized. Call connectDB() first.');
+// FIXED: Get sequelize instance with proper initialization
+const getSequelizeInstance = async () => {
+    // If not initialized, initialize first
+    if (!sequelize || !isConnected || !isInitialized) {
+        console.log('🔄 Sequelize not ready, initializing...');
+        await connectDB();
     }
     
     // Double-check that required methods are available
@@ -209,6 +207,14 @@ const getSequelizeInstance = () => {
         throw new Error('Sequelize QueryInterface not available. Database may not be fully initialized.');
     }
     
+    return sequelize;
+};
+
+// FIXED: Synchronous getter that creates instance if needed
+const getSequelizeInstanceSync = () => {
+    if (!sequelize) {
+        createSequelizeInstance();
+    }
     return sequelize;
 };
 
@@ -223,11 +229,16 @@ const initializeDatabase = async () => {
     }
 };
 
-// Export everything
+// FIXED: Export with proper getter
 module.exports = {
+    // Async getter for when you need to ensure connection
+    getSequelize: getSequelizeInstance,
+    
+    // Sync getter for immediate access (use with caution)
     get sequelize() {
-        return getSequelizeInstance();
+        return getSequelizeInstanceSync();
     },
+    
     Op,
     DataTypes,
     connectDB,
@@ -240,5 +251,9 @@ module.exports = {
         } catch (error) {
             return false;
         }
-    }
+    },
+    
+    // Status checkers
+    isConnected: () => isConnected,
+    isInitialized: () => isInitialized
 };
