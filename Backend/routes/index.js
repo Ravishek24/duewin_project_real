@@ -15,6 +15,7 @@ const referralRoutes = require('./referralRoutes');
 const otpRoutes = require('./otpRoutes');
 const adminRoutes = require('./adminRoutes');
 const mxPayRoutes = require('./mxPayRoutes');
+const vipRoutes = require('./vipRoutes');
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
@@ -30,17 +31,13 @@ router.use('/payment-gateways', auth, paymentGatewayRoutes);
 router.use('/spribe', auth, spribeRoutes);
 router.use('/seamless', auth, seamlessWalletRoutes);
 router.use('/seamless-games', auth, seamlessRoutes);
-// FIXED: referralRoutes already has auth middleware internally, so we apply it here
-router.use('/referrals',  referralRoutes);
+router.use('/referrals', referralRoutes);
 router.use('/otp', otpRoutes); // OTP routes typically don't need auth
 router.use('/admin', isAdmin, adminRoutes);
 router.use('/payments/mxpay', mxPayRoutes); // MxPay routes handle their own auth
+router.use('/vip', vipRoutes); // VIP routes handle their own auth
 
-
-
-// Add this to your routes/index.js temporarily for debugging
-
-// Debug routes - ADD THESE TEMPORARILY
+// Debug routes
 router.get('/debug/token', (req, res) => {
     const authHeader = req.header('Authorization');
     const token = authHeader ? authHeader.replace('Bearer ', '') : null;

@@ -4,6 +4,11 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
+const { sequelize } = require('./config/db');
+const { initializeModels } = require('./models');
+const { setupPaymentGateways } = require('./services/paymentGatewayService');
+const { setupScheduledJobs } = require('./services/schedulerService');
+const { setupRoutes } = require('./routes');
 
 // Load environment variables first
 dotenv.config();
@@ -109,17 +114,15 @@ const initializeModels = async () => {
 };
 
 // Routes setup function
-const setupRoutes = async () => {
+const setupRoutes = () => {
     try {
         console.log('🛣️ Setting up routes...');
         
         // Import routes
         const apiRoutes = require('./routes/index');
-        const testRoutes = require('./routes/testRoutes');
         
         // Mount API routes
         app.use('/api', apiRoutes);
-        app.use('/test', testRoutes);
         
         console.log('✅ Routes configured successfully');
         return true;
@@ -138,7 +141,6 @@ const setupAdditionalServices = async () => {
         // Install hack fixes
         try {
             const { installHackFix } = require('./config/hackFix');
-            const { sequelize } = require('./config/db');
             const hackFixInstalled = await installHackFix(sequelize);
             if (hackFixInstalled) {
                 console.log('✅ Hack fixes installed');
@@ -148,31 +150,12 @@ const setupAdditionalServices = async () => {
         }
         
         // Initialize payment gateways
-        try {
-            const paymentGatewayService = require('./services/paymentGatewayService');
-            await paymentGatewayService.initializeDefaultGateways();
-            console.log('✅ Payment gateways initialized');
-        } catch (paymentError) {
-            console.warn('⚠️ Payment gateway initialization failed:', paymentError.message);
-        }
+        await setupPaymentGateways();
+        console.log('✅ Payment gateways initialized');
         
         // Set up cron jobs
-        try {
-            const cron = require('node-cron');
-            cron.schedule('0 0 * * *', async () => {
-                console.log('🔄 Running daily maintenance...');
-                try {
-                    const { processReferrals } = require('./services/referralService');
-                    await processReferrals();
-                    console.log('✅ Daily maintenance completed');
-                } catch (cronError) {
-                    console.error('❌ Daily maintenance failed:', cronError.message);
-                }
-            });
-            console.log('✅ Scheduled jobs configured');
-        } catch (cronError) {
-            console.warn('⚠️ Cron jobs not configured:', cronError.message);
-        }
+        await setupScheduledJobs();
+        console.log('✅ Scheduled jobs configured');
         
         return true;
     } catch (error) {
@@ -226,7 +209,7 @@ const startServer = async () => {
         await initializeModels();
         
         // Step 3: Setup routes (important but not critical)
-        await setupRoutes();
+        setupRoutes();
         
         // Step 4: Setup additional services (optional)
         await setupAdditionalServices();
@@ -247,7 +230,6 @@ const startServer = async () => {
         
         // Try graceful cleanup
         try {
-            const { sequelize } = require('./config/db');
             if (sequelize) {
                 await sequelize.close();
                 console.log('🧹 Database connection closed');
@@ -271,7 +253,6 @@ const gracefulShutdown = async (signal) => {
         });
         
         // Close database connection
-        const { sequelize } = require('./config/db');
         if (sequelize) {
             await sequelize.close();
             console.log('Database connection closed');
