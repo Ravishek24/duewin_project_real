@@ -53,6 +53,11 @@ class SeamlessGameSession extends Model {
                 unique: true,
                 comment: 'Unique session identifier'
             },
+            balance: {
+                type: DataTypes.FLOAT,
+                allowNull: false,
+                defaultValue: 0
+            },
             status: {
                 type: DataTypes.STRING,
                 allowNull: false,

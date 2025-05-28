@@ -18,6 +18,7 @@ const adminRoutes = require('./adminRoutes');
 const mxPayRoutes = require('./mxPayRoutes');
 const vipRoutes = require('./vipRoutes');
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
+const internalGameRoutes = require('./internalGameRoutes');
 
 const router = express.Router();
 
@@ -37,6 +38,7 @@ router.use('/otp', otpRoutes); // OTP routes typically don't need auth
 router.use('/admin', isAdmin, adminRoutes);
 router.use('/payments/mxpay', mxPayRoutes); // MxPay routes handle their own auth
 router.use('/vip', vipRoutes); // VIP routes handle their own auth
+router.use('/private', internalGameRoutes);
 
 // Debug routes
 router.get('/debug/token', (req, res) => {

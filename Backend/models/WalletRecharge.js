@@ -1,3 +1,4 @@
+// Backend/models/WalletRecharge.js - PERMANENT FIX
 const { Model, DataTypes } = require('sequelize');
 
 class WalletRecharge extends Model {
@@ -65,8 +66,10 @@ class WalletRecharge extends Model {
         }
         
         if (models.PaymentGateway) {
+            // FIXED: Specify the correct keys explicitly
             this.belongsTo(models.PaymentGateway, {
-                foreignKey: 'payment_gateway_id',
+                foreignKey: 'payment_gateway_id', // Column in wallet_recharges
+                targetKey: 'gateway_id',          // Column in payment_gateways
                 as: 'paymentGateway'
             });
         }

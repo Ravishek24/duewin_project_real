@@ -201,8 +201,11 @@ const getTransactionHistory = async (userId, page = 1, limit = 10) => {
     };
   }
 };
+// IMMEDIATE FIX - Replace these functions in your walletServices.js
 
-// Service to get recharge history
+/// CORRECTED VERSION - Replace these functions in your walletServices.js
+
+// Service to get recharge history - FIXED
 const getRechargeHistory = async (userId, page = 1, limit = 10) => {
   try {
     // Wait for database to be ready
@@ -221,27 +224,43 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
       where: { user_id: userId }
     });
     
-    // Get recharges with pagination and payment gateway info
-    const recharges = await models.WalletRecharge.findAll({
-      where: { user_id: userId },
-      include: [{
-        model: models.PaymentGateway,
-        as: 'paymentGateway',
-        attributes: ['name', 'code']
-      }],
-      order: [['created_at', 'DESC']],
-      limit: limit,
-      offset: offset
+    // FIXED: Corrected raw query format
+    const recharges = await sequelize.query(`
+      SELECT 
+        wr.id,
+        wr.user_id,
+        wr.amount,
+        wr.payment_gateway_id,
+        wr.status,
+        wr.bonus_amount,
+        wr.created_at,
+        wr.updated_at,
+        pg.name as payment_gateway_name,
+        pg.code as payment_gateway_code
+      FROM wallet_recharges wr
+      LEFT JOIN payment_gateways pg ON wr.payment_gateway_id = pg.gateway_id
+      WHERE wr.user_id = ?
+      ORDER BY wr.created_at DESC
+      LIMIT ? OFFSET ?
+    `, {
+      replacements: [userId, parseInt(limit), parseInt(offset)],
+      type: sequelize.QueryTypes.SELECT
     });
+    
+    console.log('Recharges query result:', recharges); // Debug log
+    
+    // Ensure recharges is an array
+    const rechargesArray = Array.isArray(recharges) ? recharges : [];
     
     return {
       success: true,
-      recharges: recharges.map(recharge => ({
+      recharges: rechargesArray.map(recharge => ({
         id: recharge.id,
         amount: parseFloat(recharge.amount).toFixed(2),
+        bonus_amount: parseFloat(recharge.bonus_amount || 0).toFixed(2),
         status: recharge.status,
-        payment_method: recharge.paymentGateway ? recharge.paymentGateway.name : 'Unknown',
-        payment_code: recharge.paymentGateway ? recharge.paymentGateway.code : null,
+        payment_method: recharge.payment_gateway_name || 'Unknown',
+        payment_code: recharge.payment_gateway_code || null,
         created_at: recharge.created_at,
         updated_at: recharge.updated_at
       })),
@@ -254,9 +273,7 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
     };
   } catch (error) {
     console.error('Error fetching recharge history:', error);
-    if (error.name === 'SequelizeDatabaseError') {
-      console.error('Database error details:', error.original);
-    }
+    console.error('Error stack:', error.stack);
     return {
       success: false,
       message: 'Server error fetching recharge history.'
@@ -264,8 +281,7 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
   }
 };
 
-// Service to get withdrawal history
-// Service to get withdrawal history
+// Service to get withdrawal history - FIXED
 const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
   try {
     // Wait for database to be ready
@@ -284,29 +300,46 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
       where: { user_id: userId }
     });
     
-    // Get withdrawals with pagination and payment gateway info
-    const withdrawals = await models.WalletWithdrawal.findAll({
-      where: { user_id: userId },
-      include: [{
-        model: models.PaymentGateway,
-        as: 'paymentGateway',
-        attributes: ['gateway_id', 'name', 'code']
-      }],
-      order: [['created_at', 'DESC']],
-      limit: limit,
-      offset: offset
+    // FIXED: Corrected raw query format
+    const withdrawals = await sequelize.query(`
+      SELECT 
+        ww.id,
+        ww.user_id,
+        ww.amount,
+        ww.payment_gateway_id,
+        ww.transaction_id,
+        ww.status,
+        ww.admin_id,
+        ww.rejection_reason,
+        ww.created_at,
+        ww.updated_at,
+        pg.name as payment_gateway_name,
+        pg.code as payment_gateway_code
+      FROM wallet_withdrawals ww
+      LEFT JOIN payment_gateways pg ON ww.payment_gateway_id = pg.gateway_id
+      WHERE ww.user_id = ?
+      ORDER BY ww.created_at DESC
+      LIMIT ? OFFSET ?
+    `, {
+      replacements: [userId, parseInt(limit), parseInt(offset)],
+      type: sequelize.QueryTypes.SELECT
     });
+    
+    console.log('Withdrawals query result:', withdrawals); // Debug log
+    
+    // Ensure withdrawals is an array
+    const withdrawalsArray = Array.isArray(withdrawals) ? withdrawals : [];
     
     return {
       success: true,
-      withdrawals: withdrawals.map(withdrawal => ({
+      withdrawals: withdrawalsArray.map(withdrawal => ({
         id: withdrawal.id,
         amount: parseFloat(withdrawal.amount).toFixed(2),
         status: withdrawal.status,
-        // REMOVED withdrawal_type since it doesn't exist in database
-        // withdrawal_type: withdrawal.withdrawal_type,
-        payment_method: withdrawal.paymentGateway ? withdrawal.paymentGateway.name : 'Unknown',
-        payment_code: withdrawal.paymentGateway ? withdrawal.paymentGateway.code : null,
+        transaction_id: withdrawal.transaction_id,
+        payment_method: withdrawal.payment_gateway_name || 'Unknown',
+        payment_code: withdrawal.payment_gateway_code || null,
+        rejection_reason: withdrawal.rejection_reason,
         created_at: withdrawal.created_at,
         updated_at: withdrawal.updated_at
       })),
@@ -319,15 +352,14 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
     };
   } catch (error) {
     console.error('Error fetching withdrawal history:', error);
-    if (error.name === 'SequelizeDatabaseError') {
-      console.error('Database error details:', error.original);
-    }
+    console.error('Error stack:', error.stack);
     return {
       success: false,
       message: 'Server error fetching withdrawal history.'
     };
   }
 };
+
 
 // Service to update wallet balance (internal use only)
 const updateWalletBalance = async (userId, amount, operation, transaction) => {

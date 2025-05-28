@@ -1,4 +1,4 @@
-// Backend/models/WalletWithdrawal.js
+// Backend/models/WalletWithdrawal.js - PERMANENT FIX
 const { Model, DataTypes } = require('sequelize');
 
 class WalletWithdrawal extends Model {
@@ -66,24 +66,7 @@ class WalletWithdrawal extends Model {
             tableName: 'wallet_withdrawals',
             timestamps: true,
             createdAt: 'created_at',
-            updatedAt: 'updated_at',
-            indexes: [
-                {
-                    fields: ['user_id']
-                },
-                {
-                    fields: ['payment_gateway_id']
-                },
-                {
-                    fields: ['transaction_id']
-                },
-                {
-                    fields: ['status']
-                },
-                {
-                    fields: ['admin_id']
-                }
-            ]
+            updatedAt: 'updated_at'
         });
     }
 
@@ -103,23 +86,11 @@ class WalletWithdrawal extends Model {
         }
         
         if (models.PaymentGateway) {
+            // FIXED: Specify the correct keys explicitly
             this.belongsTo(models.PaymentGateway, {
-                foreignKey: 'payment_gateway_id',
+                foreignKey: 'payment_gateway_id', // Column in wallet_withdrawals
+                targetKey: 'gateway_id',          // Column in payment_gateways
                 as: 'paymentGateway'
-            });
-        }
-        
-        if (models.BankAccount) {
-            this.belongsTo(models.BankAccount, {
-                foreignKey: 'bank_account_id',
-                as: 'bankAccount'
-            });
-        }
-        
-        if (models.UsdtAccount) {
-            this.belongsTo(models.UsdtAccount, {
-                foreignKey: 'usdt_account_id',
-                as: 'usdtAccount'
             });
         }
     }

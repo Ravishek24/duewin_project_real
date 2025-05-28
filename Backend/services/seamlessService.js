@@ -6,12 +6,19 @@ const seamlessConfig = require('../config/seamlessConfig');
 // Cache duration in seconds (5 days)
 const GAME_LIST_CACHE_DURATION = 5 * 24 * 3600; // 5 days in seconds
 
-// Get games list with caching
+// Get the correct API URL based on environment
+const getApiUrl = () => {
+  return process.env.NODE_ENV === 'production' 
+    ? seamlessConfig.api_url.production 
+    : seamlessConfig.api_url.staging;
+};
+
+// Get games list with caching - CORRECTED to use existing API pattern
 const getGamesList = async () => {
   try {
     // Try to get from cache first
     const cachedData = await cacheService.getGamesListWithMetadata();
-    if (cachedData.games && cachedData.games.length > 0) {
+    if (cachedData && cachedData.games && cachedData.games.length > 0) {
       return {
         success: true,
         games: cachedData.games,
@@ -21,23 +28,66 @@ const getGamesList = async () => {
       };
     }
 
-    // If not in cache, fetch from provider
-    const response = await axios.get(`${seamlessConfig.apiBaseUrl}/games`, {
-      headers: {
-        'Authorization': `Bearer ${await getProviderToken()}`,
-        'Content-Type': 'application/json'
-      }
+    // If not in cache, fetch from provider using the CORRECT API pattern
+    const apiUrl = getApiUrl();
+    console.log('🔍 Fetching games from:', apiUrl);
+    
+    const requestData = {
+      api_login: seamlessConfig.api_login,
+      api_password: seamlessConfig.api_password,
+      method: 'getGameList',
+      show_systems: 0,
+      show_additional: true,
+      currency: seamlessConfig.default_currency
+    };
+
+    console.log('🔍 Request data:', {
+      api_login: requestData.api_login,
+      api_password: requestData.api_password ? '***' : 'undefined',
+      method: requestData.method
     });
 
-    if (response.data && response.data.games) {
+    const response = await axios.post(apiUrl, requestData);
+
+    console.log('✅ API Response status:', response.status);
+    console.log('🔍 Response data structure:', {
+      hasError: 'error' in response.data,
+      error: response.data.error,
+      hasResponse: 'response' in response.data,
+      responseType: Array.isArray(response.data.response) ? 'array' : typeof response.data.response,
+      responseLength: Array.isArray(response.data.response) ? response.data.response.length : 'not array'
+    });
+
+    if (response.data.error !== 0) {
+      throw new Error(`API Error ${response.data.error}: ${response.data.message || 'Unknown error'}`);
+    }
+
+    if (response.data && response.data.response && Array.isArray(response.data.response)) {
+      const games = response.data.response;
+      
+      // Extract categories and providers
+      const categories = [...new Set(games.map(game => game.type || game.category).filter(Boolean))];
+      const providers = [...new Set(games.map(game => game.system || game.provider).filter(Boolean))];
+
       // Cache the games list and metadata
-      await cacheService.cacheGamesList(response.data.games);
+      try {
+        await cacheService.cacheGamesList(games, {
+          categories,
+          providers,
+          totalCount: games.length,
+          lastUpdated: new Date()
+        });
+        console.log('✅ Games cached successfully');
+      } catch (cacheError) {
+        console.warn('⚠️ Failed to cache games:', cacheError.message);
+      }
 
       return {
         success: true,
-        games: response.data.games,
-        categories: [...new Set(response.data.games.map(game => game.category))],
-        providers: [...new Set(response.data.games.map(game => game.provider))],
+        games: games,
+        categories: categories,
+        providers: providers,
+        totalCount: games.length,
         fromCache: false
       };
     }
@@ -47,43 +97,38 @@ const getGamesList = async () => {
       message: 'No games found in provider response'
     };
   } catch (error) {
-    console.error('Error fetching games list:', error);
+    console.error('❌ Error fetching games list:', error.message);
+    console.error('❌ API URL:', getApiUrl());
+    
+    // Try to return cached data as fallback
+    try {
+      const cachedData = await cacheService.getGamesListWithMetadata();
+      if (cachedData && cachedData.games && cachedData.games.length > 0) {
+        console.log('🔄 Returning cached data as fallback');
+        return {
+          success: true,
+          games: cachedData.games,
+          categories: cachedData.categories,
+          providers: cachedData.providers,
+          fromCache: true,
+          warning: 'Using cached data due to API error'
+        };
+      }
+    } catch (cacheError) {
+      console.warn('⚠️ Cache fallback also failed:', cacheError.message);
+    }
+    
     return {
       success: false,
-      message: 'Server error fetching games list'
+      message: `Server error fetching games list: ${error.message}`
     };
   }
 };
 
-// Get provider token with caching
-const getProviderToken = async () => {
-  try {
-    // Try to get from cache first
-    const cachedToken = await cacheService.getProviderToken();
-    if (cachedToken) {
-      return cachedToken;
-    }
+// This provider doesn't use tokens - remove token-based functions
+// Instead, we'll use the working seamlessWalletService functions
 
-    // If not in cache, fetch new token
-    const response = await axios.post(`${seamlessConfig.apiBaseUrl}/auth`, {
-      client_id: seamlessConfig.clientId,
-      client_secret: seamlessConfig.clientSecret
-    });
-
-    if (response.data && response.data.token) {
-      // Cache the token
-      await cacheService.cacheProviderToken(response.data.token);
-      return response.data.token;
-    }
-
-    throw new Error('No token in provider response');
-  } catch (error) {
-    console.error('Error getting provider token:', error);
-    throw error;
-  }
-};
-
-// Get game URL with caching
+// Get game URL with caching - CORRECTED to use existing working function
 const getGameUrl = async (userId, gameId, language = 'en') => {
   try {
     // Try to get from cache first
@@ -96,38 +141,31 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
       };
     }
 
-    // If not in cache, fetch from provider
-    const response = await axios.post(
-      `${seamlessConfig.apiBaseUrl}/games/${gameId}/launch`,
-      {
-        user_id: userId,
-        language
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${await getProviderToken()}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    // Use the working seamlessWalletService function
+    const seamlessWalletService = require('./seamlessWalletService');
+    const result = await seamlessWalletService.getGameUrl(userId, gameId, language);
 
-    if (response.data && response.data.url) {
+    if (result.success && result.gameUrl) {
       // Cache the URL
-      await cacheService.cacheGameUrl(gameId, response.data.url);
+      try {
+        await cacheService.cacheGameUrl(gameId, result.gameUrl);
+      } catch (cacheError) {
+        console.warn('⚠️ Failed to cache game URL:', cacheError.message);
+      }
 
       return {
         success: true,
-        gameUrl: response.data.url,
+        gameUrl: result.gameUrl,
+        sessionId: result.sessionId,
+        gameSessionId: result.gameSessionId,
+        warningMessage: result.warningMessage,
         fromCache: false
       };
     }
 
-    return {
-      success: false,
-      message: 'No game URL in provider response'
-    };
+    return result;
   } catch (error) {
-    console.error('Error getting game URL:', error);
+    console.error('❌ Error getting game URL:', error);
     return {
       success: false,
       message: 'Server error getting game URL'
@@ -149,24 +187,45 @@ const refreshGamesList = async (userId) => {
 
     // Clear existing cache
     await cacheService.clearGamesCache();
+    console.log('🗑️ Games cache cleared');
 
-    // Fetch fresh data
-    const response = await axios.get(`${seamlessConfig.apiBaseUrl}/games`, {
-      headers: {
-        'Authorization': `Bearer ${await getProviderToken()}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    // Fetch fresh data using the same method as getGamesList
+    const apiUrl = getApiUrl();
+    
+    const requestData = {
+      api_login: seamlessConfig.api_login,
+      api_password: seamlessConfig.api_password,
+      method: 'getGameList',
+      show_systems: 0,
+      show_additional: true,
+      currency: seamlessConfig.default_currency
+    };
 
-    if (response.data && response.data.games) {
+    const response = await axios.post(apiUrl, requestData);
+
+    if (response.data.error !== 0) {
+      throw new Error(`API Error ${response.data.error}: ${response.data.message || 'Unknown error'}`);
+    }
+
+    if (response.data && response.data.response && Array.isArray(response.data.response)) {
+      const games = response.data.response;
+      const categories = [...new Set(games.map(game => game.type || game.category).filter(Boolean))];
+      const providers = [...new Set(games.map(game => game.system || game.provider).filter(Boolean))];
+
       // Cache the new data
-      await cacheService.cacheGamesList(response.data.games);
+      await cacheService.cacheGamesList(games, {
+        categories,
+        providers,
+        totalCount: games.length,
+        lastUpdated: new Date()
+      });
 
       return {
         success: true,
-        games: response.data.games,
-        categories: [...new Set(response.data.games.map(game => game.category))],
-        providers: [...new Set(response.data.games.map(game => game.provider))],
+        games: games,
+        categories: categories,
+        providers: providers,
+        totalCount: games.length,
         message: 'Games list cache refreshed successfully'
       };
     }
@@ -176,10 +235,10 @@ const refreshGamesList = async (userId) => {
       message: 'No games found in provider response'
     };
   } catch (error) {
-    console.error('Error refreshing games list:', error);
+    console.error('❌ Error refreshing games list:', error);
     return {
       success: false,
-      message: 'Server error refreshing games list'
+      message: `Server error refreshing games list: ${error.message}`
     };
   }
 };
@@ -188,4 +247,4 @@ module.exports = {
   getGamesList,
   getGameUrl,
   refreshGamesList
-}; 
+};
