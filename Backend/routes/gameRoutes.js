@@ -95,15 +95,20 @@ router.get('/:gameType/:duration/history', async (req, res) => {
       return res.status(500).json(result);
     }
 
-    // Format response consistently
+    // Format response consistently with enhanced data
     const formattedResults = result.data.results.map(item => {
       if (mappedGameType === 'trx_wix') {
         return {
           periodId: item.period || item.periodId,
-          result: item.result,
-          verification: {
-            hash: item.verification_hash,
-            link: item.verification_link
+          result: {
+            number: item.result?.number,
+            color: item.result?.color,
+            size: item.result?.size,
+            parity: item.result?.parity || (item.result?.number % 2 === 0 ? 'even' : 'odd') // ENHANCED: Add parity
+          },
+          verification: { // ENHANCED: Add verification
+            hash: item.verification?.hash || item.verification_hash,
+            link: item.verification?.link || item.verification_link
           },
           createdAt: item.created_at || item.timestamp,
           gameType: mappedGameType,
@@ -115,7 +120,8 @@ router.get('/:gameType/:duration/history', async (req, res) => {
           result: {
             number: item.result_of_number || item.result?.number,
             color: item.result_of_color || item.result?.color,
-            size: item.result_of_size || item.result?.size
+            size: item.result_of_size || item.result?.size,
+            parity: item.result?.parity || ((item.result_of_number || item.result?.number) % 2 === 0 ? 'even' : 'odd') // ENHANCED: Add parity
           },
           createdAt: item.created_at || item.timestamp,
           gameType: mappedGameType,

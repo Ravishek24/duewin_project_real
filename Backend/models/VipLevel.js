@@ -34,6 +34,12 @@ class VipLevel extends Model {
                 allowNull: false,
                 defaultValue: 0.00
             },
+            vault_interest_rate: {
+                type: DataTypes.DECIMAL(5, 2),
+                allowNull: false,
+                defaultValue: 0.00,
+                comment: 'Vault interest rate percentage for this VIP level'
+            },
             created_at: {
                 type: DataTypes.DATE,
                 defaultValue: DataTypes.NOW

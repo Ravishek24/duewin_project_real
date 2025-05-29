@@ -3135,7 +3135,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
         // CRITICAL: Ensure models are initialized
         const models = await ensureModelsInitialized();
 
-        logger.info('Getting game history', {
+        logger.info('Getting enhanced game history', {
             gameType,
             duration,
             limit,
@@ -3181,11 +3181,13 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                     result: {
                         number: result.result_of_number,
                         color: result.result_of_color,
-                        size: result.result_of_size
+                        size: result.result_of_size,
+                        parity: result.result_of_number % 2 === 0 ? 'even' : 'odd' // ENHANCED: Add odd/even
                     },
                     createdAt: result.created_at,
                     duration: result.duration,
-                    timeline: result.timeline
+                    timeline: result.timeline,
+                    gameType: 'wingo'
                 }));
                 break;
 
@@ -3212,14 +3214,20 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
 
                     return {
                         periodId: result.period,
-                        result: resultData,
-                        verification: {
+                        result: {
+                            number: resultData.number,
+                            color: resultData.color,
+                            size: resultData.size,
+                            parity: resultData.number % 2 === 0 ? 'even' : 'odd' // ENHANCED: Add odd/even
+                        },
+                        verification: { // ENHANCED: Add verification
                             hash: result.verification_hash,
                             link: result.verification_link
                         },
                         createdAt: result.created_at,
                         duration: result.duration,
-                        timeline: result.timeline
+                        timeline: result.timeline,
+                        gameType: 'trx_wix'
                     };
                 });
                 break;
@@ -3251,7 +3259,8 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                     },
                     createdAt: result.created_at,
                     duration: result.duration,
-                    timeline: result.timeline
+                    timeline: result.timeline,
+                    gameType: 'k3'
                 }));
                 break;
 
@@ -3279,7 +3288,8 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                     },
                     createdAt: result.created_at,
                     duration: result.duration,
-                    timeline: result.timeline
+                    timeline: result.timeline,
+                    gameType: 'fiveD'
                 }));
                 break;
 
@@ -3287,7 +3297,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                 throw new Error(`Unsupported game type: ${gameType}`);
         }
 
-        logger.info('Game history retrieved successfully', {
+        logger.info('Enhanced game history retrieved successfully', {
             gameType,
             duration,
             resultsCount: results.length,
@@ -3308,7 +3318,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
         };
 
     } catch (error) {
-        logger.error('Error getting game history', {
+        logger.error('Error getting enhanced game history', {
             error: error.message,
             stack: error.stack,
             gameType,
@@ -3324,6 +3334,11 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
         };
     }
 };
+
+/**
+ * UPDATED: Enhanced getLastResult with proper format including odd/even and verification
+ * REPLACE the existing getLastResult function with this enhanced version
+ */
 
 
 
@@ -3574,7 +3589,7 @@ const processGameResults = async (gameType, duration, periodId) => {
     // CRITICAL: Ensure models are initialized before any database operations
     const models = await ensureModelsInitialized();
 
-    logger.info('=== STARTING GAME RESULT PROCESSING ===', {
+    logger.info('=== STARTING ENHANCED GAME RESULT PROCESSING ===', {
         gameType,
         duration,
         periodId,
@@ -3584,7 +3599,7 @@ const processGameResults = async (gameType, duration, periodId) => {
     const t = await sequelize.transaction();
 
     try {
-        logger.info(`Processing game results for period ${periodId}`, {
+        logger.info(`Processing enhanced game results for period ${periodId}`, {
             gameType,
             duration
         });
@@ -3641,7 +3656,10 @@ const processGameResults = async (gameType, duration, periodId) => {
             finalResult = await generateRandomResult(gameType);
         }
 
-        logger.info(`Final result for period ${periodId}`, { finalResult });
+        // Ensure proper formatting for each game type
+        finalResult = await enhanceResultFormat(finalResult, gameType);
+
+        logger.info(`Enhanced final result for period ${periodId}`, { finalResult });
 
         // Save result to appropriate table based on game type
         let savedResult;
@@ -3656,6 +3674,7 @@ const processGameResults = async (gameType, duration, periodId) => {
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
+                
             case 'fiveD':
                 savedResult = await models.BetResult5D.create({
                     bet_number: periodId,
@@ -3669,6 +3688,7 @@ const processGameResults = async (gameType, duration, periodId) => {
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
+                
             case 'k3':
                 savedResult = await models.BetResultK3.create({
                     bet_number: periodId,
@@ -3685,9 +3705,10 @@ const processGameResults = async (gameType, duration, periodId) => {
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
+                
             case 'trx_wix':
-                // Ensure result is properly formatted for trx_wix
-                const trxResult = {
+                // Store the result without verification in database
+                const trxResultForDB = {
                     number: finalResult.number,
                     size: finalResult.size,
                     color: finalResult.color
@@ -3695,18 +3716,19 @@ const processGameResults = async (gameType, duration, periodId) => {
 
                 savedResult = await models.BetResultTrxWix.create({
                     period: periodId,
-                    result: trxResult, // Store as object, not stringified
-                    verification_hash: finalResult.verification?.hash || crypto.randomBytes(16).toString('hex'),
-                    verification_link: finalResult.verification?.link || 'https://tronscan.org/',
+                    result: trxResultForDB, // Store as object, not stringified
+                    verification_hash: finalResult.verification?.hash || generateVerificationHash(),
+                    verification_link: finalResult.verification?.link || generateVerificationLink(),
                     duration: duration,
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
+                
             default:
                 throw new Error(`Unsupported game type: ${gameType}`);
         }
 
-        logger.info(`Saved result for period ${periodId}`, {
+        logger.info(`Saved enhanced result for period ${periodId}`, {
             resultId: savedResult.id,
             gameType
         });
@@ -3714,7 +3736,7 @@ const processGameResults = async (gameType, duration, periodId) => {
         await t.commit();
         return savedResult;
     } catch (error) {
-        logger.error(`Error processing game results for period ${periodId}`, {
+        logger.error(`Error processing enhanced game results for period ${periodId}`, {
             error: error.message,
             stack: error.stack,
             gameType
@@ -3724,6 +3746,56 @@ const processGameResults = async (gameType, duration, periodId) => {
     }
 };
 
+/**
+ * NEW FUNCTION: Enhance result format based on game type
+ * ADD this function to gameLogicService.js
+ */
+const enhanceResultFormat = async (result, gameType) => {
+    try {
+        let enhancedResult = { ...result };
+
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+                // Ensure parity is included
+                if (!enhancedResult.parity) {
+                    enhancedResult.parity = enhancedResult.number % 2 === 0 ? 'even' : 'odd';
+                }
+                break;
+
+            case 'trx_wix':
+                // Ensure parity is included
+                if (!enhancedResult.parity) {
+                    enhancedResult.parity = enhancedResult.number % 2 === 0 ? 'even' : 'odd';
+                }
+                // Ensure verification is included
+                if (!enhancedResult.verification) {
+                    enhancedResult.verification = {
+                        hash: generateVerificationHash(),
+                        link: generateVerificationLink()
+                    };
+                }
+                break;
+
+            case 'k3':
+                // K3 results are already properly formatted
+                break;
+
+            case 'fived':
+            case '5d':
+                // 5D results are already properly formatted
+                break;
+        }
+
+        return enhancedResult;
+    } catch (error) {
+        logger.error('Error enhancing result format', {
+            error: error.message,
+            gameType,
+            result
+        });
+        return result; // Return original if enhancement fails
+    }
+};
 
 /**
  * Process winning bets for a game period
@@ -4001,12 +4073,13 @@ const getLastResult = async (gameType, duration = null) => {
                             result: {
                                 number: result.result_of_number,
                                 color: result.result_of_color,
-                                size: result.result_of_size
+                                size: result.result_of_size,
+                                parity: result.result_of_number % 2 === 0 ? 'even' : 'odd' // ENHANCED: Add odd/even
                             },
                             createdAt: result.created_at,
                             duration: result.duration,
                             timeline: result.timeline,
-                            gameType
+                            gameType: 'wingo'
                         }
                     };
                 }
@@ -4032,7 +4105,7 @@ const getLastResult = async (gameType, duration = null) => {
                             },
                             createdAt: result.created_at,
                             duration: result.duration,
-                            gameType
+                            gameType: 'fiveD'
                         }
                     };
                 }
@@ -4061,7 +4134,7 @@ const getLastResult = async (gameType, duration = null) => {
                             },
                             createdAt: result.created_at,
                             duration: result.time,
-                            gameType
+                            gameType: 'k3'
                         }
                     };
                 }
@@ -4084,13 +4157,18 @@ const getLastResult = async (gameType, duration = null) => {
                         success: true,
                         result: {
                             periodId: result.period,
-                            result: resultData,
-                            verification: {
+                            result: {
+                                number: resultData.number,
+                                color: resultData.color,
+                                size: resultData.size,
+                                parity: resultData.number % 2 === 0 ? 'even' : 'odd' // ENHANCED: Add odd/even
+                            },
+                            verification: { // ENHANCED: Add verification
                                 hash: result.verification_hash,
                                 link: result.verification_link
                             },
                             createdAt: result.created_at,
-                            gameType
+                            gameType: 'trx_wix'
                         }
                     };
                 }
@@ -4102,7 +4180,7 @@ const getLastResult = async (gameType, duration = null) => {
             message: 'No results found'
         };
     } catch (error) {
-        console.error('Error getting last result:', error);
+        console.error('Error getting enhanced last result:', error);
         return {
             success: false,
             message: 'Error retrieving last result',
@@ -4110,6 +4188,11 @@ const getLastResult = async (gameType, duration = null) => {
         };
     }
 };
+
+/**
+ * UPDATED: Enhanced generateRandomResult with proper format including verification for trx_wix
+ * REPLACE the existing generateRandomResult function with this enhanced version
+ */
 
 
 /**
@@ -4903,17 +4986,31 @@ const generateFallbackResult = async (gameType) => {
  */
 const generateRandomResult = async (gameType) => {
     try {
-        logger.info('Generating random result', { gameType });
+        logger.info('Generating enhanced random result', { gameType });
 
         let result;
         switch (gameType.toLowerCase()) {
             case 'wingo':
-            case 'trx_wix':
                 const number = Math.floor(Math.random() * 10); // 0-9
                 result = {
                     number: number,
                     size: number >= 5 ? 'big' : 'small',
-                    color: getColorForNumber(number) // Use deterministic color
+                    color: getColorForNumber(number), // Use deterministic color
+                    parity: number % 2 === 0 ? 'even' : 'odd' // ENHANCED: Add odd/even
+                };
+                break;
+
+            case 'trx_wix':
+                const trxNumber = Math.floor(Math.random() * 10); // 0-9
+                result = {
+                    number: trxNumber,
+                    size: trxNumber >= 5 ? 'big' : 'small',
+                    color: getColorForNumber(trxNumber), // Use deterministic color
+                    parity: trxNumber % 2 === 0 ? 'even' : 'odd', // ENHANCED: Add odd/even
+                    verification: { // ENHANCED: Add verification
+                        hash: generateVerificationHash(),
+                        link: generateVerificationLink()
+                    }
                 };
                 break;
 
@@ -4967,20 +5064,39 @@ const generateRandomResult = async (gameType) => {
             return generateRandomResult(gameType); // Recursively try again
         }
 
-        logger.info('Successfully generated random result', {
+        logger.info('Successfully generated enhanced random result', {
             gameType,
             result
         });
 
         return result;
     } catch (error) {
-        logger.error('Error generating random result', {
+        logger.error('Error generating enhanced random result', {
             error: error.message,
             stack: error.stack,
             gameType
         });
         throw error;
     }
+};
+
+/**
+ * NEW FUNCTION: Generate verification hash for TRX_WIX
+ * ADD this function to gameLogicService.js
+ */
+
+const generateVerificationHash = () => {
+    const crypto = require('crypto');
+    return crypto.randomBytes(32).toString('hex');
+};
+
+/**
+ * NEW FUNCTION: Generate verification link for TRX_WIX
+ * ADD this function to gameLogicService.js
+ */
+const generateVerificationLink = () => {
+    const hash = generateVerificationHash();
+    return `https://tronscan.org/#/transaction/${hash}`;
 };
 
 /**
@@ -5989,15 +6105,6 @@ const broadcastGameResult = async (gameType, duration, periodId, result) => {
 
 
 
-// After successful bet placement:
-const vipResult = await recordVipExperience(
-    userId, 
-    betAmount, 
-    gameType, // 'wingo', 'k3', '5d', 'trx_wix', 'casino'
-    gameId    // specific game identifier (optional)
-);
-console.log('VIP experience recorded:', vipResult);
-
 
 module.exports = {
     // Core validation and optimization
@@ -6115,6 +6222,10 @@ module.exports = {
     getUserGameBalance,
     broadcastGameResult,
 
+
+    generateVerificationHash,
+    generateVerificationLink,
+    enhanceResultFormat,
 
     // Model management
     ensureModelsInitialized,

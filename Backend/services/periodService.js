@@ -408,6 +408,86 @@ const initializePeriod = async (gameType, duration, periodId) => {
 };
 
 /**
+ * Get current period ID without incrementing sequence
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds  
+ * @param {Date} timestamp - Current date/time
+ * @returns {string} - Current period ID
+ */
+const getCurrentPeriodId = async (gameType, duration, timestamp) => {
+    try {
+        const istMoment = moment(timestamp).tz('Asia/Kolkata');
+        const dateStr = istMoment.format('YYYYMMDD');
+        
+        const durationKey = duration === 30 ? '30s' :
+                           duration === 60 ? '1m' :
+                           duration === 180 ? '3m' :
+                           duration === 300 ? '5m' : '10m';
+        
+        const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
+        
+        // Get current sequence without incrementing
+        let currentSequence = await redisClient.get(sequenceKey);
+        if (currentSequence === null) {
+            // First period of the day
+            currentSequence = 0;
+        } else {
+            currentSequence = parseInt(currentSequence, 10) - 1; // Convert to 0-based
+        }
+        
+        const periodId = `${dateStr}${currentSequence.toString().padStart(9, '0')}`;
+        
+        console.log(`Current period ID: ${periodId} (sequence: ${currentSequence})`);
+        return periodId;
+    } catch (error) {
+        console.error('Error getting current period ID:', error);
+        throw error;
+    }
+};
+
+/**
+ * Generate next period ID by incrementing sequence
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {Date} timestamp - Current date/time  
+ * @returns {string} - Next period ID
+ */
+const getNextPeriodId = async (gameType, duration, timestamp) => {
+    try {
+        const istMoment = moment(timestamp).tz('Asia/Kolkata');
+        const dateStr = istMoment.format('YYYYMMDD');
+        
+        const durationKey = duration === 30 ? '30s' :
+                           duration === 60 ? '1m' :
+                           duration === 180 ? '3m' :
+                           duration === 300 ? '5m' : '10m';
+        
+        const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
+        
+        // Increment sequence atomically
+        const nextSequence = await redisClient.incr(sequenceKey);
+        const sequenceNumber = nextSequence - 1; // Convert to 0-based
+        
+        // Set expiry
+        const tomorrow2AM = moment.tz('Asia/Kolkata')
+            .add(1, 'day')
+            .hour(2)
+            .minute(0)
+            .second(0);
+        const expirySeconds = Math.max(3600, tomorrow2AM.diff(istMoment, 'seconds'));
+        await redisClient.expire(sequenceKey, expirySeconds);
+        
+        const periodId = `${dateStr}${sequenceNumber.toString().padStart(9, '0')}`;
+        
+        console.log(`Next period ID: ${periodId} (sequence: ${sequenceNumber})`);
+        return periodId;
+    } catch (error) {
+        console.error('Error getting next period ID:', error);
+        throw error;
+    }
+};
+
+/**
  * Get active periods for a game type
  * @param {string} gameType - Game type
  * @returns {Array} - Array of active periods
@@ -562,6 +642,10 @@ const addPeriods = (activePeriods, gameType, duration, now) => {
 
 // Export the service with async model access
 module.exports = {
+    getCurrentPeriodId,         // NEW - Add this
+    getNextPeriodId, 
+
+    // OLD  
     generatePeriodId,
     calculatePeriodStartTime,
     calculatePeriodEndTime,

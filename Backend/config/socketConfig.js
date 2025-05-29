@@ -1,4 +1,4 @@
-// Backend/config/socketConfig.js - WebSocket Configuration for Game Results
+// Backend/config/socketConfig.js - ENHANCED WITH ADMIN LIVE DISTRIBUTION
 let io = null;
 
 /**
@@ -37,6 +37,36 @@ const setupGameEventHandlers = () => {
         // Join general games room
         socket.join('games');
 
+        // Handle user authentication and role checking
+        socket.on('authenticate', async (data) => {
+            try {
+                const { token, userId, isAdmin } = data;
+                
+                // Store user info in socket
+                socket.userId = userId;
+                socket.isAdmin = isAdmin;
+                
+                if (isAdmin) {
+                    socket.join('admins');
+                    console.log(`👨‍💼 Admin ${userId} connected: ${socket.id}`);
+                    
+                    // Send current admin dashboard data
+                    await sendAdminDashboardData(socket);
+                }
+                
+                socket.emit('authenticated', {
+                    success: true,
+                    userId,
+                    isAdmin,
+                    rooms: ['games', ...(isAdmin ? ['admins'] : [])]
+                });
+                
+            } catch (error) {
+                console.error('Authentication error:', error);
+                socket.emit('authError', { message: 'Authentication failed' });
+            }
+        });
+
         // Handle joining specific game rooms
         socket.on('joinGame', (data) => {
             try {
@@ -59,12 +89,73 @@ const setupGameEventHandlers = () => {
                     room: roomName
                 });
 
-                // Send current period info if available
+                // Send current period info
                 sendCurrentPeriodInfo(socket, gameType, duration);
+                
+                // If admin, also join admin room for this game
+                if (socket.isAdmin) {
+                    const adminRoomName = `admin_${gameType}_${duration}`;
+                    socket.join(adminRoomName);
+                    
+                    // Send live bet distribution
+                    sendLiveBetDistribution(socket, gameType, duration);
+                }
                 
             } catch (error) {
                 console.error('Error joining game room:', error);
                 socket.emit('error', { message: 'Failed to join game room' });
+            }
+        });
+
+        // Handle admin requesting live bet distribution
+        socket.on('requestBetDistribution', async (data) => {
+            try {
+                if (!socket.isAdmin) {
+                    socket.emit('error', { message: 'Admin access required' });
+                    return;
+                }
+
+                const { gameType, duration, periodId } = data;
+                
+                if (!gameType || !duration || !periodId) {
+                    socket.emit('error', { message: 'Game type, duration, and period ID required' });
+                    return;
+                }
+
+                await sendLiveBetDistribution(socket, gameType, duration, periodId);
+                
+            } catch (error) {
+                console.error('Error sending bet distribution:', error);
+                socket.emit('error', { message: 'Failed to get bet distribution' });
+            }
+        });
+
+        // Handle admin requesting optimization analysis
+        socket.on('requestOptimizationAnalysis', async (data) => {
+            try {
+                if (!socket.isAdmin) {
+                    socket.emit('error', { message: 'Admin access required' });
+                    return;
+                }
+
+                const { gameType, duration, periodId } = data;
+                const gameLogicService = require('../services/gameLogicService');
+                
+                const analysis = await gameLogicService.calculateOptimizedResult(gameType, duration, periodId);
+                const periodInfo = await gameLogicService.getEnhancedPeriodStatus(gameType, duration, periodId);
+                
+                socket.emit('optimizationAnalysis', {
+                    gameType,
+                    duration,
+                    periodId,
+                    analysis,
+                    periodInfo: periodInfo.data,
+                    timestamp: new Date().toISOString()
+                });
+                
+            } catch (error) {
+                console.error('Error getting optimization analysis:', error);
+                socket.emit('error', { message: 'Failed to get optimization analysis' });
             }
         });
 
@@ -75,7 +166,10 @@ const setupGameEventHandlers = () => {
                 
                 if (gameType && duration) {
                     const roomName = `${gameType}_${duration}`;
+                    const adminRoomName = `admin_${gameType}_${duration}`;
+                    
                     socket.leave(roomName);
+                    socket.leave(adminRoomName);
                     
                     console.log(`👋 Client ${socket.id} left game room: ${roomName}`);
                     
@@ -93,12 +187,13 @@ const setupGameEventHandlers = () => {
         });
 
         // Handle bet placement confirmation
-        socket.on('betPlaced', (data) => {
+        socket.on('betPlaced', async (data) => {
             try {
                 const { gameType, duration, periodId, userId, betData } = data;
                 
                 if (gameType && duration && periodId) {
                     const roomName = `${gameType}_${duration}`;
+                    const adminRoomName = `admin_${gameType}_${duration}`;
                     
                     // Broadcast bet placement to other users in the same game
                     socket.to(roomName).emit('newBet', {
@@ -109,6 +204,9 @@ const setupGameEventHandlers = () => {
                         betType: betData.betType,
                         timestamp: new Date().toISOString()
                     });
+
+                    // Update live bet distribution for admins
+                    await broadcastLiveBetDistribution(gameType, duration, periodId);
                 }
             } catch (error) {
                 console.error('Error handling bet placement:', error);
@@ -125,7 +223,6 @@ const setupGameEventHandlers = () => {
                     return;
                 }
 
-                // Get period status from game logic service
                 const gameLogicService = require('../services/gameLogicService');
                 const periodStatus = await gameLogicService.getEnhancedPeriodStatus(gameType, duration, periodId);
                 
@@ -173,6 +270,121 @@ const sendCurrentPeriodInfo = async (socket, gameType, duration) => {
 };
 
 /**
+ * Send live bet distribution to admin socket
+ * @param {Object} socket - Socket instance
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID (optional, uses current if not provided)
+ */
+const sendLiveBetDistribution = async (socket, gameType, duration, periodId = null) => {
+    try {
+        const gameLogicService = require('../services/gameLogicService');
+        
+        // Get current period if not provided
+        if (!periodId) {
+            const activePeriods = await gameLogicService.getActivePeriods(gameType);
+            const currentPeriod = activePeriods.find(p => p.duration === parseInt(duration));
+            if (!currentPeriod) return;
+            periodId = currentPeriod.periodId;
+        }
+        
+        // Get bet distribution
+        const distribution = await gameLogicService.getBetDistribution(gameType, parseInt(duration), periodId);
+        
+        // Get optimization stats
+        const optimizationStats = await gameLogicService.getPeriodOptimizationStats(gameType, parseInt(duration), periodId);
+        
+        // Send to admin
+        socket.emit('liveBetDistribution', {
+            gameType,
+            duration: parseInt(duration),
+            periodId,
+            distribution,
+            optimizationStats,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('Error sending live bet distribution:', error);
+    }
+};
+
+/**
+ * Broadcast live bet distribution to all admins in a game room
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ */
+const broadcastLiveBetDistribution = async (gameType, duration, periodId) => {
+    if (!io) return;
+
+    try {
+        const gameLogicService = require('../services/gameLogicService');
+        const adminRoomName = `admin_${gameType}_${duration}`;
+        
+        // Get bet distribution
+        const distribution = await gameLogicService.getBetDistribution(gameType, duration, periodId);
+        
+        // Get optimization stats
+        const optimizationStats = await gameLogicService.getPeriodOptimizationStats(gameType, duration, periodId);
+        
+        // Broadcast to all admins in this game room
+        io.to(adminRoomName).emit('liveBetDistribution', {
+            gameType,
+            duration,
+            periodId,
+            distribution,
+            optimizationStats,
+            timestamp: new Date().toISOString()
+        });
+
+        // Also broadcast to general admin room
+        io.to('admins').emit('liveBetDistribution', {
+            gameType,
+            duration,
+            periodId,
+            distribution,
+            optimizationStats,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('Error broadcasting live bet distribution:', error);
+    }
+};
+
+/**
+ * Send admin dashboard data
+ * @param {Object} socket - Admin socket
+ */
+const sendAdminDashboardData = async (socket) => {
+    try {
+        const gameLogicService = require('../services/gameLogicService');
+        
+        // Get active periods for all games
+        const gameTypes = ['wingo', 'trx_wix', 'k3', 'fiveD'];
+        const dashboardData = {};
+        
+        for (const gameType of gameTypes) {
+            const activePeriods = await gameLogicService.getActivePeriods(gameType);
+            dashboardData[gameType] = activePeriods;
+        }
+        
+        // Get system health
+        const systemHealth = await gameLogicService.getSystemHealthCheck();
+        
+        socket.emit('adminDashboard', {
+            activePeriods: dashboardData,
+            systemHealth,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('Error sending admin dashboard data:', error);
+    }
+};
+
+/**
  * Broadcast game result to all clients in game rooms
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds
@@ -189,12 +401,25 @@ const broadcastGameResult = (gameType, duration, periodId, result, winners = [])
     try {
         const roomName = `${gameType}_${duration}`;
         
+        // Enhanced result formatting based on game type
+        let enhancedResult = { ...result };
+        
+        // Add odd/even for wingo and trx_wix
+        if (gameType === 'wingo' || gameType === 'trx_wix') {
+            enhancedResult.parity = result.number % 2 === 0 ? 'even' : 'odd';
+            
+            // Add verification for trx_wix
+            if (gameType === 'trx_wix' && result.verification) {
+                enhancedResult.verification = result.verification;
+            }
+        }
+        
         const broadcastData = {
             type: 'gameResult',
             gameType,
             duration,
             periodId,
-            result,
+            result: enhancedResult,
             winners: winners.map(winner => ({
                 userId: winner.userId,
                 winAmount: winner.winnings,
@@ -203,20 +428,26 @@ const broadcastGameResult = (gameType, duration, periodId, result, winners = [])
             timestamp: new Date().toISOString()
         };
 
-        // Add verification for trx_wix
-        if (gameType === 'trx_wix' && result.verification) {
-            broadcastData.verification = result.verification;
-        }
-
         // Broadcast to specific game room
         io.to(roomName).emit('gameResult', broadcastData);
         
         // Also broadcast to general games room
         io.to('games').emit('gameResult', broadcastData);
 
+        // Send additional admin data
+        const adminRoomName = `admin_${gameType}_${duration}`;
+        io.to(adminRoomName).emit('adminGameResult', {
+            ...broadcastData,
+            adminData: {
+                totalPayout: winners.reduce((sum, w) => sum + w.winnings, 0),
+                winnersCount: winners.length,
+                profitLoss: result.totalBetAmount - winners.reduce((sum, w) => sum + w.winnings, 0)
+            }
+        });
+
         console.log(`📡 Game result broadcasted to ${roomName}:`, {
             periodId,
-            result: typeof result === 'object' ? JSON.stringify(result) : result,
+            result: typeof enhancedResult === 'object' ? JSON.stringify(enhancedResult) : enhancedResult,
             winnersCount: winners.length
         });
 
@@ -254,6 +485,11 @@ const broadcastPeriodCountdown = (gameType, duration, periodId, timeRemaining) =
         // Also send to general games room
         io.to('games').emit('periodCountdown', countdownData);
 
+        // Update bet distribution for admins every 10 seconds
+        if (Math.round(timeRemaining) % 10 === 0) {
+            broadcastLiveBetDistribution(gameType, duration, periodId);
+        }
+
     } catch (error) {
         console.error('Error broadcasting period countdown:', error);
     }
@@ -270,6 +506,7 @@ const broadcastNewPeriod = (gameType, duration, newPeriodId) => {
 
     try {
         const roomName = `${gameType}_${duration}`;
+        const adminRoomName = `admin_${gameType}_${duration}`;
         
         const newPeriodData = {
             type: 'newPeriod',
@@ -282,6 +519,16 @@ const broadcastNewPeriod = (gameType, duration, newPeriodId) => {
 
         io.to(roomName).emit('newPeriod', newPeriodData);
         io.to('games').emit('newPeriod', newPeriodData);
+        
+        // Initialize bet distribution for admins
+        io.to(adminRoomName).emit('newPeriodAdmin', {
+            ...newPeriodData,
+            initialDistribution: {
+                totalBetAmount: 0,
+                distribution: [],
+                uniqueUserCount: 0
+            }
+        });
 
         console.log(`🆕 New period broadcasted to ${roomName}: ${newPeriodId}`);
 
@@ -309,6 +556,22 @@ const getGameRoomClientsCount = (gameType, duration) => {
     }
 };
 
+/**
+ * Get connected admin count
+ * @returns {number} - Number of connected admins
+ */
+const getConnectedAdminCount = () => {
+    if (!io) return 0;
+
+    try {
+        const adminRoom = io.sockets.adapter.rooms.get('admins');
+        return adminRoom ? adminRoom.size : 0;
+    } catch (error) {
+        console.error('Error getting admin count:', error);
+        return 0;
+    }
+};
+
 module.exports = {
     setIo,
     getIo,
@@ -316,5 +579,7 @@ module.exports = {
     broadcastGameResult,
     broadcastPeriodCountdown,
     broadcastNewPeriod,
-    getGameRoomClientsCount
+    broadcastLiveBetDistribution,
+    getGameRoomClientsCount,
+    getConnectedAdminCount
 };

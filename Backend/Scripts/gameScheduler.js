@@ -287,73 +287,73 @@ const GAME_CONFIGS = {
 
 // Initialize game periods
 const initializeGamePeriods = async () => {
-    try {
-        console.log('Initializing game periods...');
-        
-        // CRITICAL: Verify periodService is ready before using it
-        if (!periodService) {
-            throw new Error('Period service not initialized');
-        }
-        
-        // Test period service works
-        try {
-            await periodService.ensureModelsLoaded();
-            console.log('✅ Period service ready for initialization');
-        } catch (error) {
-            console.error('❌ Period service not ready:', error);
-            throw error;
-        }
-        
-        for (const [gameType, durations] of Object.entries(GAME_CONFIGS)) {
-            for (const duration of durations) {
-                try {
-                    console.log(`Initializing ${gameType} ${duration}s period...`);
-                    
-                    // Initialize current period - ONLY call this after models are ready
-                    const currentPeriod = await periodService.generatePeriodId(gameType, duration, new Date());
-                    console.log(`Generated period ID for ${gameType} ${duration}s: ${currentPeriod}`);
-                    
-                    await periodService.initializePeriod(gameType, duration, currentPeriod);
-                    
-                    // Schedule period processing using cron
-                    const cronExpression = getCronExpression(duration);
-                    cron.schedule(cronExpression, async () => {
-                        try {
-                            console.log(`Processing ${gameType} ${duration}s period...`);
-                            await processPeriod(gameType, duration);
-                        } catch (error) {
-                            console.error(`Error in cron period processing for ${gameType} ${duration}s:`, error);
-                            logger.error('Error in cron period processing:', {
-                                error: error.message,
-                                stack: error.stack,
-                                gameType,
-                                duration
-                            });
-                        }
-                    }, {
-                        timezone: "Asia/Kolkata" // IST timezone
-                    });
-                    
-                    console.log(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
-                    logger.info(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
-                } catch (error) {
-                    console.error(`Error initializing ${gameType} ${duration}s period:`, error);
-                    logger.error(`Error initializing game period:`, {
-                        error: error.message,
-                        stack: error.stack,
-                        gameType,
-                        duration
-                    });
-                }
-            }
-        }
-        console.log('✅ All game schedules initialized');
-        logger.info('✅ All game schedules initialized');
-    } catch (error) {
-        console.error('❌ Error initializing game periods:', error);
-        logger.error('❌ Error initializing game periods:', error);
-        throw error; // Re-throw to be caught by the main initialization
-    }
+  try {
+      console.log('Initializing game periods...');
+      
+      // CRITICAL: Verify periodService is ready before using it
+      if (!periodService) {
+          throw new Error('Period service not initialized');
+      }
+      
+      // Test period service works
+      try {
+          await periodService.ensureModelsLoaded();
+          console.log('✅ Period service ready for initialization');
+      } catch (error) {
+          console.error('❌ Period service not ready:', error);
+          throw error;
+      }
+      
+      for (const [gameType, durations] of Object.entries(GAME_CONFIGS)) {
+          for (const duration of durations) {
+              try {
+                  console.log(`Initializing ${gameType} ${duration}s period...`);
+                  
+                  // FIXED: Use getNextPeriodId for initial period creation
+                  const currentPeriod = await periodService.getNextPeriodId(gameType, duration, new Date());
+                  console.log(`Generated period ID for ${gameType} ${duration}s: ${currentPeriod}`);
+                  
+                  await periodService.initializePeriod(gameType, duration, currentPeriod);
+                  
+                  // Schedule period processing using cron
+                  const cronExpression = getCronExpression(duration);
+                  cron.schedule(cronExpression, async () => {
+                      try {
+                          console.log(`Processing ${gameType} ${duration}s period...`);
+                          await processPeriod(gameType, duration);
+                      } catch (error) {
+                          console.error(`Error in cron period processing for ${gameType} ${duration}s:`, error);
+                          logger.error('Error in cron period processing:', {
+                              error: error.message,
+                              stack: error.stack,
+                              gameType,
+                              duration
+                          });
+                      }
+                  }, {
+                      timezone: "Asia/Kolkata" // IST timezone
+                  });
+                  
+                  console.log(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
+                  logger.info(`Scheduled processor for ${gameType} ${duration}s with cron: ${cronExpression}`);
+              } catch (error) {
+                  console.error(`Error initializing ${gameType} ${duration}s period:`, error);
+                  logger.error(`Error initializing game period:`, {
+                      error: error.message,
+                      stack: error.stack,
+                      gameType,
+                      duration
+                  });
+              }
+          }
+      }
+      console.log('✅ All game schedules initialized');
+      logger.info('✅ All game schedules initialized');
+  } catch (error) {
+      console.error('❌ Error initializing game periods:', error);
+      logger.error('❌ Error initializing game periods:', error);
+      throw error; // Re-throw to be caught by the main initialization
+  }
 };
 
 // Initialize WebSocket
@@ -400,7 +400,7 @@ const broadcastResult = async (gameType, data) => {
 };
 
 /**
- * Process a single period
+ * Process a single period (UPDATED)
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds
  */
@@ -413,7 +413,8 @@ async function processPeriod(gameType, duration) {
       throw new Error('Required services not initialized');
     }
     
-    const periodId = await periodService.generatePeriodId(gameType, duration, now);
+    // FIXED: Get current period ID without incrementing sequence
+    const periodId = await periodService.getCurrentPeriodId(gameType, duration, now);
 
     console.log(`🔄 Closing and finalizing period: ${gameType} ${duration}s - ${periodId}`);
     
@@ -430,8 +431,8 @@ async function processPeriod(gameType, duration) {
 
     console.log(`✅ Period processed and result broadcasted: ${gameType} ${duration}s - ${periodId}`);
 
-    // 3. Initialize next period
-    const nextPeriodId = await periodService.generatePeriodId(gameType, duration, new Date());
+    // 3. FIXED: Get next period ID (this increments the sequence)
+    const nextPeriodId = await periodService.getNextPeriodId(gameType, duration, new Date());
     await periodService.initializePeriod(gameType, duration, nextPeriodId);
 
     console.log(`✅ Next period initialized: ${gameType} ${duration}s - ${nextPeriodId}`);
