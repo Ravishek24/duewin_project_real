@@ -32,6 +32,12 @@ class User extends Model {
                     len: [10, 15]
                 }
             },
+            profile_picture_id: {
+                type: DataTypes.INTEGER,
+                allowNull: false,
+                defaultValue: 1,
+                comment: 'Profile picture ID (1-based index)'
+            },
             password: {
                 type: DataTypes.STRING,
                 allowNull: false
@@ -136,7 +142,6 @@ class User extends Model {
             timestamps: true,
             createdAt: 'created_at',
             updatedAt: 'updated_at',
-            // Define scopes here in the options
             scopes: {
                 defaultScope: {
                     attributes: {

@@ -42,6 +42,11 @@ class SeamlessGameSession extends Model {
                 allowNull: true,
                 comment: 'Game ID hash'
             },
+            game_url: {
+                type: DataTypes.TEXT,
+                allowNull: true,
+                comment: 'URL to launch the game'
+            },
             game_type: {
                 type: DataTypes.STRING,
                 allowNull: false,
@@ -80,11 +85,6 @@ class SeamlessGameSession extends Model {
             closed_at: {
                 type: DataTypes.DATE,
                 allowNull: true
-            },
-            metadata: {
-                type: DataTypes.JSON,
-                allowNull: true,
-                comment: 'Additional provider-specific data'
             },
             created_at: {
                 type: DataTypes.DATE,

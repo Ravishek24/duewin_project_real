@@ -343,34 +343,55 @@ const removeFreeRoundsController = async (req, res) => {
  */
 const unifiedCallbackController = async (req, res) => {
   try {
+    console.log('=== UNIFIED CALLBACK REQUEST ===');
+    console.log('Request method:', req.method);
+    console.log('Request path:', req.path);
+    console.log('Request query:', req.query);
+    console.log('Request body:', req.body);
+    console.log('Request headers:', req.headers);
+
     const { action } = req.query;
+    console.log('Action type:', action);
+
     let result;
 
     // Route to appropriate handler based on action type
     switch (action) {
       case 'balance':
+        console.log('Processing balance request');
         result = await processBalanceRequest(req.query);
         break;
       case 'debit':
+        console.log('Processing debit request');
         result = await processDebitRequest(req.query);
         break;
       case 'credit':
+        console.log('Processing credit request');
         result = await processCreditRequest(req.query);
         break;
       case 'rollback':
+        console.log('Processing rollback request');
         result = await processRollbackRequest(req.query);
         break;
       default:
+        console.log('Invalid action type:', action);
         result = {
           status: '400',
           msg: 'Invalid action'
         };
     }
 
+    console.log('Response result:', result);
+    console.log('=== END UNIFIED CALLBACK REQUEST ===\n');
+
     // Always return HTTP 200 with result in body as required by API
     return res.status(200).json(result);
   } catch (error) {
     console.error('Error in unifiedCallbackController:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack
+    });
     
     // Always return HTTP 200 with error in body as required by API
     return res.status(200).json({
@@ -741,30 +762,78 @@ const getFilteredGamesController = async (req, res) => {
   }
 };
 
-// Get games list
+/**
+ * Controller to fetch games list
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
 const getGamesList = async (req, res) => {
   try {
-    const result = await seamlessService.getGamesList();
+    console.log('=== GAMES LIST REQUEST START ===');
+    console.log('Raw query parameters:', req.query);
+    
+    const { currency, provider, page, limit } = req.query;
+    
+    // Create filters object
+    const filters = {};
+    if (provider) {
+      filters.provider = provider.toLowerCase();
+      console.log('Adding provider filter:', filters.provider);
+    }
+    
+    // Add pagination parameters
+    if (page) filters.page = page;
+    if (limit) filters.limit = limit;
+    
+    console.log('Final filters object:', filters);
+    
+    const result = await getGameList(currency, filters);
+    
+    console.log('Service response:', {
+      success: result.success,
+      gamesCount: result.games?.length || 0,
+      totalCount: result.totalCount,
+      filteredCount: result.filteredCount,
+      pagination: result.pagination
+    });
     
     if (result.success) {
-      res.json({
+      return res.status(200).json({
         success: true,
         games: result.games,
-        fromCache: result.fromCache
+        totalCount: result.totalCount,
+        filteredCount: result.filteredCount,
+        pagination: result.pagination
       });
     } else {
-      res.status(500).json({
-        success: false,
-        message: result.message
-      });
+      return res.status(400).json(result);
     }
   } catch (error) {
-    console.error('Error in getGamesList controller:', error);
+    console.error('Error in getGamesList:', error);
     res.status(500).json({
       success: false,
       message: 'Server error fetching games list'
     });
   }
+};
+
+// Helper function to get provider name from code
+const getProviderName = (code) => {
+  const providerNames = {
+    'bs': 'Betsoft',
+    'bp': 'Blueprint',
+    'ep': 'Evoplay',
+    'pg': 'Pragmatic Play',
+    'ag': 'Asia Gaming',
+    'ev': 'Evolution',
+    'bl': 'Bombay Live',
+    'g24': 'G24',
+    'vg': 'Vivo Gaming',
+    'ez': 'Ezugi',
+    'dt': 'Digitain',
+    'ds': 'Delasport'
+  };
+  return providerNames[code?.toLowerCase()] || code;
 };
 
 // Force refresh games list cache

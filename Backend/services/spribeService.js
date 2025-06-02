@@ -18,6 +18,11 @@ const {
   processRollbackTransaction,
   findTransactionByProviderTxId
 } = require('./gameTransactionService');
+const Transaction = require('../models/Transaction');
+const { Op } = require('sequelize');
+const { v4: uuidv4 } = require('uuid');
+const { processBetForActivityReward } = require('./activityRewardService');
+const logger = require('../utils/logger');
 
 /**
  * Get game launch URL
@@ -304,6 +309,33 @@ const handleWithdraw = async (withdrawData) => {
       };
     }
     
+    // Create transaction record
+    const transaction = await Transaction.create({
+        user_id: user_id,
+        type: 'bet',
+        amount: amount,
+        status: 'completed',
+        description: `Spribe game bet - ${game}`,
+        reference_id: `spribe_bet_${uuidv4()}`,
+        metadata: {
+            game_id: game,
+            transaction_id: result.operator_tx_id,
+            game_type: 'spribe'
+        }
+    });
+
+    // Process activity reward
+    try {
+        await processBetForActivityReward(user_id, amount, 'spribe');
+    } catch (activityError) {
+        logger.warn('Activity reward processing failed for Spribe game', {
+            error: activityError.message,
+            userId: user_id,
+            betAmount: amount,
+            gameType: 'spribe'
+        });
+    }
+
     // Return successful withdraw response
     return {
       code: 200,

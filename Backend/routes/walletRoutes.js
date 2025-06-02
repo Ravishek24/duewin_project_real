@@ -24,9 +24,9 @@ router.get('/first-bonus-status', auth, getFirstBonusStatusController);
 router.post('/withdraw', auth, requirePhoneVerification, initiateWithdrawalController);
 
 // Get all wallet balances (main and third-party)
-router.get('/balances', auth, requirePhoneVerification, getAllWalletBalances);
+router.get('/balances', auth, getAllWalletBalances);
 
 // Transfer from third-party wallet to main wallet
-router.post('/transfer-from-third-party', auth, requirePhoneVerification, transferFromThirdPartyToMain);
+router.post('/transfer-from-third-party', auth, transferFromThirdPartyToMain);
 
 module.exports = router;

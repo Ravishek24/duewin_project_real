@@ -97,14 +97,13 @@ const initializeDatabaseAndModels = async () => {
         console.log('✅ Database structure initialized');
         
         // Step 3: Get sequelize instance (now it's safe to access)
-        const { sequelize: dbSequelize } = require('./config/db');
-        sequelize = dbSequelize;
+        const { sequelize } = require('./config/db');
         console.log('✅ Sequelize instance obtained');
         
         // Step 4: Initialize models (now sequelize is available)
         console.log('🔧 Initializing models...');
         const { initializeModels } = require('./models');
-        models = await initializeModels();
+        const models = await initializeModels();
         console.log('✅ Models initialized successfully');
         console.log(`📊 Loaded ${Object.keys(models).length} models`);
         

@@ -14,7 +14,7 @@ class ReferralCommission extends Model {
                 allowNull: false,
                 references: {
                     model: 'users',
-                    key: 'id'
+                    key: 'user_id'
                 }
             },
             referred_user_id: {
@@ -22,7 +22,7 @@ class ReferralCommission extends Model {
                 allowNull: false,
                 references: {
                     model: 'users',
-                    key: 'id'
+                    key: 'user_id'
                 }
             },
             level: {

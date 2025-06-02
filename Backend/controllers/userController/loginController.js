@@ -97,7 +97,8 @@ const loginController = async (req, res) => {
                     id: user.user_id,
                     phone_no: user.phone_no,
                     is_phone_verified: user.is_phone_verified,
-                    wallet_balance: user.wallet_balance
+                    wallet_balance: user.wallet_balance,// In the response data.user object, add:
+                    profile_picture_id: user.profile_picture_id,
                 },
                 tokens: {
                     accessToken,

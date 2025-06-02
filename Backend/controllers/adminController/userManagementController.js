@@ -1,4 +1,5 @@
-const { User, Transaction } = require('../../models');
+const User = require('../../models/User');
+const { Transaction } = require('../../models');
 const { Op } = require('sequelize');
 const RateLimitService = require('../../services/rateLimitService');
 
@@ -7,7 +8,7 @@ const blockUser = async (req, res) => {
     try {
         const { user_id } = req.params;
         const { reason } = req.body;
-        const adminId = req.user.id;
+        const adminId = req.user.user_id;
 
         const user = await User.findByPk(user_id);
         if (!user) {
@@ -18,15 +19,15 @@ const blockUser = async (req, res) => {
         }
 
         // Block user in both systems
-        await user.update({ isActive: false });
+        await user.update({ is_blocked: true, block_reason: reason, blocked_at: new Date() });
         await RateLimitService.blockEntity(user_id, null, 'USER', 'admin_block', reason);
 
         res.json({
             success: true,
             message: 'User blocked successfully',
             data: {
-                userId: user.id,
-                username: user.username,
+                userId: user.user_id,
+                username: user.user_name,
                 blockedAt: new Date(),
                 reason: reason || 'Blocked by admin'
             }
@@ -44,7 +45,7 @@ const blockUser = async (req, res) => {
 const unblockUser = async (req, res) => {
     try {
         const { user_id } = req.params;
-        const adminId = req.user.id;
+        const adminId = req.user.user_id;
 
         const user = await User.findByPk(user_id);
         if (!user) {
@@ -55,15 +56,15 @@ const unblockUser = async (req, res) => {
         }
 
         // Unblock user in both systems
-        await user.update({ isActive: true });
+        await user.update({ is_blocked: false, block_reason: null, blocked_at: null });
         await RateLimitService.unblockEntity(user_id, null, adminId);
 
         res.json({
             success: true,
             message: 'User unblocked successfully',
             data: {
-                userId: user.id,
-                username: user.username,
+                userId: user.user_id,
+                username: user.user_name,
                 unblockedAt: new Date(),
                 unblockedBy: adminId
             }
@@ -82,8 +83,8 @@ const getBlockedUsers = async (req, res) => {
     try {
         // Get users blocked by admin
         const adminBlockedUsers = await User.findAll({
-            where: { isActive: false },
-            attributes: ['id', 'username', 'email', 'role', 'updatedAt']
+            where: { is_blocked: true },
+            attributes: ['user_id', 'user_name', 'email', 'is_admin', 'updated_at']
         });
 
         // Get users blocked by rate limiting
@@ -92,11 +93,11 @@ const getBlockedUsers = async (req, res) => {
         // Combine and format the results
         const blockedUsers = {
             adminBlocked: adminBlockedUsers.map(user => ({
-                id: user.id,
-                username: user.username,
+                id: user.user_id,
+                username: user.user_name,
                 email: user.email,
-                role: user.role,
-                blockedAt: user.updatedAt,
+                role: user.is_admin ? 'admin' : 'user',
+                blockedAt: user.updated_at,
                 blockedBy: 'admin',
                 reason: 'Blocked by administrator'
             })),
@@ -127,7 +128,7 @@ const updateUserBalance = async (req, res) => {
     try {
         const { user_id } = req.params;
         const { amount, type } = req.body;
-        const adminId = req.user.id;
+        const adminId = req.user.user_id;
 
         const user = await User.findByPk(user_id);
         if (!user) {
@@ -148,8 +149,8 @@ const updateUserBalance = async (req, res) => {
 
         // Update balance based on type (add/subtract)
         const newBalance = type === 'add' 
-            ? user.balance + parseFloat(amount)
-            : user.balance - parseFloat(amount);
+            ? parseFloat(user.wallet_balance) + parseFloat(amount)
+            : parseFloat(user.wallet_balance) - parseFloat(amount);
 
         if (newBalance < 0) {
             return res.status(400).json({
@@ -158,14 +159,14 @@ const updateUserBalance = async (req, res) => {
             });
         }
 
-        await user.update({ balance: newBalance });
+        await user.update({ wallet_balance: newBalance });
 
         res.json({
             success: true,
             message: 'Balance updated successfully',
             data: {
-                userId: user.id,
-                username: user.username,
+                userId: user.user_id,
+                username: user.user_name,
                 newBalance,
                 updatedBy: adminId,
                 updatedAt: new Date()

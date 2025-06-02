@@ -787,6 +787,23 @@ const processMonthlyVipRewards = async () => {
     }
 };
 
+const processDailyVaultInterest = async () => {
+    try {
+        console.log('🏦 Processing daily vault interest...');
+        const { processDailyInterest } = require('../services/vaultService');
+        const result = await processDailyInterest();
+        
+        if (result.success) {
+            console.log(`✅ Vault interest processed: ${result.processedUsers} users, Total: ${result.totalInterestPaid}`);
+        }
+    } catch (error) {
+        console.error('❌ Error in vault interest processing:', error);
+    }
+};
+
+// Add to the daily cron sequence (12:30 AM IST):
+await processDailyVaultInterest();
+
 /**
  * Initialize all master cron jobs
  */
@@ -808,7 +825,8 @@ const initializeMasterCronJobs = async () => {
                 await processAttendanceBonuses();
                 await processDailyRebates();
                 await processVipLevelUpRewards();
-                
+                // Add to daily cron job sequence:
+                await processDailyVaultInterest();
                 console.log('✅ All daily cron jobs completed successfully');
             } catch (error) {
                 console.error('❌ Error in daily cron jobs:', error);

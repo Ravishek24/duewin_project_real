@@ -1839,7 +1839,7 @@ const approximateWingoPayout = (result, pattern) => {
                     // UPDATED: With deterministic colors, calculate based on actual result
                     let colorWinRate = 0;
                     let colorMultiplier = 0;
-                    
+
                     // Calculate win rates for each color based on deterministic mapping
                     const numberColorMap = {
                         'red': [2, 4, 6, 8],           // 4 numbers = 40% chance
@@ -1847,7 +1847,7 @@ const approximateWingoPayout = (result, pattern) => {
                         'red_violet': [0],             // 1 number = 10% chance
                         'green_violet': [5]            // 1 number = 10% chance
                     };
-                    
+
                     if (result.color === 'red') {
                         colorWinRate = 0.4;  // 40% of numbers are red
                         colorMultiplier = 2.0;
@@ -1863,7 +1863,7 @@ const approximateWingoPayout = (result, pattern) => {
                         colorWinRate = 0.4 + 0.1; // Green bets (1.5x) + Violet bets (4.5x)
                         colorMultiplier = (0.4 * 1.5 + 0.1 * 4.5) / 0.5; // Weighted average
                     }
-                    
+
                     estimatedPayout += (estimatedAmountOfType * colorWinRate) * colorMultiplier;
                     break;
 
@@ -3171,7 +3171,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                     limit: limit,
                     offset: offset
                 });
-                
+
                 totalCount = await models.BetResultWingo.count({
                     where: { duration: duration }
                 });
@@ -3198,7 +3198,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                     limit: limit,
                     offset: offset
                 });
-                
+
                 totalCount = await models.BetResultTrxWix.count({
                     where: { duration: duration }
                 });
@@ -3206,7 +3206,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                 results = trxResults.map(result => {
                     let resultData;
                     try {
-                        resultData = typeof result.result === 'string' ? 
+                        resultData = typeof result.result === 'string' ?
                             JSON.parse(result.result) : result.result;
                     } catch (err) {
                         resultData = { number: 0, color: 'red', size: 'Small' };
@@ -3239,7 +3239,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                     limit: limit,
                     offset: offset
                 });
-                
+
                 totalCount = await models.BetResultK3.count({
                     where: { duration: duration }
                 });
@@ -3271,7 +3271,7 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                     limit: limit,
                     offset: offset
                 });
-                
+
                 totalCount = await models.BetResult5D.count({
                     where: { duration: duration }
                 });
@@ -3674,7 +3674,7 @@ const processGameResults = async (gameType, duration, periodId) => {
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
-                
+
             case 'fiveD':
                 savedResult = await models.BetResult5D.create({
                     bet_number: periodId,
@@ -3688,7 +3688,7 @@ const processGameResults = async (gameType, duration, periodId) => {
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
-                
+
             case 'k3':
                 savedResult = await models.BetResultK3.create({
                     bet_number: periodId,
@@ -3705,7 +3705,7 @@ const processGameResults = async (gameType, duration, periodId) => {
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
-                
+
             case 'trx_wix':
                 // Store the result without verification in database
                 const trxResultForDB = {
@@ -3723,7 +3723,7 @@ const processGameResults = async (gameType, duration, periodId) => {
                     timeline: new Date().toISOString()
                 }, { transaction: t });
                 break;
-                
+
             default:
                 throw new Error(`Unsupported game type: ${gameType}`);
         }
@@ -4301,7 +4301,7 @@ const calculatePeriodEndTime = (periodId, duration) => {
         // Parse period ID to get date and sequence
         const dateStr = periodId.substring(0, 8);
         const sequenceStr = periodId.substring(8);
-        
+
         const year = parseInt(dateStr.substring(0, 4), 10);
         const month = parseInt(dateStr.substring(4, 6), 10) - 1; // 0-indexed
         const day = parseInt(dateStr.substring(6, 8), 10);
@@ -4310,7 +4310,7 @@ const calculatePeriodEndTime = (periodId, duration) => {
         // Create start time (base time = 2 AM IST + sequence * duration)
         const baseTime = moment.tz([year, month, day, 2, 0, 0], 'Asia/Kolkata');
         const startTime = baseTime.add(sequenceNumber * duration, 'seconds');
-        
+
         // Add duration to get end time
         const endTime = startTime.clone().add(duration, 'seconds');
 
@@ -4781,13 +4781,13 @@ const validateFallbackResult = async (result, gameType) => {
                 if (!['big', 'small'].includes(result.size?.toLowerCase())) {
                     warnings.push('Invalid size in result');
                 }
-                
+
                 // UPDATED: Validate color matches the deterministic rule
                 const expectedColor = getColorForNumber(result.number);
                 if (result.color !== expectedColor) {
                     warnings.push(`Color mismatch: number ${result.number} should have color ${expectedColor}, got ${result.color}`);
                 }
-                
+
                 // Validate color is one of the valid colors
                 if (!['red', 'green', 'red_violet', 'green_violet'].includes(result.color?.toLowerCase())) {
                     warnings.push('Invalid color in result');
@@ -5422,7 +5422,7 @@ const processBet = async (betData) => {
 
         // Start transaction
         const t = await sequelize.transaction();
-        
+
         try {
             // Deduct amount from user balance
             await models.User.decrement('wallet_balance', {
@@ -5440,7 +5440,7 @@ const processBet = async (betData) => {
             // Store bet in appropriate database table
             let betRecord;
             const betTypeFormatted = `${betType}:${betValue}`;
-            
+
             switch (gameType) {
                 case 'wingo':
                     betRecord = await models.BetRecordWingo.create({
@@ -5504,6 +5504,30 @@ const processBet = async (betData) => {
                 // Don't fail bet processing if VIP recording fails
                 logger.warn('VIP experience recording failed', {
                     error: vipError.message,
+                    userId,
+                    betAmount,
+                    gameType
+                });
+            }
+            // Record self rebate (after VIP experience recording)
+            try {
+                const { processSelfRebate } = require('./selfRebateService');
+                await processSelfRebate(userId, betAmount, gameType, periodId, betRecord.bet_id || betRecord.id);
+            } catch (selfRebateError) {
+                logger.warn('Self rebate processing failed', {
+                    error: selfRebateError.message,
+                    userId,
+                    betAmount,
+                    gameType
+                });
+            }
+            // Process activity rewards (after self rebate)
+            try {
+                const { processBetForActivityReward } = require('./activityRewardService');
+                await processBetForActivityReward(userId, betAmount, gameType);
+            } catch (activityError) {
+                logger.warn('Activity reward processing failed', {
+                    error: activityError.message,
                     userId,
                     betAmount,
                     gameType
@@ -5785,7 +5809,7 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
         } = options;
 
         const offset = (page - 1) * limit;
-        
+
         logger.info('Getting user bet history', {
             userId,
             gameType,
@@ -5875,7 +5899,7 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
         // Format bets for response
         const formattedBets = bets.map(bet => {
             const [betType, betValue] = bet.bet_type.split(':');
-            
+
             return {
                 betId: bet.bet_id || bet.id,
                 periodId: bet.period,
@@ -5885,8 +5909,8 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
                 odds: parseFloat(bet.odds || 0),
                 status: bet.status,
                 winAmount: bet.win_amount ? parseFloat(bet.win_amount) : 0,
-                profitLoss: bet.win_amount ? 
-                    parseFloat(bet.win_amount) - parseFloat(bet.bet_amount) : 
+                profitLoss: bet.win_amount ?
+                    parseFloat(bet.win_amount) - parseFloat(bet.bet_amount) :
                     -parseFloat(bet.bet_amount),
                 createdAt: bet.created_at,
                 updatedAt: bet.updated_at,
@@ -5936,7 +5960,7 @@ const getEnhancedPeriodStatus = async (gameType, duration, periodId) => {
         const endTime = calculatePeriodEndTime(periodId, duration);
         const now = new Date();
         const timeRemaining = Math.max(0, (endTime - now) / 1000);
-        
+
         // Betting closes 5 seconds before period ends
         const bettingTimeRemaining = Math.max(0, timeRemaining - 5);
         const isBettingOpen = bettingTimeRemaining > 0;
@@ -5949,7 +5973,7 @@ const getEnhancedPeriodStatus = async (gameType, duration, periodId) => {
 
         const totalBetKey = `${gameType}:${durationKey}:${periodId}:total`;
         const totalBetAmount = parseFloat(await redisClient.get(totalBetKey) || 0);
-        
+
         const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId);
 
         return {
@@ -6011,7 +6035,7 @@ const getUserGameBalance = async (userId) => {
             const thirdPartyWallet = await models.ThirdPartyWallet.findOne({
                 where: { user_id: userId, is_active: true }
             });
-            
+
             if (thirdPartyWallet) {
                 thirdPartyWalletBalance = parseFloat(thirdPartyWallet.balance || 0);
             }
@@ -6059,7 +6083,7 @@ const broadcastGameResult = async (gameType, duration, periodId, result) => {
         // Get socket.io instance
         const { getIo } = require('../config/socketConfig');
         const io = getIo();
-        
+
         if (!io) {
             logger.warn('Socket.IO not available for broadcasting');
             return;

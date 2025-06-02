@@ -145,14 +145,26 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
     const seamlessWalletService = require('./seamlessWalletService');
     const result = await seamlessWalletService.getGameUrl(userId, gameId, language);
 
-    if (result.success && result.gameUrl) {
-      // Cache the URL
-      try {
-        await cacheService.cacheGameUrl(gameId, result.gameUrl);
-      } catch (cacheError) {
-        console.warn('⚠️ Failed to cache game URL:', cacheError.message);
+    // Log the result for debugging
+    console.log('🔍 SeamlessWalletService result:', {
+      success: result.success,
+      hasGameUrl: !!result.gameUrl,
+      hasSessionId: !!result.sessionId,
+      hasGameSessionId: !!result.gameSessionId,
+      warningMessage: result.warningMessage
+    });
+
+    if (result.success) {
+      // Cache the URL if we have one
+      if (result.gameUrl) {
+        try {
+          await cacheService.cacheGameUrl(gameId, result.gameUrl);
+        } catch (cacheError) {
+          console.warn('⚠️ Failed to cache game URL:', cacheError.message);
+        }
       }
 
+      // Return the complete result from seamlessWalletService
       return {
         success: true,
         gameUrl: result.gameUrl,
@@ -163,7 +175,11 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
       };
     }
 
-    return result;
+    // If not successful, return the error
+    return {
+      success: false,
+      message: result.message || 'Failed to get game URL'
+    };
   } catch (error) {
     console.error('❌ Error getting game URL:', error);
     return {

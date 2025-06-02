@@ -198,22 +198,7 @@ const waitForDatabase = async (maxWaitTime = 30000, retryInterval = 1000) => {
 const getSequelizeInstance = async () => {
     // If not initialized, initialize first
     if (!sequelize || !isConnected || !isInitialized) {
-        console.log('🔄 Sequelize not ready, initializing...');
         await connectDB();
-    }
-    
-    // Double-check that required methods are available
-    if (!sequelize.getQueryInterface || typeof sequelize.getQueryInterface !== 'function') {
-        throw new Error('Sequelize QueryInterface not available. Database may not be fully initialized.');
-    }
-    
-    return sequelize;
-};
-
-// FIXED: Synchronous getter that creates instance if needed
-const getSequelizeInstanceSync = () => {
-    if (!sequelize) {
-        createSequelizeInstance();
     }
     return sequelize;
 };
@@ -229,31 +214,18 @@ const initializeDatabase = async () => {
     }
 };
 
-// FIXED: Export with proper getter
+// Export functions and properties
 module.exports = {
-    // Async getter for when you need to ensure connection
-    getSequelize: getSequelizeInstance,
-    
-    // Sync getter for immediate access (use with caution)
-    get sequelize() {
-        return getSequelizeInstanceSync();
-    },
-    
-    Op,
-    DataTypes,
     connectDB,
     waitForDatabase,
+    getSequelizeInstance,
     initializeDatabase,
-    isDatabaseReady: async () => {
-        try {
-            await waitForDatabase();
-            return true;
-        } catch (error) {
-            return false;
+    get sequelize() {
+        if (!sequelize) {
+            console.warn('⚠️ Accessing sequelize before initialization');
         }
+        return sequelize;
     },
-    
-    // Status checkers
-    isConnected: () => isConnected,
-    isInitialized: () => isInitialized
+    Op,
+    DataTypes
 };

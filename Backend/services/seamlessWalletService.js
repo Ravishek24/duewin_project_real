@@ -17,10 +17,15 @@ const thirdPartyWalletService = require('./thirdPartyWalletService');
  * @param {boolean} filters.mobile - Filter for mobile games only
  * @param {boolean} filters.jackpot - Filter for jackpot games only
  * @param {boolean} filters.freerounds - Filter for games supporting free rounds
+ * @param {string} filters.page - Page number for pagination
+ * @param {string} filters.limit - Number of items per page for pagination
  * @returns {Promise<Object>} List of games
  */
 const getGameList = async (currency = seamlessConfig.default_currency, filters = {}) => {
   try {
+    console.log('=== GET GAME LIST SERVICE ===');
+    console.log('Input parameters:', { currency, filters });
+
     const requestData = {
       api_login: seamlessConfig.api_login,
       api_password: seamlessConfig.api_password,
@@ -30,6 +35,7 @@ const getGameList = async (currency = seamlessConfig.default_currency, filters =
       currency: currency
     };
 
+    console.log('Making API request to:', seamlessConfig.api_url.production);
     const response = await axios.post(
       seamlessConfig.api_url.production,
       requestData
@@ -41,44 +47,150 @@ const getGameList = async (currency = seamlessConfig.default_currency, filters =
 
     // Apply filters if provided
     let filteredGames = response.data.response;
+    console.log('Initial games count:', filteredGames.length);
     
-    if (filters) {
+    if (filters && Object.keys(filters).length > 0) {
+      console.log('Applying filters:', filters);
+      
       // Filter by category (e.g. 'video-slots', 'livecasino', etc.)
       if (filters.category) {
+        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => 
           game.type === filters.category || game.category === filters.category
         );
+        console.log(`Filtered ${initialCount - filteredGames.length} games by category: ${filters.category}`);
       }
       
-      // Filter by provider/system (e.g. 'ha' for Habanero)
-      if (filters.provider) {
-        filteredGames = filteredGames.filter(game => 
-          game.system === filters.provider || 
-          game.subcategory?.toLowerCase() === filters.provider.toLowerCase()
-        );
+      // Filter by provider/system
+      const providerMap = {
+        'leap': ['Leap'],
+        'playtech': ['Playtech'],
+        'goldenrace': ['Goldenrace'],
+        'ezugi': ['ezugi'],
+        'evolution': ['evolution'],
+        'ebet': ['eBET'],
+        'bombay': ['Bombay Live'],
+        'asiagaming': ['asiagaming'],
+        'pragmatic': ['pragmatic play'],
+        'betconstruct': ['Betconstruct Live'],
+        'g24': ['LiveG24'],
+        'tvbet': ['TVbet'],
+        'digitain': ['digitain'],
+        'inplaynet': ['inplaynet'],
+        'smartsoft': ['SmartSoft'],
+        'habanero': ['Habanero'],
+        'betsoft': ['betsoft'],
+        'isoftbet': ['isoftbet'],
+        'pgsoft': ['PG Soft'],
+        'onetouch': ['One Touch'],
+        'evoplay': ['Evoplay'],
+        'jili': ['Jili'],
+        'blueprint': ['Blueprint'],
+        'galaxsys': ['Galaxsys'],
+        'dragontiger': ['dragon tiger'],
+        'mines': ['mines'],
+        'plinko': ['plinko'],
+        'ludo': ['ludo'],
+        'teenpatti': ['teen patti'],
+        'rolet': ['rolet'],
+        'aviator': ['aviator'],
+        'spribe': ['Spribe']
+      };
+
+      const providerCodes = providerMap[filters.provider.toLowerCase()] || [];
+      console.log('Provider codes to filter:', providerCodes);
+
+      if (providerCodes) {
+        const initialCount = filteredGames.length;
+        filteredGames = filteredGames.filter(game => {
+          // Check all provider-related fields with exact case matching
+          const systemMatch = providerCodes.some(code => 
+            game.system === code
+          );
+          const subcategoryMatch = providerCodes.some(code => 
+            game.subcategory === code
+          );
+          const categoryMatch = providerCodes.some(code => 
+            game.category === code
+          );
+          const reportMatch = providerCodes.some(code => 
+            game.report === code
+          );
+          const nameMatch = providerCodes.some(code => 
+            game.name === code
+          );
+          const gamenameMatch = providerCodes.some(code => 
+            game.gamename === code
+          );
+
+          const isMatch = systemMatch || subcategoryMatch || categoryMatch || reportMatch || nameMatch || gamenameMatch;
+          
+          // Enhanced logging for debugging
+          if (isMatch || initialCount - filteredGames.length < 5) {
+            console.log('Game details:', {
+              name: game.name,
+              gamename: game.gamename,
+              system: game.system,
+              subcategory: game.subcategory,
+              category: game.category,
+              report: game.report,
+              isMatch: isMatch
+            });
+          }
+          
+          return isMatch;
+        });
+        console.log(`Filtered ${initialCount - filteredGames.length} games by provider: ${filters.provider}`);
+      } else {
+        console.log('No provider codes found for:', filters.provider);
       }
       
       // Filter for mobile games
       if (filters.mobile === true) {
+        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => game.mobile === true);
+        console.log(`Filtered ${initialCount - filteredGames.length} games by mobile`);
       }
       
       // Filter for jackpot games
       if (filters.jackpot === true) {
+        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => game.has_jackpot === true);
+        console.log(`Filtered ${initialCount - filteredGames.length} games by jackpot`);
       }
       
       // Filter for games supporting free rounds
       if (filters.freerounds === true) {
+        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => game.freerounds_supported === true);
+        console.log(`Filtered ${initialCount - filteredGames.length} games by freerounds`);
       }
+    } else {
+      console.log('No filters provided, returning all games');
     }
+
+    // Apply pagination
+    const page = parseInt(filters.page) || 1;
+    const limit = parseInt(filters.limit) || 50;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedGames = filteredGames.slice(startIndex, endIndex);
+
+    console.log(`Final filtered games count: ${filteredGames.length}`);
+    console.log(`Pagination: Page ${page}, Limit ${limit}, Showing ${paginatedGames.length} games`);
+    console.log('=== END GET GAME LIST SERVICE ===\n');
 
     return {
       success: true,
-      games: filteredGames,
+      games: paginatedGames,
       totalCount: response.data.response.length,
-      filteredCount: filteredGames.length
+      filteredCount: filteredGames.length,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(filteredGames.length / limit),
+        totalItems: filteredGames.length,
+        itemsPerPage: limit
+      }
     };
   } catch (error) {
     console.error('Error in getGameList:', error);
@@ -200,6 +312,37 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
   try {
     let warningMessage = null;
     
+    // Add debug logging
+    console.log('=== DEBUG: getGameUrl ===');
+    console.log('Environment:', process.env.NODE_ENV);
+    console.log('Frontend URL from env:', process.env.FRONTEND_URL);
+    console.log('Home URL from config:', seamlessConfig.home_url);
+    console.log('Cashier URL from config:', seamlessConfig.cashier_url);
+    
+    // Get user first
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return {
+        success: false,
+        message: 'User not found'
+      };
+    }
+
+    // Generate a consistent password based on user ID and a fixed salt
+    const userPassword = `pwd${user.user_id}${process.env.SEAMLESS_PASSWORD_SALT || 'default_salt'}`;
+    
+    // First, check if player exists
+    const playerCheck = await playerExists(userId);
+    
+    // If player doesn't exist or there was an error, create the player
+    if (!playerCheck.success || !playerCheck.exists) {
+      const playerCreation = await createPlayer(userId);
+      if (!playerCreation.success) {
+        console.error(`Failed to create player for user ${userId}:`, playerCreation.message);
+        throw new Error(`Failed to create player: ${playerCreation.message}`);
+      }
+    }
+    
     // First, check if there's already a third-party wallet with funds
     const walletBalanceCheck = await thirdPartyWalletService.getBalance(userId);
     
@@ -220,25 +363,28 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
         }
       }
     }
-    
-    // First, check if player exists
-    const playerCheck = await playerExists(userId);
-    
-    // If player doesn't exist or there was an error, create the player
-    if (!playerCheck.success || !playerCheck.exists) {
-      const playerCreation = await createPlayer(userId);
-      if (!playerCreation.success) {
-        console.error(`Failed to create player for user ${userId}:`, playerCreation.message);
-        throw new Error(`Failed to create player: ${playerCreation.message}`);
+
+    // Check for existing valid session
+    const existingSession = await SeamlessGameSession.findOne({
+      where: {
+        user_id: userId,
+        game_id_hash: gameId,
+        is_active: true,
+        created_at: {
+          [Op.gte]: new Date(Date.now() - 24 * 60 * 60 * 1000) // Within last 24 hours
+        }
       }
-    }
-    
-    // Get user
-    const user = await User.findByPk(userId);
-    if (!user) {
+    });
+
+    // If we have a valid session, use it
+    if (existingSession) {
+      console.log('Using existing valid session:', existingSession.session_id);
       return {
-        success: false,
-        message: 'User not found'
+        success: true,
+        gameUrl: existingSession.game_url,
+        warningMessage,
+        sessionId: existingSession.session_id,
+        gameSessionId: existingSession.game_session_id
       };
     }
 
@@ -248,13 +394,19 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
       method: 'getGame',
       lang: language,
       user_username: `player${user.user_id}`,
-      user_password: `pwd${user.user_id}${Date.now().toString(36)}`, // Must match or be consistent with createPlayer
+      user_password: userPassword, // Use consistent password
       gameid: gameId,
       homeurl: seamlessConfig.home_url,
       cashierurl: seamlessConfig.cashier_url,
-      play_for_fun: 0, // Real money play
+      play_for_fun: 0,
       currency: seamlessConfig.default_currency
     };
+
+    // Add debug logging for request data
+    console.log('Request data being sent:', {
+      ...requestData,
+      api_password: '***REDACTED***' // Don't log sensitive data
+    });
 
     const response = await axios.post(
       seamlessConfig.api_url.production,
@@ -267,7 +419,7 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
     }
 
     // Store game session info
-    await SeamlessGameSession.create({
+    const gameSession = await SeamlessGameSession.create({
       user_id: userId,
       remote_id: playerCheck.playerInfo.id, // Use the remote ID from playerExists
       provider: gameId.includes('_') ? gameId.split('_')[0] : 'unknown',
@@ -276,13 +428,28 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
       game_id_hash: gameId,
       is_active: true,
       ip_address: null, // Could be passed from the controller if needed
-      game_type: gameId.includes('_') ? gameId.split('_')[0] : 'unknown', // Adding required field
-      session_id: response.data.sessionid // Adding required field
+      game_type: gameId.includes('_') ? gameId.split('_')[0] : 'unknown',
+      session_id: response.data.sessionid,
+      game_session_id: response.data.gamesession_id,
+      game_url: response.data.url || response.data.response,
+      user_password: userPassword // Store the password used for this session
     });
 
     // Handle different response formats from the provider
-    // Sometimes the URL is in response.data.url, other times it's directly in response.data.response
     const gameUrl = response.data.url || response.data.response;
+    
+    // Log the response for debugging
+    console.log('🔍 Provider response:', {
+      hasUrl: !!response.data.url,
+      hasResponse: !!response.data.response,
+      sessionId: response.data.sessionid,
+      gameSessionId: response.data.gamesession_id
+    });
+    
+    if (!gameUrl) {
+      console.error('No game URL found in provider response:', response.data);
+      throw new Error('No game URL received from provider');
+    }
     
     return {
       success: true,
@@ -334,18 +501,26 @@ const processBalanceRequest = async (queryParams) => {
       provider
     } = queryParams;
     
-    // Find user by remote_id (the ID assigned by the game provider)
+    console.log('=== DEBUG: Balance Request ===');
+    console.log('Query params:', queryParams);
+    
+    // Find active game session
     const gameSession = await SeamlessGameSession.findOne({
-      where: { remote_id, is_active: true },
+      where: { 
+        remote_id, 
+        is_active: true,
+        session_id: session_id // Validate session ID
+      },
       order: [['created_at', 'DESC']],
       transaction: t
     });
     
     if (!gameSession) {
+      console.error('Session not found or invalid:', { remote_id, session_id });
       await t.rollback();
       return {
         status: '500',
-        msg: 'Session not found'
+        msg: 'Invalid session'
       };
     }
     
@@ -355,6 +530,7 @@ const processBalanceRequest = async (queryParams) => {
     });
     
     if (!user) {
+      console.error('User not found for session:', { remote_id, session_id });
       await t.rollback();
       return {
         status: '500',
@@ -362,10 +538,11 @@ const processBalanceRequest = async (queryParams) => {
       };
     }
     
-    // Get balance from third-party wallet instead of main wallet
+    // Get balance from third-party wallet
     const walletResult = await thirdPartyWalletService.getBalance(user.user_id);
     
     if (!walletResult.success) {
+      console.error('Wallet not found for user:', user.user_id);
       await t.rollback();
       return {
         status: '500',
@@ -377,31 +554,27 @@ const processBalanceRequest = async (queryParams) => {
     await SeamlessTransaction.create({
       user_id: user.user_id,
       remote_id,
-      provider_transaction_id: `balance_${Date.now()}`, // Generate a unique ID
+      provider_transaction_id: `balance_${Date.now()}`,
       provider: provider || 'unknown',
       game_id: game_id || null,
       game_id_hash: game_id_hash || null,
       type: 'balance',
-      amount: 0, // Balance requests don't have an amount
+      amount: 0,
       session_id: session_id || null,
       wallet_balance_before: walletResult.balance,
       wallet_balance_after: walletResult.balance
     }, { transaction: t });
     
-    // Update the session's last activity
-    await gameSession.update({
-      last_activity: new Date()
-    }, { transaction: t });
-    
     await t.commit();
     
+    // Return balance with 2 decimal places
     return {
       status: '200',
       balance: parseFloat(walletResult.balance).toFixed(2)
     };
   } catch (error) {
-    await t.rollback();
     console.error('Error processing balance request:', error);
+    await t.rollback();
     return {
       status: '500',
       msg: 'Internal server error'
@@ -517,6 +690,19 @@ const processDebitRequest = async (queryParams) => {
       jackpot_contribution_in_amount: jackpot_contribution_in_amount || 0,
       gameplay_final: gameplay_final === '1'
     }, { transaction: t });
+    
+    // Process activity reward
+    try {
+      const { processBetForActivityReward } = require('./activityRewardService');
+      await processBetForActivityReward(user.user_id, betAmount, 'seamless', t);
+    } catch (activityError) {
+      logger.warn('Activity reward processing failed for seamless game', {
+        error: activityError.message,
+        userId: user.user_id,
+        betAmount,
+        gameType: 'seamless'
+      });
+    }
     
     // Update the session's last activity
     await gameSession.update({
@@ -1000,6 +1186,60 @@ const removeFreeRounds = async (title, playerIds, gameIds) => {
   }
 };
 
+/**
+ * Validate and refresh a game session
+ * @param {string} sessionId - Session ID to validate
+ * @returns {Promise<Object>} Validation result
+ */
+const validateGameSession = async (sessionId) => {
+  try {
+    const gameSession = await SeamlessGameSession.findOne({
+      where: { 
+        session_id: sessionId,
+        is_active: true
+      }
+    });
+
+    if (!gameSession) {
+      return {
+        success: false,
+        message: 'Invalid or expired session'
+      };
+    }
+
+    // Check if session is too old (24 hours)
+    const sessionAge = Date.now() - gameSession.created_at.getTime();
+    if (sessionAge > 24 * 60 * 60 * 1000) {
+      // Close expired session
+      await gameSession.update({
+        is_active: false,
+        closed_at: new Date()
+      });
+
+      return {
+        success: false,
+        message: 'Session expired'
+      };
+    }
+
+    // Update last activity
+    await gameSession.update({
+      last_activity: new Date()
+    });
+
+    return {
+      success: true,
+      session: gameSession
+    };
+  } catch (error) {
+    console.error('Error validating game session:', error);
+    return {
+      success: false,
+      message: 'Error validating session'
+    };
+  }
+};
+
 module.exports = {
   getGameList,
   playerExists,
@@ -1012,5 +1252,6 @@ module.exports = {
   closeGameSession,
   cleanupExpiredSessions,
   addFreeRounds,
-  removeFreeRounds
+  removeFreeRounds,
+  validateGameSession
 };

@@ -15,25 +15,25 @@ const {
   testPageController,
   getFilteredGamesController
 } = require('../controllers/seamlessController');
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+const { auth } = require('../middlewares/authMiddleware');
 const { validateSeamlessRequest } = require('../middlewares/seamlessMiddleware');
 const thirdPartyWalletService = require('../services/thirdPartyWalletService');
 const seamlessWalletService = require('../services/seamlessWalletService');
 const User = require('../models/User');
+const SeamlessGameSession = require('../models/SeamlessGameSession');
 
 const router = express.Router();
 
 // Protected routes (require authentication)
 router.get('/games', auth, getGamesController);
 router.get('/games/filtered', auth, getFilteredGamesController);
-router.get('/launch/:gameId', auth, requirePhoneVerification, launchGameController);
+router.get('/launch/:gameId', auth, launchGameController);
 
 // New routes for server-side game embedding to help bypass Cloudflare restrictions
-router.get('/iframe/:gameId', auth, requirePhoneVerification, serveGameInIframeController);
-router.get('/redirect/:gameId', auth, requirePhoneVerification, redirectToGameController);
+router.get('/iframe/:gameId', auth, serveGameInIframeController);
+router.get('/redirect/:gameId', auth, redirectToGameController);
 
 // Debug routes - direct access to the game URL without middleware or frontend formatting
-// FIXED: Ensure this route handler is properly async
 router.get('/debug-game/:gameId', auth, async (req, res) => {
   try {
     const { gameId } = req.params;
@@ -50,6 +50,9 @@ router.get('/debug-game/:gameId', auth, async (req, res) => {
       });
     }
     
+    // Generate consistent password
+    const userPassword = `pwd${user.user_id}${process.env.SEAMLESS_PASSWORD_SALT || 'default_salt'}`;
+    
     // Make direct API call to provider
     const requestData = {
       api_login: process.env.SEAMLESS_API_LOGIN || 'flywin_mc_s',
@@ -57,10 +60,10 @@ router.get('/debug-game/:gameId', auth, async (req, res) => {
       method: 'getGame',
       lang: 'en',
       user_username: `player${user.user_id}`,
-      user_password: `pwd${user.user_id}${Date.now().toString(36)}`,
+      user_password: userPassword,
       gameid: gameId,
-      homeurl: 'https://strike.atsproduct.in',
-      cashierurl: 'https://strike.atsproduct.in/wallet',
+      homeurl: process.env.FRONTEND_URL || 'http://localhost:3000',
+      cashierurl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/wallet`,
       play_for_fun: 0,
       currency: 'EUR'
     };
@@ -84,22 +87,36 @@ router.get('/debug-game/:gameId', auth, async (req, res) => {
         providerResponse: response.data
       });
     }
-    
-    // Success - send complete info
+
+    // Store game session info
+    await SeamlessGameSession.create({
+      user_id: userId,
+      remote_id: `player${user.user_id}`,
+      provider: gameId.includes('_') ? gameId.split('_')[0] : 'unknown',
+      session_token: response.data.sessionid,
+      game_id: gameId.includes('_') ? gameId.split('_')[1] : gameId,
+      game_id_hash: gameId,
+      is_active: true,
+      ip_address: req.ip,
+      game_type: gameId.includes('_') ? gameId.split('_')[0] : 'unknown',
+      session_id: response.data.sessionid,
+      game_session_id: response.data.gamesession_id,
+      game_url: response.data.url || response.data.response,
+      user_password: userPassword
+    });
+
     return res.status(200).json({
       success: true,
-      gameUrl: response.data.url,
+      gameUrl: response.data.url || response.data.response,
       sessionId: response.data.sessionid,
-      gameSessionId: response.data.gamesession_id,
-      raw: response.data
+      gameSessionId: response.data.gamesession_id
     });
   } catch (error) {
-    console.error('Error in debug game endpoint:', error);
+    console.error('Debug: Error getting game URL:', error);
     return res.status(500).json({
       success: false,
-      message: error.message,
-      stack: error.stack,
-      raw: error.response ? error.response.data : null
+      message: error.message || 'Failed to get game URL',
+      error: error.response?.data || error.message
     });
   }
 });
@@ -109,7 +126,7 @@ router.get('/test', auth, testPageController);
 
 // Route to transfer funds to third-party wallet
 // FIXED: Ensure this route handler is properly async
-router.post('/transfer-to-third-party', auth, requirePhoneVerification, async (req, res) => {
+router.post('/transfer-to-third-party', auth, async (req, res) => {
   try {
     const userId = req.user.user_id;
     const result = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
@@ -136,8 +153,8 @@ router.post('/transfer-to-third-party', auth, requirePhoneVerification, async (r
 });
 
 // Admin-only routes
-router.post('/freerounds/add', auth, requirePhoneVerification, addFreeRoundsController);
-router.post('/freerounds/remove', auth, requirePhoneVerification, removeFreeRoundsController);
+router.post('/freerounds/add', auth, addFreeRoundsController);
+router.post('/freerounds/remove', auth, removeFreeRoundsController);
 
 // New unified callback route for game providers
 router.get('/callback', validateSeamlessRequest, unifiedCallbackController);

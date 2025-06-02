@@ -28,15 +28,15 @@ router.get('/direct', auth, getDirectReferralsController);
 router.get('/team', auth, getTeamReferralsController);
 
 // Direct referral deposits - both singular and plural paths
-router.get('/direct/deposits', auth, requirePhoneVerification, getDirectReferralDepositsController);
-router.get('/direct/deposit', auth, requirePhoneVerification, getDirectReferralDepositsController);
+router.get('/direct/deposits', auth,  getDirectReferralDepositsController);
+router.get('/direct/deposit', auth,  getDirectReferralDepositsController);
 
 // Team referral deposits
-router.get('/team/deposits', auth, requirePhoneVerification, getTeamReferralDepositsController);
-router.get('/team/deposit', auth, requirePhoneVerification, getTeamReferralDepositsController);
+router.get('/team/deposits', auth,  getTeamReferralDepositsController);
+router.get('/team/deposit', auth,  getTeamReferralDepositsController);
 
 // Commission earnings
-router.get('/commissions', auth, requirePhoneVerification, getCommissionEarningsController);
+router.get('/commissions', auth,  getCommissionEarningsController);
 
 // Referral tree details
 router.get('/tree', auth, getReferralTreeDetailsController);

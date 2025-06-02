@@ -34,7 +34,7 @@ router.get('/profile', auth, getProfileController);
 router.put('/profile', auth, updateProfileController);
 
 // Protected routes that require phone verification
-router.get('/dashboard', auth, requirePhoneVerification, (req, res) => {
+router.get('/dashboard', auth, (req, res) => {
     res.status(200).json({
         success: true,
         message: 'This is a protected route that requires phone verification.'

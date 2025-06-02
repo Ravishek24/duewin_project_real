@@ -36,7 +36,10 @@ router.use('/seamless', auth, seamlessWalletRoutes);
 router.use('/seamless-games', auth, seamlessRoutes);
 router.use('/referrals', referralRoutes);
 router.use('/otp', otpRoutes); // OTP routes typically don't need auth
-router.use('/admin', isAdmin, adminRoutes);
+
+// Mount admin routes without initial admin check - admin routes handle their own auth
+router.use('/admin', adminRoutes);
+
 router.use('/payments/mxpay', mxPayRoutes); // MxPay routes handle their own auth
 router.use('/vip', vipRoutes); // VIP routes handle their own auth
 

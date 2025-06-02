@@ -66,9 +66,6 @@ const User = require('../models/User');
 
 const router = express.Router();
 
-// Apply IP whitelist to all admin routes
-router.use(adminIpWhitelist);
-
 // Admin OTP routes (no auth required)
 router.post('/otp/send', sendAdminOtpController);
 router.post('/otp/verify', verifyAdminOtpController);
@@ -137,7 +134,8 @@ router.post('/direct-login', async (req, res) => {
 // System Config Login Route (no auth required)
 router.post('/system-config/login', loginSystemConfig);
 
-// All other admin routes require authentication and admin privileges
+// Apply IP whitelist and auth middleware to protected routes
+router.use(adminIpWhitelist);
 router.use(auth);
 
 // Admin profile management routes

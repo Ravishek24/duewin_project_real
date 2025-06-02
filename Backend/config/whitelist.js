@@ -5,6 +5,7 @@ const whitelistedIPs = [
     '::1',           // IPv6 localhost
     '::ffff:127.0.0.1', // IPv4 mapped to IPv6 localhost
     '122.161.48.79',  // Local IP
+    '172.31.41.86',  // Server IP
     'YOUR_IP_HERE'   // Your IP address
 ];
 

@@ -27,14 +27,9 @@ const initializeModel = async (modelFile, modelName, sequelize) => {
         if (typeof model === 'function') {
             if (model.prototype && model.prototype.constructor.name === modelName) {
                 // Class-based model
-                if (typeof model.init === 'function') {
-                    // Initialize the model class first
-                    const initializedModel = model.init(sequelize, sequelize.constructor.DataTypes);
-                    verifyModelMethods(initializedModel, modelName);
-                    return initializedModel;
-                } else {
-                    throw new Error(`Class-based model ${modelName} is missing static init method`);
-                }
+                const initializedModel = model.init(sequelize);
+                verifyModelMethods(initializedModel, modelName);
+                return initializedModel;
             } else {
                 // Function-based model (module.exports = (sequelize, DataTypes) => { ... })
                 const initializedModel = model(sequelize, sequelize.constructor.DataTypes);
@@ -43,7 +38,7 @@ const initializeModel = async (modelFile, modelName, sequelize) => {
             }
         } else if (model && typeof model.init === 'function') {
             // Pre-initialized Sequelize model
-            const initializedModel = model.init(sequelize, sequelize.constructor.DataTypes);
+            const initializedModel = model.init(sequelize);
             verifyModelMethods(initializedModel, modelName);
             return initializedModel;
         } else {
@@ -146,7 +141,13 @@ const initializeModels = async () => {
 
                 // Gift System
                 'GiftCode',
-                'GiftCodeClaim'
+                'GiftCodeClaim',
+
+                'UserVault',
+                'VaultTransaction', 
+                'ActivityReward',
+                'SelfRebate',
+
             ];
 
             // Initialize each model
