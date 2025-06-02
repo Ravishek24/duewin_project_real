@@ -26,8 +26,7 @@ const SeamlessGameSession = require('../models/SeamlessGameSession');
 const router = express.Router();
 
 // Protected routes (require authentication)
-router.get('/games', auth, getGamesController);
-router.get('/games/filtered', auth, getFilteredGamesController);
+router.get('/games', auth, getFilteredGamesController);
 router.get('/launch/:gameId', auth, launchGameController);
 
 // New routes for server-side game embedding to help bypass Cloudflare restrictions

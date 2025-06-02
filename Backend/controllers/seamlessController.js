@@ -647,68 +647,71 @@ const removeFreeRoundsController = async (req, res) => {
  */
 const unifiedCallbackController = async (req, res) => {
   try {
-    console.log('=== UNIFIED CALLBACK REQUEST ===');
-    console.log('Request method:', req.method);
-    console.log('Request path:', req.path);
-    console.log('Request query:', req.query);
-    console.log('Request headers:', req.headers);
-
-    const { action, remote_id, username } = req.query;
-    console.log('Action type:', action);
-    console.log('Remote ID:', remote_id);
-    console.log('Username:', username);
-
-    // CRITICAL FIX: Validate the request signature first
+    console.log('=== CALLBACK REQUEST DEBUG ===');
+    console.log('Method:', req.method);
+    console.log('URL:', req.url);
+    console.log('Query:', req.query);
+    console.log('Headers:', req.headers);
+    console.log('IP:', req.ip);
+    
+    // CRITICAL: The docs show GET requests for wallet callbacks
+    if (req.method !== 'GET') {
+      console.error('Invalid HTTP method for callback:', req.method);
+      return res.status(200).json({
+        status: '400',
+        msg: 'Invalid HTTP method'
+      });
+    }
+    
+    const { action } = req.query;
+    
+    if (!action) {
+      return res.status(200).json({
+        status: '400',
+        msg: 'Missing action parameter'
+      });
+    }
+    
+    // CRITICAL: Validate signature for all requests
     const isValidSignature = validateSeamlessSignature(req.query);
     if (!isValidSignature) {
-      console.error('Invalid signature in callback request');
+      console.error('SIGNATURE VALIDATION FAILED');
+      console.error('Query params:', req.query);
+      console.error('Salt key:', process.env.SEAMLESS_SALT_KEY);
       return res.status(200).json({
         status: '403',
         msg: 'Invalid signature'
       });
     }
-
+    
     let result;
-
-    // Route to appropriate handler based on action type
+    
     switch (action) {
       case 'balance':
-        console.log('Processing balance request');
         result = await processBalanceRequest(req.query);
         break;
       case 'debit':
-        console.log('Processing debit request');
         result = await processDebitRequest(req.query);
         break;
       case 'credit':
-        console.log('Processing credit request');
         result = await processCreditRequest(req.query);
         break;
       case 'rollback':
-        console.log('Processing rollback request');
         result = await processRollbackRequest(req.query);
         break;
       default:
-        console.log('Invalid action type:', action);
         result = {
           status: '400',
           msg: 'Invalid action'
         };
     }
-
-    console.log('Response result:', result);
-    console.log('=== END UNIFIED CALLBACK REQUEST ===\n');
-
-    // Always return HTTP 200 with result in body as required by API
+    
+    console.log('Callback response:', result);
+    
+    // CRITICAL: Always return HTTP 200 with JSON body
     return res.status(200).json(result);
   } catch (error) {
-    console.error('Error in unifiedCallbackController:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack
-    });
-    
-    // Always return HTTP 200 with error in body as required by API
+    console.error('Callback error:', error);
     return res.status(200).json({
       status: '500',
       msg: 'Internal server error'

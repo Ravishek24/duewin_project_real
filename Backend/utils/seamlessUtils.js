@@ -8,47 +8,39 @@ const seamlessConfig = require('../config/seamlessConfig');
  * @param {Object} queryParams - The query parameters from the request
  * @returns {boolean} - Whether the signature is valid
  */
+// 1. CRITICAL: Signature validation must match docs exactly
 const validateSeamlessSignature = (queryParams) => {
   try {
-    console.log('=== SIGNATURE VALIDATION DEBUG ===');
-    console.log('Raw query params:', queryParams);
-    
-    // Clone the query parameters
     const params = { ...queryParams };
-    
-    // Extract the key (signature)
     const receivedKey = params.key;
     delete params.key;
-    
-    console.log('Received key:', receivedKey);
-    console.log('Params without key:', params);
     
     if (!receivedKey) {
       console.error('No key parameter found in request');
       return false;
     }
     
-    // CRITICAL FIX: Build query string exactly as the provider does
-    // The query string should be built in the exact order the parameters appear
+    // DOCS COMPLIANCE: Build query string WITHOUT sorting (preserve original order)
+    // The docs show: action=balance&remote_id=123&session_id=123-abc&key=hash
     const queryString = Object.entries(params)
       .map(([key, value]) => `${key}=${value}`)
       .join('&');
     
     console.log('Query string for validation:', queryString);
-    console.log('Salt key (first 5 chars):', seamlessConfig.salt_key.substring(0, 5) + '...');
+    console.log('Salt key:', process.env.SEAMLESS_SALT_KEY);
     
-    // Generate the expected hash: sha1(SALT_KEY + QUERY_STRING)
+    // DOCS SPEC: sha1([SALT KEY]+[QUERY STRING])
     const expectedKey = crypto
       .createHash('sha1')
-      .update(seamlessConfig.salt_key + queryString)
+      .update(process.env.SEAMLESS_SALT_KEY + queryString)
       .digest('hex');
     
     console.log('Expected key:', expectedKey);
-    console.log('Keys match:', receivedKey === expectedKey);
+    console.log('Received key:', receivedKey);
     
     return receivedKey === expectedKey;
   } catch (error) {
-    console.error('Error validating seamless signature:', error);
+    console.error('Error validating signature:', error);
     return false;
   }
 };

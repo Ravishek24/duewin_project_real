@@ -5,6 +5,32 @@ const seamlessController = require('../controllers/seamlessController');
 const { auth } = require('../middlewares/authMiddleware');
 const { validateSeamlessRequest, logSeamlessRequest } = require('../middlewares/seamlessMiddleware');
 
+// CRITICAL: Callback test route (should be first)
+router.get('/callback-test', (req, res) => {
+  console.log('=== CALLBACK TEST HIT ===');
+  console.log('Full URL:', req.originalUrl);
+  console.log('Base URL:', req.baseUrl);
+  console.log('Path:', req.path);
+  console.log('Query:', req.query);
+  console.log('Headers:', req.headers);
+  console.log('IP:', req.ip);
+  console.log('Method:', req.method);
+  
+  res.status(200).json({
+    status: '200',
+    message: 'Callback endpoint reachable',
+    timestamp: new Date().toISOString(),
+    url: {
+      full: req.originalUrl,
+      base: req.baseUrl,
+      path: req.path
+    },
+    query: req.query,
+    ip: req.ip,
+    method: req.method
+  });
+});
+
 // Debug route for testing
 router.get('/debug', (req, res) => {
   console.log('=== DEBUG ROUTE HIT ===');
@@ -43,7 +69,6 @@ router.get('/launch/:gameId', auth, seamlessController.launchGameController);
 router.get('/iframe/:gameId', auth, seamlessController.serveGameInIframeController);
 router.get('/redirect/:gameId', auth, seamlessController.redirectToGameController);
 router.get('/test', auth, seamlessController.testPageController);
-router.get('/games/filtered', auth, seamlessController.getFilteredGamesController);
 
 // Free rounds routes (admin only)
 router.post('/freerounds/add', auth, seamlessController.addFreeRoundsController);
@@ -58,10 +83,10 @@ router.use('/callback', logSeamlessRequest);
 router.all('/callback', seamlessController.unifiedCallbackController);
 
 // Individual callback routes for backward compatibility (optional)
-router.get('/callback/balance', seamlessController.balanceCallbackController);
-router.get('/callback/debit', seamlessController.debitCallbackController);  
-router.get('/callback/credit', seamlessController.creditCallbackController);
-router.get('/callback/rollback', seamlessController.rollbackCallbackController);
+// router.get('/callback/balance', seamlessController.balanceCallbackController);
+// router.get('/callback/debit', seamlessController.debitCallbackController);  
+// router.get('/callback/credit', seamlessController.creditCallbackController);
+// router.get('/callback/rollback', seamlessController.rollbackCallbackController);
 router.post('/callback/unified', seamlessController.unifiedCallbackController);
 
 // Health check route for the callback endpoint
@@ -71,6 +96,38 @@ router.get('/callback/health', (req, res) => {
     message: 'Seamless callback endpoint is healthy',
     timestamp: new Date().toISOString(),
     endpoint: req.originalUrl
+  });
+});
+
+// Debug route to list all available routes
+router.get('/debug/routes', (req, res) => {
+  const routes = [];
+  router.stack.forEach((middleware) => {
+    if (middleware.route) {
+      // Routes registered directly on the router
+      routes.push({
+        path: middleware.route.path,
+        methods: Object.keys(middleware.route.methods)
+      });
+    } else if (middleware.name === 'router') {
+      // Router middleware
+      middleware.handle.stack.forEach((handler) => {
+        if (handler.route) {
+          routes.push({
+            path: handler.route.path,
+            methods: Object.keys(handler.route.methods)
+          });
+        }
+      });
+    }
+  });
+
+  res.json({
+    success: true,
+    message: 'Available routes',
+    routes: routes,
+    baseUrl: req.baseUrl,
+    originalUrl: req.originalUrl
   });
 });
 
