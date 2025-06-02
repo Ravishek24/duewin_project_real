@@ -1,20 +1,25 @@
+// controllers/thirdPartyWalletController.js - FIXED VERSION
 const thirdPartyWalletService = require('../services/thirdPartyWalletService');
 
 /**
- * Get third-party wallet balance
+ * FIXED: Get third-party wallet balance with better error handling
  * @param {Object} req - Request object
  * @param {Object} res - Response object
  */
 const getWalletBalance = async (req, res) => {
   try {
-    const userId = req.user.user_id; // Assuming authentication middleware sets req.user
+    const userId = req.user.user_id;
+    console.log(`Getting wallet balance for user ${userId}`);
     
     const result = await thirdPartyWalletService.getBalance(userId);
     
     if (!result.success) {
-      return res.status(404).json({
-        success: false,
-        message: result.message
+      // FIXED: Return 0 balance instead of 404 if wallet doesn't exist
+      return res.status(200).json({
+        success: true,
+        balance: 0,
+        currency: 'EUR',
+        message: 'No third-party wallet found'
       });
     }
     
@@ -33,17 +38,39 @@ const getWalletBalance = async (req, res) => {
 };
 
 /**
- * Transfer funds to third-party wallet
+ * FIXED: Transfer funds to third-party wallet with better validation
  * @param {Object} req - Request object
  * @param {Object} res - Response object
  */
 const transferToThirdPartyWallet = async (req, res) => {
   try {
-    const userId = req.user.user_id; // Assuming authentication middleware sets req.user
+    const userId = req.user.user_id;
+    console.log(`Transfer to third-party wallet requested for user ${userId}`);
+    
+    // ADDED: Check if user already has a third-party wallet with balance
+    const balanceCheck = await thirdPartyWalletService.getBalance(userId);
+    if (balanceCheck.success && balanceCheck.balance > 0) {
+      console.log(`User ${userId} already has balance in third-party wallet: ${balanceCheck.balance}`);
+      return res.status(200).json({
+        success: true,
+        message: 'Funds already available in third-party wallet',
+        thirdPartyWalletBalance: balanceCheck.balance,
+        currency: balanceCheck.currency
+      });
+    }
     
     const result = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
     
     if (!result.success) {
+      // FIXED: Better error handling for different scenarios
+      if (result.message === 'No funds available in main wallet') {
+        return res.status(200).json({
+          success: false,
+          message: 'No funds available in main wallet to transfer',
+          mainBalance: result.mainBalance || 0
+        });
+      }
+      
       return res.status(400).json({
         success: false,
         message: result.message
@@ -52,10 +79,13 @@ const transferToThirdPartyWallet = async (req, res) => {
     
     return res.status(200).json({
       success: true,
-      message: 'Funds transferred to third-party wallet',
+      message: 'Funds transferred to third-party wallet successfully',
       mainWalletBalanceBefore: result.mainWalletBalanceBefore,
       mainWalletBalanceAfter: result.mainWalletBalanceAfter,
-      thirdPartyWalletBalance: result.wallet ? result.wallet.balance : null
+      thirdPartyWalletBalanceBefore: result.thirdPartyWalletBalanceBefore,
+      thirdPartyWalletBalanceAfter: result.thirdPartyWalletBalanceAfter,
+      transferAmount: result.transferAmount,
+      thirdPartyWalletBalance: result.wallet ? result.wallet.balance : result.thirdPartyWalletBalanceAfter
     });
   } catch (error) {
     console.error('Error transferring to third-party wallet:', error);
@@ -73,7 +103,8 @@ const transferToThirdPartyWallet = async (req, res) => {
  */
 const transferToMainWallet = async (req, res) => {
   try {
-    const userId = req.user.user_id; // Assuming authentication middleware sets req.user
+    const userId = req.user.user_id;
+    console.log(`Transfer to main wallet requested for user ${userId}`);
     
     const result = await thirdPartyWalletService.transferToMainWallet(userId);
     
@@ -86,11 +117,12 @@ const transferToMainWallet = async (req, res) => {
     
     return res.status(200).json({
       success: true,
-      message: 'Funds transferred to main wallet',
+      message: 'Funds transferred to main wallet successfully',
       mainWalletBalanceBefore: result.mainWalletBalanceBefore,
       mainWalletBalanceAfter: result.mainWalletBalanceAfter,
       thirdPartyWalletBalanceBefore: result.thirdPartyWalletBalanceBefore,
-      thirdPartyWalletBalanceAfter: result.thirdPartyWalletBalanceAfter
+      thirdPartyWalletBalanceAfter: result.thirdPartyWalletBalanceAfter,
+      transferAmount: result.transferAmount
     });
   } catch (error) {
     console.error('Error transferring to main wallet:', error);
@@ -102,29 +134,31 @@ const transferToMainWallet = async (req, res) => {
 };
 
 /**
- * Check if there are funds in the third-party wallet
+ * FIXED: Check if there are funds in the third-party wallet
  * @param {Object} req - Request object
  * @param {Object} res - Response object
  */
 const checkThirdPartyFunds = async (req, res) => {
   try {
-    const userId = req.user.user_id; // Assuming authentication middleware sets req.user
+    const userId = req.user.user_id;
     
     const result = await thirdPartyWalletService.getBalance(userId);
     
+    // FIXED: Handle the case where wallet doesn't exist gracefully
     if (!result.success) {
-      // If wallet doesn't exist, return false for hasFunds
       return res.status(200).json({
         hasFunds: false,
         balance: 0,
-        currency: 'INR'
+        currency: 'EUR',
+        walletExists: false
       });
     }
     
     return res.status(200).json({
       hasFunds: result.balance > 0,
       balance: result.balance,
-      currency: result.currency
+      currency: result.currency,
+      walletExists: true
     });
   } catch (error) {
     console.error('Error checking third-party wallet funds:', error);
@@ -135,9 +169,76 @@ const checkThirdPartyFunds = async (req, res) => {
   }
 };
 
+/**
+ * ADDED: Create a third-party wallet for the user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+const createWallet = async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    console.log(`Creating wallet for user ${userId}`);
+    
+    const result = await thirdPartyWalletService.createWallet(userId);
+    
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+    
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+      wallet: {
+        id: result.wallet.wallet_id,
+        balance: result.wallet.balance,
+        currency: result.wallet.currency
+      }
+    });
+  } catch (error) {
+    console.error('Error creating wallet:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create wallet'
+    });
+  }
+};
+
+/**
+ * ADDED: Get wallet status and balance info
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+const getWalletStatus = async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    
+    const walletCheck = await thirdPartyWalletService.walletExists(userId);
+    const balanceResult = await thirdPartyWalletService.getBalance(userId);
+    
+    return res.status(200).json({
+      success: true,
+      walletExists: walletCheck.exists,
+      balance: walletCheck.balance,
+      currency: walletCheck.currency,
+      canPlay: walletCheck.balance > 0
+    });
+  } catch (error) {
+    console.error('Error getting wallet status:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get wallet status'
+    });
+  }
+};
+
 module.exports = {
   getWalletBalance,
   transferToThirdPartyWallet,
   transferToMainWallet,
-  checkThirdPartyFunds
-}; 
+  checkThirdPartyFunds,
+  createWallet, // ADDED
+  getWalletStatus // ADDED
+};

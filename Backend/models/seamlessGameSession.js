@@ -1,4 +1,4 @@
-// Backend/models/SeamlessGameSession.js
+// Backend/models/SeamlessGameSession.js - UPDATED MODEL
 const { Model, DataTypes } = require('sequelize');
 
 class SeamlessGameSession extends Model {
@@ -42,6 +42,7 @@ class SeamlessGameSession extends Model {
                 allowNull: true,
                 comment: 'Game ID hash'
             },
+            // FIXED: Added game_url column
             game_url: {
                 type: DataTypes.TEXT,
                 allowNull: true,
@@ -57,6 +58,12 @@ class SeamlessGameSession extends Model {
                 allowNull: false,
                 unique: true,
                 comment: 'Unique session identifier'
+            },
+            // FIXED: Added game_session_id column
+            game_session_id: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Game session ID from provider'
             },
             balance: {
                 type: DataTypes.FLOAT,
@@ -100,7 +107,24 @@ class SeamlessGameSession extends Model {
             tableName: 'seamless_game_sessions',
             timestamps: true,
             createdAt: 'created_at',
-            updatedAt: 'updated_at'
+            updatedAt: 'updated_at',
+            indexes: [
+                {
+                    fields: ['user_id']
+                },
+                {
+                    fields: ['session_id']
+                },
+                {
+                    fields: ['game_id_hash']
+                },
+                {
+                    fields: ['is_active']
+                },
+                {
+                    fields: ['created_at']
+                }
+            ]
         });
     }
 

@@ -13,7 +13,8 @@ const {
   serveGameInIframeController,
   redirectToGameController,
   testPageController,
-  getFilteredGamesController
+  getFilteredGamesController,
+  healthCheckController
 } = require('../controllers/seamlessController');
 const { auth } = require('../middlewares/authMiddleware');
 const { validateSeamlessRequest } = require('../middlewares/seamlessMiddleware');
@@ -32,6 +33,9 @@ router.get('/launch/:gameId', auth, launchGameController);
 // New routes for server-side game embedding to help bypass Cloudflare restrictions
 router.get('/iframe/:gameId', auth, serveGameInIframeController);
 router.get('/redirect/:gameId', auth, redirectToGameController);
+
+router.get('/health', healthCheckController);
+
 
 // Debug routes - direct access to the game URL without middleware or frontend formatting
 router.get('/debug-game/:gameId', auth, async (req, res) => {

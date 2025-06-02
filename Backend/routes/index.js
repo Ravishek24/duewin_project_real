@@ -17,6 +17,7 @@ const otpRoutes = require('./otpRoutes');
 const adminRoutes = require('./adminRoutes');
 const mxPayRoutes = require('./mxPayRoutes');
 const vipRoutes = require('./vipRoutes');
+const thirdPartyWalletRoutes = require('./thirdPartyWalletRoutes');
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
 const internalGameRoutes = require('./internalGameRoutes');
 
@@ -32,10 +33,11 @@ router.use('/internal', auth, internalGameRoutes);
 router.use('/payments', auth, paymentRoutes);
 router.use('/payment-gateways', auth, paymentGatewayRoutes);
 router.use('/spribe', auth, spribeRoutes);
-router.use('/seamless', auth, seamlessWalletRoutes);
+router.use('/seamless', seamlessWalletRoutes);
 router.use('/seamless-games', auth, seamlessRoutes);
 router.use('/referrals', referralRoutes);
 router.use('/otp', otpRoutes); // OTP routes typically don't need auth
+router.use('/third-party-wallet', auth, thirdPartyWalletRoutes); // Add third-party wallet routes
 
 // Mount admin routes without initial admin check - admin routes handle their own auth
 router.use('/admin', adminRoutes);

@@ -201,61 +201,105 @@ const getGameList = async (currency = seamlessConfig.default_currency, filters =
   }
 };
 
+
 /**
- * Check if player exists at provider
+ * CRITICAL FIX: Helper function to find user by remote_id
+ */
+const findUserByRemoteId = async (remote_id, transaction = null) => {
+  try {
+    // Extract user ID from remote_id format (player123 -> 123)
+    const userIdMatch = remote_id.match(/player(\d+)/);
+    if (!userIdMatch) {
+      throw new Error(`Invalid remote_id format: ${remote_id}`);
+    }
+    
+    const userId = parseInt(userIdMatch[1]);
+    console.log('Extracted user ID from remote_id:', userId);
+    
+    const user = await User.findByPk(userId, { transaction });
+    if (!user) {
+      throw new Error(`User not found for ID: ${userId}`);
+    }
+    
+    return user;
+  } catch (error) {
+    console.error('Error finding user by remote_id:', error);
+    throw error;
+  }
+};
+
+
+
+/**
+ * Generate consistent player credentials
+ * @param {Object} user - User object
+ * @returns {Object} Player credentials
+ */
+const generatePlayerCredentials = (user) => {
+  return {
+    username: `${seamlessConfig.player_prefix}${user.user_id}`,
+    password: `pwd${user.user_id}_${seamlessConfig.password_salt}`,
+    nickname: user.user_name ? user.user_name.substring(0, 16) : `Player${user.user_id}`
+  };
+};
+
+/**
+ * Check if player exists at provider with consistent credentials
  * @param {number} userId - User ID
  * @returns {Promise<Object>} Player info or false
  */
 const playerExists = async (userId) => {
   try {
-    // Get user
     const user = await User.findByPk(userId);
     if (!user) {
-      return {
-        success: false,
-        message: 'User not found'
-      };
+      return { success: false, message: 'User not found' };
     }
 
+    const credentials = generatePlayerCredentials(user);
     const requestData = {
       api_login: seamlessConfig.api_login,
       api_password: seamlessConfig.api_password,
       method: 'playerExists',
-      user_username: `player${user.user_id}`, // Use a consistent format for usernames
+      user_username: credentials.username,
       currency: seamlessConfig.default_currency
     };
 
-    const response = await axios.post(
-      seamlessConfig.api_url.production,
-      requestData
-    );
+    console.log('🔍 Checking player exists:', {
+      username: credentials.username,
+      userId: userId
+    });
+
+    const response = await axios.post(seamlessConfig.api_url.production, requestData);
 
     if (response.data.error !== 0) {
+      if (response.data.error === 1 && response.data.message === 'Player not found') {
+        return { success: true, exists: false };
+      }
       throw new Error(`Error checking player: ${response.data.message || 'Unknown error'}`);
     }
 
     return {
       success: true,
-      exists: !!response.data.response, // Convert to boolean
-      playerInfo: response.data.response
+      exists: !!response.data.response,
+      playerInfo: response.data.response,
+      credentials: credentials
     };
   } catch (error) {
     console.error('Error in playerExists:', error);
-    return {
-      success: false,
-      message: error.message || 'Failed to check player'
-    };
+    return { success: false, message: error.message || 'Failed to check player' };
   }
 };
 
 /**
- * Create player at provider
+ * Create player at provider with consistent credentials
  * @param {number} userId - User ID
  * @returns {Promise<Object>} Created player info
  */
+/**
+ * FIXED: Create player at provider with proper error handling
+ */
 const createPlayer = async (userId) => {
   try {
-    // Get user
     const user = await User.findByPk(userId);
     if (!user) {
       return {
@@ -264,26 +308,44 @@ const createPlayer = async (userId) => {
       };
     }
 
+    // Use consistent username format
+    const username = `player${user.user_id}`;
+    const password = `pwd${user.user_id}${process.env.SEAMLESS_PASSWORD_SALT || 'default_salt'}`;
+
     const requestData = {
       api_login: seamlessConfig.api_login,
       api_password: seamlessConfig.api_password,
       method: 'createPlayer',
-      user_username: `player${user.user_id}`, // Use a consistent format for usernames
-      user_password: `pwd${user.user_id}${Date.now().toString(36)}`, // Generate a secure password
-      user_nickname: user.user_name.substring(0, 16), // Limit to 16 chars as required
+      user_username: username,
+      user_password: password,
+      user_nickname: user.user_name.substring(0, 16),
       currency: seamlessConfig.default_currency
     };
 
+    console.log('Creating player with data:', {
+      ...requestData,
+      api_password: '***'
+    });
+
     const response = await axios.post(
       seamlessConfig.api_url.production,
-      requestData
+      requestData,
+      { timeout: 30000 }
     );
 
+    console.log('Create player response:', response.data);
+
     if (response.data.error !== 0) {
-      // Check if player already exists
       if (response.data.message === 'Player already exists') {
-        // Try to get existing player info
-        return await playerExists(userId);
+        // Return success if player already exists
+        return {
+          success: true,
+          playerInfo: {
+            id: username,
+            username: username,
+            exists: true
+          }
+        };
       }
       throw new Error(`Error creating player: ${response.data.message || 'Unknown error'}`);
     }
@@ -301,25 +363,23 @@ const createPlayer = async (userId) => {
   }
 };
 
+
 /**
- * Get game URL for launching a game
+ * Get game URL for launching a game - FIXED SESSION MANAGEMENT
  * @param {number} userId - User ID
  * @param {string} gameId - Game ID or hash
  * @param {string} language - Language code
  * @returns {Promise<Object>} Game launch URL
  */
+/**
+ * FIXED: Get game URL with proper session management
+ */
 const getGameUrl = async (userId, gameId, language = seamlessConfig.default_language) => {
   try {
-    let warningMessage = null;
+    console.log('=== GET GAME URL DEBUG ===');
+    console.log('User ID:', userId);
+    console.log('Game ID:', gameId);
     
-    // Add debug logging
-    console.log('=== DEBUG: getGameUrl ===');
-    console.log('Environment:', process.env.NODE_ENV);
-    console.log('Frontend URL from env:', process.env.FRONTEND_URL);
-    console.log('Home URL from config:', seamlessConfig.home_url);
-    console.log('Cashier URL from config:', seamlessConfig.cashier_url);
-    
-    // Get user first
     const user = await User.findByPk(userId);
     if (!user) {
       return {
@@ -328,64 +388,34 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
       };
     }
 
-    // Generate a consistent password based on user ID and a fixed salt
+    const username = `player${user.user_id}`;
     const userPassword = `pwd${user.user_id}${process.env.SEAMLESS_PASSWORD_SALT || 'default_salt'}`;
     
-    // First, check if player exists
-    const playerCheck = await playerExists(userId);
+    console.log('Using username:', username);
     
-    // If player doesn't exist or there was an error, create the player
+    // Check if player exists, create if not
+    const playerCheck = await playerExists(userId);
     if (!playerCheck.success || !playerCheck.exists) {
+      console.log('Player does not exist, creating...');
       const playerCreation = await createPlayer(userId);
       if (!playerCreation.success) {
-        console.error(`Failed to create player for user ${userId}:`, playerCreation.message);
         throw new Error(`Failed to create player: ${playerCreation.message}`);
       }
     }
     
-    // First, check if there's already a third-party wallet with funds
-    const walletBalanceCheck = await thirdPartyWalletService.getBalance(userId);
-    
-    // If wallet doesn't exist or has zero balance, try to transfer from main wallet
-    if (!walletBalanceCheck.success || parseFloat(walletBalanceCheck.balance) <= 0) {
-      // Transfer balance from main wallet to third-party wallet
-      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
-      
-      if (!transferResult.success) {
-        // If error is about no funds, still continue but inform the user
-        if (transferResult.message === 'No funds available in main wallet') {
-          console.log(`User ${userId} has no funds to transfer to third-party wallet`);
-          // Continue with game loading, but user won't be able to place bets
-          warningMessage = 'You have no funds available to play. Please deposit first.';
-        } else {
-          console.error(`Failed to transfer to third-party wallet for user ${userId}:`, transferResult.message);
-          throw new Error(`Failed to transfer to third-party wallet: ${transferResult.message}`);
-        }
-      }
+    // Ensure third-party wallet exists and has funds
+    const walletCheck = await thirdPartyWalletService.getBalance(userId);
+    if (!walletCheck.success) {
+      // Create wallet if it doesn't exist
+      await thirdPartyWalletService.createWallet(userId);
     }
-
-    // Check for existing valid session
-    const existingSession = await SeamlessGameSession.findOne({
-      where: {
-        user_id: userId,
-        game_id_hash: gameId,
-        is_active: true,
-        created_at: {
-          [Op.gte]: new Date(Date.now() - 24 * 60 * 60 * 1000) // Within last 24 hours
-        }
+    
+    // Transfer funds if wallet is empty
+    if (!walletCheck.success || parseFloat(walletCheck.balance) <= 0) {
+      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+      if (!transferResult.success && transferResult.message !== 'No funds available in main wallet') {
+        console.warn('Failed to transfer to third-party wallet:', transferResult.message);
       }
-    });
-
-    // If we have a valid session, use it
-    if (existingSession) {
-      console.log('Using existing valid session:', existingSession.session_id);
-      return {
-        success: true,
-        gameUrl: existingSession.game_url,
-        warningMessage,
-        sessionId: existingSession.session_id,
-        gameSessionId: existingSession.game_session_id
-      };
     }
 
     const requestData = {
@@ -393,8 +423,8 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
       api_password: seamlessConfig.api_password,
       method: 'getGame',
       lang: language,
-      user_username: `player${user.user_id}`,
-      user_password: userPassword, // Use consistent password
+      user_username: username,
+      user_password: userPassword,
       gameid: gameId,
       homeurl: seamlessConfig.home_url,
       cashierurl: seamlessConfig.cashier_url,
@@ -402,80 +432,51 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
       currency: seamlessConfig.default_currency
     };
 
-    // Add debug logging for request data
-    console.log('Request data being sent:', {
+    console.log('Making getGame request with data:', {
       ...requestData,
-      api_password: '***REDACTED***' // Don't log sensitive data
+      api_password: '***'
     });
 
     const response = await axios.post(
       seamlessConfig.api_url.production,
-      requestData
+      requestData,
+      { timeout: 30000 }
     );
 
+    console.log('GetGame response:', response.data);
+
     if (response.data.error !== 0) {
-      console.error(`Error getting game URL for user ${userId}, game ${gameId}:`, response.data);
       throw new Error(`Error getting game URL: ${response.data.message || 'Unknown error'} (code: ${response.data.error})`);
     }
 
-    // Store game session info
+    // Store game session
     const gameSession = await SeamlessGameSession.create({
       user_id: userId,
-      remote_id: playerCheck.playerInfo.id, // Use the remote ID from playerExists
+      remote_id: username,
       provider: gameId.includes('_') ? gameId.split('_')[0] : 'unknown',
       session_token: response.data.sessionid,
       game_id: gameId.includes('_') ? gameId.split('_')[1] : gameId,
       game_id_hash: gameId,
       is_active: true,
-      ip_address: null, // Could be passed from the controller if needed
       game_type: gameId.includes('_') ? gameId.split('_')[0] : 'unknown',
       session_id: response.data.sessionid,
-      game_session_id: response.data.gamesession_id,
-      game_url: response.data.url || response.data.response,
-      user_password: userPassword // Store the password used for this session
+      game_url: response.data.url || response.data.response
     });
 
-    // Handle different response formats from the provider
     const gameUrl = response.data.url || response.data.response;
     
-    // Log the response for debugging
-    console.log('🔍 Provider response:', {
-      hasUrl: !!response.data.url,
-      hasResponse: !!response.data.response,
-      sessionId: response.data.sessionid,
-      gameSessionId: response.data.gamesession_id
-    });
-    
     if (!gameUrl) {
-      console.error('No game URL found in provider response:', response.data);
       throw new Error('No game URL received from provider');
     }
     
     return {
       success: true,
       gameUrl: gameUrl,
-      warningMessage,
       sessionId: response.data.sessionid,
       gameSessionId: response.data.gamesession_id
     };
   } catch (error) {
-    console.error(`Error in getGameUrl for user ${userId}, game ${gameId}:`, error);
-    
-    // Provide more specific error messages based on common issues
-    if (error.message.includes('Network Error') || error.code === 'ECONNREFUSED') {
-      return {
-        success: false,
-        message: 'Unable to connect to game provider. Please try again later.'
-      };
-    }
-    
-    if (error.response && error.response.status === 403) {
-      return {
-        success: false,
-        message: 'Access denied by game provider. IP address may not be whitelisted.'
-      };
-    }
-    
+    console.error(`Error in getGameUrl:`, error);
     return {
       success: false,
       message: error.message || 'Failed to get game URL'
@@ -483,75 +484,62 @@ const getGameUrl = async (userId, gameId, language = seamlessConfig.default_lang
   }
 };
 
+
+
 /**
  * Process a balance request from the game provider
  * @param {Object} queryParams - The query parameters from the request
  * @returns {Promise<Object>} Response for the provider
  */
+/**
+ * FIXED: Process balance request with proper user resolution
+ */
 const processBalanceRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
-    // Extract needed parameters
-    const {
-      remote_id,
-      session_id,
-      game_id,
-      game_id_hash,
-      provider
-    } = queryParams;
+    const { remote_id, session_id, game_id, game_id_hash, provider } = queryParams;
     
-    console.log('=== DEBUG: Balance Request ===');
+    console.log('=== BALANCE REQUEST DEBUG ===');
     console.log('Query params:', queryParams);
     
-    // Find active game session
-    const gameSession = await SeamlessGameSession.findOne({
-      where: { 
-        remote_id, 
-        is_active: true,
-        session_id: session_id // Validate session ID
-      },
-      order: [['created_at', 'DESC']],
-      transaction: t
-    });
-    
-    if (!gameSession) {
-      console.error('Session not found or invalid:', { remote_id, session_id });
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'Invalid session'
-      };
-    }
-    
-    // Get user
-    const user = await User.findByPk(gameSession.user_id, {
-      transaction: t
-    });
-    
-    if (!user) {
-      console.error('User not found for session:', { remote_id, session_id });
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'User not found'
-      };
-    }
+    // CRITICAL FIX: Find user by remote_id
+    const user = await findUserByRemoteId(remote_id, t);
+    console.log('Found user:', { id: user.user_id, name: user.user_name });
     
     // Get balance from third-party wallet
     const walletResult = await thirdPartyWalletService.getBalance(user.user_id);
+    console.log('Wallet balance result:', walletResult);
     
     if (!walletResult.success) {
       console.error('Wallet not found for user:', user.user_id);
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'Wallet not found'
-      };
+      
+      // CRITICAL FIX: Try to create wallet if it doesn't exist
+      const createWalletResult = await thirdPartyWalletService.createWallet(user.user_id);
+      if (!createWalletResult.success) {
+        await t.rollback();
+        return {
+          status: '500',
+          msg: 'Failed to create wallet'
+        };
+      }
+      
+      // Get balance again after creating wallet
+      const newWalletResult = await thirdPartyWalletService.getBalance(user.user_id);
+      if (!newWalletResult.success) {
+        await t.rollback();
+        return {
+          status: '500',
+          msg: 'Wallet error after creation'
+        };
+      }
+      
+      walletResult.balance = newWalletResult.balance;
     }
     
     // Record this balance request
     await SeamlessTransaction.create({
+      transaction_id: `bal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       user_id: user.user_id,
       remote_id,
       provider_transaction_id: `balance_${Date.now()}`,
@@ -567,7 +555,8 @@ const processBalanceRequest = async (queryParams) => {
     
     await t.commit();
     
-    // Return balance with 2 decimal places
+    console.log('Returning balance:', parseFloat(walletResult.balance).toFixed(2));
+    
     return {
       status: '200',
       balance: parseFloat(walletResult.balance).toFixed(2)
@@ -587,11 +576,13 @@ const processBalanceRequest = async (queryParams) => {
  * @param {Object} queryParams - The query parameters from the request
  * @returns {Promise<Object>} Response for the provider
  */
+/**
+ * FIXED: Process debit request with proper user resolution
+ */
 const processDebitRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
-    // Extract needed parameters
     const {
       remote_id,
       session_id,
@@ -606,6 +597,9 @@ const processDebitRequest = async (queryParams) => {
       jackpot_contribution_in_amount
     } = queryParams;
     
+    console.log('=== DEBIT REQUEST DEBUG ===');
+    console.log('Query params:', queryParams);
+    
     // Check for duplicate transaction
     const existingTransaction = await SeamlessTransaction.findOne({
       where: { provider_transaction_id: transaction_id, type: 'debit' },
@@ -613,7 +607,7 @@ const processDebitRequest = async (queryParams) => {
     });
     
     if (existingTransaction) {
-      // Return same response as the original transaction
+      console.log('Duplicate transaction found, returning previous result');
       await t.rollback();
       return {
         status: '200',
@@ -622,46 +616,24 @@ const processDebitRequest = async (queryParams) => {
       };
     }
     
-    // Find user by remote_id
-    const gameSession = await SeamlessGameSession.findOne({
-      where: { remote_id, is_active: true },
-      order: [['created_at', 'DESC']],
-      transaction: t
-    });
+    // CRITICAL FIX: Find user by remote_id
+    const user = await findUserByRemoteId(remote_id, t);
+    console.log('Found user for debit:', { id: user.user_id, name: user.user_name });
     
-    if (!gameSession) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'Session not found'
-      };
-    }
-    
-    // Get user 
-    const user = await User.findByPk(gameSession.user_id, {
-      transaction: t
-    });
-    
-    if (!user) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'User not found'
-      };
-    }
-    
-    // Use third-party wallet service to update balance (deduct amount)
+    // Process bet using third-party wallet
     const betAmount = parseFloat(amount);
+    console.log('Processing bet amount:', betAmount);
+    
     const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, -betAmount);
+    console.log('Wallet update result:', walletResult);
     
     if (!walletResult.success) {
       await t.rollback();
       
-      // Check if failure was due to insufficient funds
       if (walletResult.message === 'Insufficient funds') {
         return {
           status: '403',
-          balance: parseFloat(walletResult.currentBalance).toFixed(2),
+          balance: parseFloat(walletResult.currentBalance || 0).toFixed(2),
           msg: 'Insufficient funds'
         };
       }
@@ -674,6 +646,7 @@ const processDebitRequest = async (queryParams) => {
     
     // Record transaction
     const transactionRecord = await SeamlessTransaction.create({
+      transaction_id: `deb_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       user_id: user.user_id,
       remote_id,
       provider_transaction_id: transaction_id,
@@ -691,25 +664,9 @@ const processDebitRequest = async (queryParams) => {
       gameplay_final: gameplay_final === '1'
     }, { transaction: t });
     
-    // Process activity reward
-    try {
-      const { processBetForActivityReward } = require('./activityRewardService');
-      await processBetForActivityReward(user.user_id, betAmount, 'seamless', t);
-    } catch (activityError) {
-      logger.warn('Activity reward processing failed for seamless game', {
-        error: activityError.message,
-        userId: user.user_id,
-        betAmount,
-        gameType: 'seamless'
-      });
-    }
-    
-    // Update the session's last activity
-    await gameSession.update({
-      last_activity: new Date()
-    }, { transaction: t });
-    
     await t.commit();
+    
+    console.log('Debit successful, new balance:', walletResult.newBalance.toFixed(2));
     
     return {
       status: '200',
@@ -731,11 +688,13 @@ const processDebitRequest = async (queryParams) => {
  * @param {Object} queryParams - The query parameters from the request
  * @returns {Promise<Object>} Response for the provider
  */
+/**
+ * FIXED: Process credit request with proper user resolution
+ */
 const processCreditRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
-    // Extract needed parameters
     const {
       remote_id,
       session_id,
@@ -750,6 +709,9 @@ const processCreditRequest = async (queryParams) => {
       is_jackpot_win
     } = queryParams;
     
+    console.log('=== CREDIT REQUEST DEBUG ===');
+    console.log('Query params:', queryParams);
+    
     // Check for duplicate transaction
     const existingTransaction = await SeamlessTransaction.findOne({
       where: { provider_transaction_id: transaction_id, type: 'credit' },
@@ -757,7 +719,7 @@ const processCreditRequest = async (queryParams) => {
     });
     
     if (existingTransaction) {
-      // Return same response as the original transaction
+      console.log('Duplicate transaction found, returning previous result');
       await t.rollback();
       return {
         status: '200',
@@ -766,37 +728,16 @@ const processCreditRequest = async (queryParams) => {
       };
     }
     
-    // Find user by remote_id
-    const gameSession = await SeamlessGameSession.findOne({
-      where: { remote_id, is_active: true },
-      order: [['created_at', 'DESC']],
-      transaction: t
-    });
+    // CRITICAL FIX: Find user by remote_id
+    const user = await findUserByRemoteId(remote_id, t);
+    console.log('Found user for credit:', { id: user.user_id, name: user.user_name });
     
-    if (!gameSession) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'Session not found'
-      };
-    }
-    
-    // Get user
-    const user = await User.findByPk(gameSession.user_id, {
-      transaction: t
-    });
-    
-    if (!user) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'User not found'
-      };
-    }
-    
-    // Process the win using third-party wallet
+    // Process win using third-party wallet
     const winAmount = parseFloat(amount);
+    console.log('Processing win amount:', winAmount);
+    
     const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, winAmount);
+    console.log('Wallet update result:', walletResult);
     
     if (!walletResult.success) {
       await t.rollback();
@@ -808,6 +749,7 @@ const processCreditRequest = async (queryParams) => {
     
     // Record transaction
     const transactionRecord = await SeamlessTransaction.create({
+      transaction_id: `crd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       user_id: user.user_id,
       remote_id,
       provider_transaction_id: transaction_id,
@@ -825,12 +767,9 @@ const processCreditRequest = async (queryParams) => {
       gameplay_final: gameplay_final === '1'
     }, { transaction: t });
     
-    // Update the session's last activity
-    await gameSession.update({
-      last_activity: new Date()
-    }, { transaction: t });
-    
     await t.commit();
+    
+    console.log('Credit successful, new balance:', walletResult.newBalance.toFixed(2));
     
     return {
       status: '200',
@@ -846,6 +785,7 @@ const processCreditRequest = async (queryParams) => {
     };
   }
 };
+
 
 /**
  * Process a rollback request from the game provider
@@ -1253,5 +1193,6 @@ module.exports = {
   cleanupExpiredSessions,
   addFreeRounds,
   removeFreeRounds,
-  validateGameSession
+  validateGameSession,
+  generatePlayerCredentials
 };
