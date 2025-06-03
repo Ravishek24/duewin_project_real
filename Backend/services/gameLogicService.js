@@ -3588,14 +3588,15 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
 const processGameResults = async (gameType, duration, periodId) => {
     try {
         // Ensure models are loaded
-        await ensureModelsLoaded();
-        
+        await ensureModelsInitialized();        
         // Generate result
         const result = await generateRandomResult(gameType);
         
         // Save result to database
         let savedResult;
         if (gameType === 'wingo') {
+            const models = await ensureModelsInitialized();
+
             savedResult = await models.BetResultWingo.create({
                 bet_number: periodId,
                 result_of_number: result.number,
@@ -3605,6 +3606,8 @@ const processGameResults = async (gameType, duration, periodId) => {
                 timeline: new Date().toISOString()
             });
         } else if (gameType === 'fiveD') {
+            const models = await ensureModelsInitialized();
+
             savedResult = await models.BetResult5D.create({
                 bet_number: periodId,
                 result_of_A: result.A,
@@ -3760,9 +3763,12 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
                         result: JSON.stringify(result)
                     }, { transaction: t });
 
+                    // Use correct primary key field based on game type
+                    const betId = gameType === 'trx_wix' ? bet.bet_id : bet.id;
+
                     winningBets.push({
                         userId: bet.user_id,
-                        betId: bet.bet_id,
+                        betId: betId,
                         winnings,
                         betAmount: bet.bet_amount,
                         betType: bet.bet_type,
@@ -3771,7 +3777,7 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
 
                     logger.info('Processed winning bet', {
                         userId: bet.user_id,
-                        betId: bet.bet_id,
+                        betId: betId,
                         winnings,
                         betType: bet.bet_type,
                         gameType
@@ -3784,9 +3790,12 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
                         result: JSON.stringify(result)
                     }, { transaction: t });
 
+                    // Use correct primary key field based on game type
+                    const betId = gameType === 'trx_wix' ? bet.bet_id : bet.id;
+
                     logger.info('Processed losing bet', {
                         userId: bet.user_id,
-                        betId: bet.bet_id,
+                        betId: betId,
                         betType: bet.bet_type,
                         gameType
                     });
@@ -3794,7 +3803,7 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
             } catch (betError) {
                 logger.error('Error processing individual bet', {
                     error: betError.message,
-                    betId: bet.bet_id,
+                    betId: gameType === 'trx_wix' ? bet.bet_id : bet.id,
                     userId: bet.user_id,
                     gameType
                 });
