@@ -24,149 +24,50 @@ const thirdPartyWalletService = require('./thirdPartyWalletService');
 const getGameList = async (currency = seamlessConfig.default_currency, filters = {}) => {
   try {
     console.log('=== GET GAME LIST SERVICE ===');
-    console.log('Input parameters:', { currency, filters });
-
+    
     const requestData = {
       api_login: seamlessConfig.api_login,
       api_password: seamlessConfig.api_password,
       method: 'getGameList',
       show_systems: 0,
-      show_additional: true, // Important to get all filtering data
+      show_additional: true,
       currency: currency
     };
 
-    console.log('Making API request to:', seamlessConfig.api_url.production);
-    const response = await axios.post(
-      seamlessConfig.api_url.production,
-      requestData
-    );
+    const response = await axios.post(seamlessConfig.api_url.production, requestData);
 
     if (response.data.error !== 0) {
       throw new Error(`Error getting game list: ${response.data.message || 'Unknown error'}`);
     }
 
-    // Apply filters if provided
     let filteredGames = response.data.response;
-    console.log('Initial games count:', filteredGames.length);
     
+    // Apply filters if provided
     if (filters && Object.keys(filters).length > 0) {
-      console.log('Applying filters:', filters);
-      
-      // Filter by category (e.g. 'video-slots', 'livecasino', etc.)
       if (filters.category) {
-        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => 
           game.type === filters.category || game.category === filters.category
         );
-        console.log(`Filtered ${initialCount - filteredGames.length} games by category: ${filters.category}`);
       }
       
-      // Filter by provider/system
-      const providerMap = {
-        'leap': ['Leap', 'LEAP'],
-        'playtech': ['Playtech', 'PLAYTECH'],
-        'goldenrace': ['Goldenrace', 'GOLDENRACE'],
-        'ezugi': ['ezugi', 'EZUGI'],
-        'evolution': ['evolution', 'EVOLUTION'],
-        'ebet': ['eBET', 'EBET'],
-        'bombay': ['Bombay Live', 'BOMBAY LIVE'],
-        'asiagaming': ['asiagaming', 'ASIAGAMING'],
-        'pragmatic': ['pragmatic play', 'PRAGMATIC PLAY', 'pragmatic'],
-        'betconstruct': ['Betconstruct Live', 'BETCONSTRUCT LIVE'],
-        'g24': ['LiveG24', 'LIVEG24'],
-        'tvbet': ['TVbet', 'TVBET'],
-        'digitain': ['digitain', 'DIGITAIN'],
-        'inplaynet': ['inplaynet', 'INPLAYNET'],
-        'smartsoft': ['SmartSoft', 'SMARTSOFT'],
-        'habanero': ['Habanero', 'HABANERO'],
-        'betsoft': ['betsoft', 'BETSOFT'],
-        'isoftbet': ['isoftbet', 'ISOFTBET'],
-        'pgsoft': ['PG Soft', 'PGSOFT'],
-        'onetouch': ['One Touch', 'ONE TOUCH'],
-        'evoplay': ['Evoplay', 'EVOPLAY'],
-        'jili': ['Jili', 'JILI'],
-        'blueprint': ['Blueprint', 'BLUEPRINT'],
-        'galaxsys': ['Galaxsys', 'GALAXSYS'],
-        'dragontiger': ['dragon tiger', 'DRAGON TIGER'],
-        'mines': ['mines', 'MINES'],
-        'plinko': ['plinko', 'PLINKO'],
-        'ludo': ['ludo', 'LUDO'],
-        'teenpatti': ['teen patti', 'TEEN PATTI'],
-        'rolet': ['rolet', 'ROLET'],
-        'aviator': ['aviator', 'AVIATOR'],
-        'spribe': ['Spribe', 'SPRIBE']
-      };
-
-      const providerCodes = providerMap[filters.provider.toLowerCase()] || [];
-      console.log('Provider codes to filter:', providerCodes);
-
-      if (providerCodes.length > 0) {
-        const initialCount = filteredGames.length;
-        filteredGames = filteredGames.filter(game => {
-          // Check all provider-related fields with case-insensitive matching
-          const systemMatch = providerCodes.some(code => 
-            game.system?.toLowerCase() === code.toLowerCase()
-          );
-          const subcategoryMatch = providerCodes.some(code => 
-            game.subcategory?.toLowerCase() === code.toLowerCase()
-          );
-          const categoryMatch = providerCodes.some(code => 
-            game.category?.toLowerCase() === code.toLowerCase()
-          );
-          const reportMatch = providerCodes.some(code => 
-            game.report?.toLowerCase() === code.toLowerCase()
-          );
-          const nameMatch = providerCodes.some(code => 
-            game.name?.toLowerCase() === code.toLowerCase()
-          );
-          const gamenameMatch = providerCodes.some(code => 
-            game.gamename?.toLowerCase() === code.toLowerCase()
-          );
-
-          const isMatch = systemMatch || subcategoryMatch || categoryMatch || reportMatch || nameMatch || gamenameMatch;
-          
-          // Enhanced logging for debugging
-          if (isMatch || initialCount - filteredGames.length < 5) {
-            console.log('Game details:', {
-              name: game.name,
-              gamename: game.gamename,
-              system: game.system,
-              subcategory: game.subcategory,
-              category: game.category,
-              report: game.report,
-              isMatch: isMatch
-            });
-          }
-          
-          return isMatch;
-        });
-        console.log(`Filtered ${initialCount - filteredGames.length} games by provider: ${filters.provider}`);
-      } else {
-        console.log('No provider codes found for:', filters.provider);
+      if (filters.provider) {
+        filteredGames = filteredGames.filter(game => 
+          game.system?.toLowerCase() === filters.provider.toLowerCase() ||
+          game.subcategory?.toLowerCase().includes(filters.provider.toLowerCase())
+        );
       }
       
-      // Filter for mobile games
       if (filters.mobile === true) {
-        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => game.mobile === true);
-        console.log(`Filtered ${initialCount - filteredGames.length} games by mobile`);
       }
       
-      // Filter for jackpot games
       if (filters.jackpot === true) {
-        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => game.has_jackpot === true);
-        console.log(`Filtered ${initialCount - filteredGames.length} games by jackpot`);
       }
       
-      // Filter for games supporting free rounds
       if (filters.freerounds === true) {
-        const initialCount = filteredGames.length;
         filteredGames = filteredGames.filter(game => game.freerounds_supported === true);
-        console.log(`Filtered ${initialCount - filteredGames.length} games by freerounds`);
       }
-    } else {
-      console.log('No filters provided, returning all games');
     }
 
     // Apply pagination
@@ -176,9 +77,7 @@ const getGameList = async (currency = seamlessConfig.default_currency, filters =
     const endIndex = startIndex + limit;
     const paginatedGames = filteredGames.slice(startIndex, endIndex);
 
-    console.log(`Final filtered games count: ${filteredGames.length}`);
-    console.log(`Pagination: Page ${page}, Limit ${limit}, Showing ${paginatedGames.length} games`);
-    console.log('=== END GET GAME LIST SERVICE ===\n');
+    console.log('=== END GET GAME LIST SERVICE ===');
 
     return {
       success: true,
@@ -193,52 +92,80 @@ const getGameList = async (currency = seamlessConfig.default_currency, filters =
       }
     };
   } catch (error) {
-    console.error('Error in getGameList:', error);
-    return {
-      success: false,
-      message: error.message || 'Failed to get game list'
-    };
+    console.error('❌ Error in getGameList:', error);
+    return { success: false, message: error.message || 'Failed to get game list' };
   }
 };
 
+const closeGameSession = async () => {
+  return { success: false, message: 'Close session not implemented yet' };
+};
 
 /**
  * CRITICAL FIX: Helper function to find user by remote_id
  */
+/**
+ * CRITICAL FIX: Helper function to find user by remote_id
+ * The provider sends remote_id as the ID returned from createPlayer response
+ */
 const findUserByRemoteId = async (remote_id, transaction = null) => {
   try {
-    // Extract user ID from remote_id format (player123 -> 123)
-    const userIdMatch = remote_id.match(/player(\d+)/);
-    if (!userIdMatch) {
-      throw new Error(`Invalid remote_id format: ${remote_id}`);
+    console.log('🔍 Finding user by remote_id:', remote_id);
+    
+    // Try to find by remote_id in the SeamlessGameSession table first
+    const gameSession = await SeamlessGameSession.findOne({
+      where: { remote_id: remote_id.toString() },
+      order: [['created_at', 'DESC']], // Get the most recent session
+      transaction
+    });
+    
+    if (gameSession) {
+      console.log('✅ Found user via game session:', gameSession.user_id);
+      const user = await User.findByPk(gameSession.user_id, { transaction });
+      if (user) return user;
     }
     
-    const userId = parseInt(userIdMatch[1]);
-    console.log('Extracted user ID from remote_id:', userId);
-    
-    const user = await User.findByPk(userId, { transaction });
-    if (!user) {
-      throw new Error(`User not found for ID: ${userId}`);
+    // If not found in sessions, try direct numeric lookup
+    // The remote_id might be the user_id directly
+    if (/^\d+$/.test(remote_id)) {
+      const userId = parseInt(remote_id);
+      const user = await User.findByPk(userId, { transaction });
+      if (user) {
+        console.log('✅ Found user by direct ID lookup:', userId);
+        return user;
+      }
     }
     
-    return user;
+    // Last resort: try to extract from player format
+    const playerMatch = remote_id.match(/player(\d+)/);
+    if (playerMatch) {
+      const userId = parseInt(playerMatch[1]);
+      const user = await User.findByPk(userId, { transaction });
+      if (user) {
+        console.log('✅ Found user by player format extraction:', userId);
+        return user;
+      }
+    }
+    
+    throw new Error(`User not found for remote_id: ${remote_id}`);
   } catch (error) {
-    console.error('Error finding user by remote_id:', error);
+    console.error('❌ Error finding user by remote_id:', error);
     throw error;
   }
 };
-
-
 
 /**
  * Generate consistent player credentials
  * @param {Object} user - User object
  * @returns {Object} Player credentials
  */
+/**
+ * FIXED: Generate consistent player credentials that match what provider expects
+ */
 const generatePlayerCredentials = (user) => {
   return {
-    username: `${seamlessConfig.player_prefix}${user.user_id}`,
-    password: `pwd${user.user_id}_${seamlessConfig.password_salt}`,
+    username: `player${user.user_id}`,
+    password: `pwd${user.user_id}${seamlessConfig.password_salt}`,
     nickname: user.user_name ? user.user_name.substring(0, 16) : `Player${user.user_id}`
   };
 };
@@ -264,18 +191,10 @@ const playerExists = async (userId) => {
       currency: seamlessConfig.default_currency
     };
 
-    console.log('🔍 Checking player exists:', {
-      username: credentials.username,
-      userId: userId
-    });
-
     const response = await axios.post(seamlessConfig.api_url.production, requestData);
 
     if (response.data.error !== 0) {
-      if (response.data.error === 1 && response.data.message === 'Player not found') {
-        return { success: true, exists: false };
-      }
-      throw new Error(`Error checking player: ${response.data.message || 'Unknown error'}`);
+      return { success: true, exists: false };
     }
 
     return {
@@ -285,8 +204,8 @@ const playerExists = async (userId) => {
       credentials: credentials
     };
   } catch (error) {
-    console.error('Error in playerExists:', error);
-    return { success: false, message: error.message || 'Failed to check player' };
+    console.error('❌ Error checking player exists:', error);
+    return { success: false, message: error.message };
   }
 };
 
@@ -298,70 +217,61 @@ const playerExists = async (userId) => {
 /**
  * FIXED: Create player at provider with proper error handling
  */
-// 6. DOCS COMPLIANCE: Player creation with exact format
 const createPlayer = async (userId) => {
   try {
     const user = await User.findByPk(userId);
     if (!user) {
-      return {
-        success: false,
-        message: 'User not found'
-      };
+      return { success: false, message: 'User not found' };
     }
 
-    // DOCS COMPLIANCE: Username format and constraints
-    const username = `player${user.user_id}`; // 4-16 chars, no special chars
-    const password = `pwd${user.user_id}${process.env.SEAMLESS_PASSWORD_SALT || 'default'}`;
+    const credentials = generatePlayerCredentials(user);
     
-    // DOCS COMPLIANCE: Nickname 2-25 chars
-    let nickname = user.user_name.substring(0, 16);
-    if (nickname.length < 2) {
-      nickname = `user${user.user_id}`;
-    }
-
     const requestData = {
-      api_login: process.env.SEAMLESS_API_LOGIN,
-      api_password: process.env.SEAMLESS_API_PASSWORD,
+      api_login: seamlessConfig.api_login,
+      api_password: seamlessConfig.api_password,
       method: 'createPlayer',
-      user_username: username,
-      user_password: password,
-      user_nickname: nickname,
-      currency: 'EUR' // DOCS COMPLIANCE: Use exact currency from config
+      user_username: credentials.username,
+      user_password: credentials.password,
+      user_nickname: credentials.nickname,
+      currency: seamlessConfig.default_currency
     };
 
-    const response = await axios.post(
-      process.env.SEAMLESS_API_URL,
-      requestData,
-      { timeout: 30000 }
-    );
+    console.log('🎮 Creating player with credentials:', {
+      username: credentials.username,
+      nickname: credentials.nickname
+    });
+
+    const response = await axios.post(seamlessConfig.api_url.production, requestData);
 
     if (response.data.error !== 0) {
-      if (response.data.message === 'Player already exists') {
-        return {
-          success: true,
-          playerInfo: {
-            id: username,
-            username: username,
-            exists: true
-          }
-        };
+      if (response.data.message?.includes('Player already exists')) {
+        // Player exists, get the existing player info
+        const existsResult = await playerExists(userId);
+        if (existsResult.success && existsResult.exists) {
+          return {
+            success: true,
+            playerInfo: existsResult.playerInfo,
+            remoteId: existsResult.playerInfo.id
+          };
+        }
       }
       throw new Error(`Create player error: ${response.data.message}`);
     }
 
+    // CRITICAL: Store the remote_id returned by the provider
+    const remoteId = response.data.response.id;
+    console.log('✅ Player created successfully, remote_id:', remoteId);
+
     return {
       success: true,
-      playerInfo: response.data.response
+      playerInfo: response.data.response,
+      remoteId: remoteId
     };
   } catch (error) {
-    console.error('Create player error:', error);
-    return {
-      success: false,
-      message: error.message
-    };
+    console.error('❌ Create player error:', error);
+    return { success: false, message: error.message };
   }
 };
-
 
 /**
  * Get game URL for launching a game - FIXED SESSION MANAGEMENT
@@ -375,105 +285,100 @@ const createPlayer = async (userId) => {
  */
 const getGameUrl = async (userId, gameId, language = 'en') => {
   try {
+    console.log('🎮 Getting game URL for user:', userId, 'game:', gameId);
+
     const user = await User.findByPk(userId);
+    if (!user) {
+      return { success: false, message: 'User not found' };
+    }
+
+    // 1. Ensure player exists at provider
+    let playerInfo;
+    const existsResult = await playerExists(userId);
     
-    // CRITICAL: Use EXACT same format as in callbacks
-    const username = `player${user.user_id}`;
-    const password = `pwd${user.user_id}${process.env.SEAMLESS_PASSWORD_SALT}`;
-    
-    console.log('GAME LAUNCH - Username:', username);
-    console.log('GAME LAUNCH - Password format:', password.substring(0, 10) + '...');
-    
-    // CRITICAL: Always check/create player with EXACT credentials
-    const playerRequest = {
-      api_login: process.env.SEAMLESS_API_LOGIN,
-      api_password: process.env.SEAMLESS_API_PASSWORD,
-      method: 'playerExists',
-      user_username: username,
-      currency: 'EUR'
-    };
-    
-    let playerResponse = await axios.post(process.env.SEAMLESS_API_URL, playerRequest);
-    
-    // If player doesn't exist, create with EXACT credentials
-    if (playerResponse.data.error !== 0 || !playerResponse.data.response) {
-      console.log('Creating player with exact credentials...');
-      
-      const createRequest = {
-        api_login: process.env.SEAMLESS_API_LOGIN,
-        api_password: process.env.SEAMLESS_API_PASSWORD,
-        method: 'createPlayer',
-        user_username: username,
-        user_password: password,
-        user_nickname: user.user_name.substring(0, 16) || `user${user.user_id}`,
-        currency: 'EUR'
-      };
-      
-      const createResponse = await axios.post(process.env.SEAMLESS_API_URL, createRequest);
-      if (createResponse.data.error !== 0 && !createResponse.data.message.includes('already exists')) {
-        throw new Error(`Create player failed: ${createResponse.data.message}`);
+    if (!existsResult.success) {
+      return { success: false, message: 'Failed to check player existence' };
+    }
+
+    if (!existsResult.exists) {
+      console.log('🎮 Player does not exist, creating...');
+      const createResult = await createPlayer(userId);
+      if (!createResult.success) {
+        return { success: false, message: 'Failed to create player' };
+      }
+      playerInfo = createResult.playerInfo;
+    } else {
+      playerInfo = existsResult.playerInfo;
+    }
+
+    console.log('🎮 Player info:', playerInfo);
+
+    // 2. Ensure third-party wallet exists and has balance
+    const walletResult = await thirdPartyWalletService.getBalance(userId);
+    if (!walletResult.success || walletResult.balance <= 0) {
+      console.log('💰 Transferring funds to third-party wallet...');
+      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+      if (!transferResult.success) {
+        console.warn('⚠️ Transfer failed:', transferResult.message);
       }
     }
-    
-    // CRITICAL: Ensure third-party wallet exists and has balance
-    let walletResult = await thirdPartyWalletService.getBalance(userId);
-    
-    if (!walletResult.success) {
-      console.log('Creating third-party wallet...');
-      await thirdPartyWalletService.createWallet(userId);
-    }
-    
-    // Transfer from main wallet if third-party wallet is empty
-    walletResult = await thirdPartyWalletService.getBalance(userId);
-    if (!walletResult.success || walletResult.balance <= 0) {
-      console.log('Transferring to third-party wallet...');
-      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
-      console.log('Transfer result:', transferResult);
-    }
-    
-    // Now launch game with exact credentials
+
+    // 3. Get game URL using exact credentials
+    const credentials = generatePlayerCredentials(user);
     const gameRequest = {
-      api_login: process.env.SEAMLESS_API_LOGIN,
-      api_password: process.env.SEAMLESS_API_PASSWORD,
+      api_login: seamlessConfig.api_login,
+      api_password: seamlessConfig.api_password,
       method: 'getGame',
       lang: language,
-      user_username: username,
-      user_password: password, // EXACT same password
+      user_username: credentials.username,
+      user_password: credentials.password,
       gameid: gameId,
-      homeurl: process.env.FRONTEND_URL || 'http://localhost:3000',
-      cashierurl: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/wallet`,
+      homeurl: seamlessConfig.home_url,
+      cashierurl: seamlessConfig.cashier_url,
       play_for_fun: 0,
-      currency: 'EUR'
+      currency: seamlessConfig.default_currency
     };
-    
-    console.log('Game launch request:', {
-      ...gameRequest,
-      api_password: '***',
-      user_password: '***'
+
+    console.log('🎮 Requesting game URL with:', {
+      username: credentials.username,
+      gameid: gameId
     });
+
+    const gameResponse = await axios.post(seamlessConfig.api_url.production, gameRequest);
     
-    const gameResponse = await axios.post(process.env.SEAMLESS_API_URL, gameRequest);
-    
-    console.log('Game launch response:', gameResponse.data);
-    
+    console.log('🎮 Game response:', {
+      error: gameResponse.data.error,
+      message: gameResponse.data.message,
+      hasUrl: !!(gameResponse.data.url || gameResponse.data.response)
+    });
+
     if (gameResponse.data.error !== 0) {
-      throw new Error(`Game launch failed: ${gameResponse.data.message} (code: ${gameResponse.data.error})`);
+      return {
+        success: false,
+        message: `Game launch failed: ${gameResponse.data.message} (${gameResponse.data.error})`
+      };
     }
+
+    // 4. CRITICAL: Store session with the correct remote_id format
+    const remoteId = playerInfo.id || credentials.username; // Use provider's ID
     
-    // Store session with exact remote_id format
     await SeamlessGameSession.create({
       user_id: userId,
-      remote_id: username, // CRITICAL: This must match callback remote_id
-      provider: gameId.split('_')[0] || 'unknown',
+      remote_id: remoteId.toString(), // CRITICAL: Store as string
+      provider: gameId.split('_')[0] || 'ss',
       session_token: gameResponse.data.sessionid,
       game_id: gameId.split('_')[1] || gameId,
       game_id_hash: gameId,
-      is_active: true,
-      game_type: gameId.split('_')[0] || 'unknown',
+      game_url: gameResponse.data.url || gameResponse.data.response,
+      game_type: gameId.split('_')[0] || 'slot',
       session_id: gameResponse.data.sessionid,
-      game_url: gameResponse.data.url || gameResponse.data.response
+      game_session_id: gameResponse.data.gamesession_id,
+      is_active: true,
+      ip_address: '127.0.0.1' // Will be updated by middleware
     });
-    
+
+    console.log('✅ Game session created with remote_id:', remoteId);
+
     return {
       success: true,
       gameUrl: gameResponse.data.url || gameResponse.data.response,
@@ -481,16 +386,10 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
       gameSessionId: gameResponse.data.gamesession_id
     };
   } catch (error) {
-    console.error('getGameUrl ERROR:', error);
-    return {
-      success: false,
-      message: error.message
-    };
+    console.error('❌ Error getting game URL:', error);
+    return { success: false, message: error.message };
   }
 };
-
-
-
 
 /**
  * Process a balance request from the game provider
@@ -507,51 +406,29 @@ const processBalanceRequest = async (queryParams) => {
   try {
     const { remote_id, session_id, game_id, currency } = queryParams;
     
-    console.log('=== BALANCE REQUEST ===');
-    console.log('remote_id:', remote_id);
-    console.log('session_id:', session_id);
+    console.log('💰 === BALANCE REQUEST ===');
+    console.log('💰 remote_id:', remote_id);
+    console.log('💰 session_id:', session_id);
     
     if (!remote_id) {
       await t.rollback();
-      return {
-        status: '500',
-        msg: 'Missing remote_id'
-      };
+      return { status: '500', msg: 'Missing remote_id' };
     }
     
-    // Extract user ID from remote_id: player123 -> 123
-    const userIdMatch = remote_id.match(/player(\d+)/);
-    if (!userIdMatch) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'Invalid remote_id format'
-      };
-    }
+    // CRITICAL FIX: Use the new findUserByRemoteId function
+    const user = await findUserByRemoteId(remote_id, t);
     
-    const userId = parseInt(userIdMatch[1]);
-    console.log('Extracted userId:', userId);
-    
-    const user = await User.findByPk(userId, { transaction: t });
-    if (!user) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'User not found'
-      };
-    }
-    
-    // CRITICAL: Just get balance, don't create wallet here
-    const walletResult = await thirdPartyWalletService.getBalance(userId);
+    // Get balance from third-party wallet
+    const walletResult = await thirdPartyWalletService.getBalance(user.user_id);
     const balance = walletResult.success ? walletResult.balance : 0;
     
-    console.log('User balance:', balance);
+    console.log('💰 User balance:', balance);
     
     // Record balance request
     await SeamlessTransaction.create({
       transaction_id: `bal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      user_id: userId,
-      remote_id,
+      user_id: user.user_id,
+      remote_id: remote_id.toString(),
       provider_transaction_id: `balance_${Date.now()}`,
       provider: 'seamless',
       game_id: game_id || null,
@@ -570,14 +447,10 @@ const processBalanceRequest = async (queryParams) => {
     };
   } catch (error) {
     await t.rollback();
-    console.error('Balance request error:', error);
-    return {
-      status: '500',
-      msg: 'Internal server error'
-    };
+    console.error('❌ Balance request error:', error);
+    return { status: '500', msg: error.message };
   }
 };
-
 
 /**
  * Process a debit request from the game provider (player placing a bet)
@@ -587,7 +460,6 @@ const processBalanceRequest = async (queryParams) => {
 /**
  * FIXED: Process debit request with proper user resolution
  */
-// 3. DOCS COMPLIANCE: Debit request handling  
 const processDebitRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
@@ -606,16 +478,18 @@ const processDebitRequest = async (queryParams) => {
       jackpot_contribution_in_amount
     } = queryParams;
     
-    console.log('=== DEBIT REQUEST (DOCS COMPLIANT) ===');
+    console.log('💸 === DEBIT REQUEST ===');
+    console.log('💸 remote_id:', remote_id);
+    console.log('💸 amount:', amount);
+    console.log('💸 transaction_id:', transaction_id);
     
-    // DOCS REQUIREMENT: Check for duplicate transaction_id
+    // Check for duplicate transaction
     const existingTransaction = await SeamlessTransaction.findOne({
       where: { provider_transaction_id: transaction_id, type: 'debit' },
       transaction: t
     });
     
     if (existingTransaction) {
-      // DOCS COMPLIANCE: Return same response as original transaction
       await t.rollback();
       return {
         status: '200',
@@ -624,36 +498,16 @@ const processDebitRequest = async (queryParams) => {
       };
     }
     
-    // Find user by remote_id
-    const userIdMatch = remote_id.match(/player(\d+)/);
-    if (!userIdMatch) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'Invalid remote_id'
-      };
-    }
-    
-    const userId = parseInt(userIdMatch[1]);
-    const user = await User.findByPk(userId, { transaction: t });
-    
-    if (!user) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'User not found'
-      };
-    }
-    
+    // CRITICAL FIX: Use the new findUserByRemoteId function
+    const user = await findUserByRemoteId(remote_id, t);
     const betAmount = parseFloat(amount);
     
-    // DOCS COMPLIANCE: Update wallet balance (debit = subtract amount)
-    const walletResult = await thirdPartyWalletService.updateBalance(userId, -betAmount);
+    // Update wallet balance (debit = subtract amount)
+    const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, -betAmount);
     
     if (!walletResult.success) {
       await t.rollback();
       
-      // DOCS COMPLIANCE: Return 403 for insufficient funds
       if (walletResult.message === 'Insufficient funds') {
         return {
           status: '403',
@@ -662,17 +516,14 @@ const processDebitRequest = async (queryParams) => {
         };
       }
       
-      return {
-        status: '500',
-        msg: 'Failed to update wallet'
-      };
+      return { status: '500', msg: 'Failed to update wallet' };
     }
     
     // Record transaction
     const transactionRecord = await SeamlessTransaction.create({
       transaction_id: `deb_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      user_id: userId,
-      remote_id,
+      user_id: user.user_id,
+      remote_id: remote_id.toString(),
       provider_transaction_id: transaction_id,
       provider: provider || 'unknown',
       game_id: game_id || null,
@@ -690,7 +541,6 @@ const processDebitRequest = async (queryParams) => {
     
     await t.commit();
     
-    // DOCS COMPLIANCE: Response format
     return {
       status: '200',
       balance: walletResult.newBalance.toFixed(2),
@@ -698,14 +548,10 @@ const processDebitRequest = async (queryParams) => {
     };
   } catch (error) {
     await t.rollback();
-    console.error('Debit request error:', error);
-    return {
-      status: '500',
-      msg: 'Internal server error'
-    };
+    console.error('❌ Debit request error:', error);
+    return { status: '500', msg: error.message };
   }
 };
-
 
 /**
  * Process a credit request from the game provider (player winning)
@@ -715,7 +561,6 @@ const processDebitRequest = async (queryParams) => {
 /**
  * FIXED: Process credit request with proper user resolution
  */
-// 4. DOCS COMPLIANCE: Credit request handling
 const processCreditRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
@@ -734,7 +579,10 @@ const processCreditRequest = async (queryParams) => {
       is_jackpot_win
     } = queryParams;
     
-    console.log('=== CREDIT REQUEST (DOCS COMPLIANT) ===');
+    console.log('💰 === CREDIT REQUEST ===');
+    console.log('💰 remote_id:', remote_id);
+    console.log('💰 amount:', amount);
+    console.log('💰 transaction_id:', transaction_id);
     
     // Check for duplicate transaction
     const existingTransaction = await SeamlessTransaction.findOne({
@@ -751,45 +599,23 @@ const processCreditRequest = async (queryParams) => {
       };
     }
     
-    // Find user
-    const userIdMatch = remote_id.match(/player(\d+)/);
-    if (!userIdMatch) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'Invalid remote_id'
-      };
-    }
-    
-    const userId = parseInt(userIdMatch[1]);
-    const user = await User.findByPk(userId, { transaction: t });
-    
-    if (!user) {
-      await t.rollback();
-      return {
-        status: '500',
-        msg: 'User not found'
-      };
-    }
-    
+    // CRITICAL FIX: Use the new findUserByRemoteId function
+    const user = await findUserByRemoteId(remote_id, t);
     const winAmount = parseFloat(amount);
     
-    // DOCS COMPLIANCE: Update wallet balance (credit = add amount)
-    const walletResult = await thirdPartyWalletService.updateBalance(userId, winAmount);
+    // Update wallet balance (credit = add amount)
+    const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, winAmount);
     
     if (!walletResult.success) {
       await t.rollback();
-      return {
-        status: '500',
-        msg: 'Failed to update wallet'
-      };
+      return { status: '500', msg: 'Failed to update wallet' };
     }
     
     // Record transaction
     const transactionRecord = await SeamlessTransaction.create({
       transaction_id: `crd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      user_id: userId,
-      remote_id,
+      user_id: user.user_id,
+      remote_id: remote_id.toString(),
       provider_transaction_id: transaction_id,
       provider: provider || 'unknown',
       game_id: game_id || null,
@@ -814,15 +640,10 @@ const processCreditRequest = async (queryParams) => {
     };
   } catch (error) {
     await t.rollback();
-    console.error('Credit request error:', error);
-    return {
-      status: '500',
-      msg: 'Internal server error'
-    };
+    console.error('❌ Credit request error:', error);
+    return { status: '500', msg: error.message };
   }
 };
-
-
 
 /**
  * Process a rollback request from the game provider
@@ -833,15 +654,11 @@ const processRollbackRequest = async (queryParams) => {
   const t = await sequelize.transaction();
   
   try {
-    const {
-      remote_id,
-      transaction_id,
-      session_id,
-      provider,
-      amount // DOCS NOTE: Use amount from original transaction, not from request
-    } = queryParams;
+    const { remote_id, transaction_id, session_id, provider } = queryParams;
     
-    console.log('=== ROLLBACK REQUEST (DOCS COMPLIANT) ===');
+    console.log('🔄 === ROLLBACK REQUEST ===');
+    console.log('🔄 remote_id:', remote_id);
+    console.log('🔄 transaction_id:', transaction_id);
     
     // Check for duplicate rollback
     const existingRollback = await SeamlessTransaction.findOne({
@@ -861,7 +678,7 @@ const processRollbackRequest = async (queryParams) => {
       };
     }
     
-    // DOCS COMPLIANCE: Find original transaction by transaction_id
+    // Find original transaction by provider_transaction_id
     const originalTransaction = await SeamlessTransaction.findOne({
       where: { provider_transaction_id: transaction_id },
       transaction: t
@@ -869,11 +686,7 @@ const processRollbackRequest = async (queryParams) => {
     
     if (!originalTransaction) {
       await t.rollback();
-      // DOCS COMPLIANCE: Return 404 if transaction not found
-      return {
-        status: '404',
-        msg: 'TRANSACTION_NOT_FOUND'
-      };
+      return { status: '404', msg: 'TRANSACTION_NOT_FOUND' };
     }
     
     if (originalTransaction.status === 'rolledback') {
@@ -888,29 +701,20 @@ const processRollbackRequest = async (queryParams) => {
     const user = await User.findByPk(originalTransaction.user_id, { transaction: t });
     if (!user) {
       await t.rollback();
-      return {
-        status: '500',
-        msg: 'User not found'
-      };
+      return { status: '500', msg: 'User not found' };
     }
     
-    // DOCS COMPLIANCE: Use amount from original transaction, not from request
+    // Use amount from original transaction
     const rollbackAmount = parseFloat(originalTransaction.amount);
     let walletResult;
     
     // If original was debit (bet), add money back
     if (originalTransaction.type === 'debit') {
-      walletResult = await thirdPartyWalletService.updateBalance(
-        user.user_id, 
-        rollbackAmount
-      );
+      walletResult = await thirdPartyWalletService.updateBalance(user.user_id, rollbackAmount);
     } 
     // If original was credit (win), subtract money
     else if (originalTransaction.type === 'credit') {
-      walletResult = await thirdPartyWalletService.updateBalance(
-        user.user_id, 
-        -rollbackAmount
-      );
+      walletResult = await thirdPartyWalletService.updateBalance(user.user_id, -rollbackAmount);
       
       if (!walletResult.success && walletResult.message === 'Insufficient funds') {
         await t.rollback();
@@ -924,10 +728,7 @@ const processRollbackRequest = async (queryParams) => {
     
     if (!walletResult || !walletResult.success) {
       await t.rollback();
-      return {
-        status: '500',
-        msg: 'Failed to process rollback'
-      };
+      return { status: '500', msg: 'Failed to process rollback' };
     }
     
     // Mark original transaction as rolled back
@@ -937,12 +738,11 @@ const processRollbackRequest = async (queryParams) => {
     }, { transaction: t });
     
     // Record rollback transaction
-    const rollbackTransactionId = `rollback_${transaction_id}_${Date.now()}`;
     const transactionRecord = await SeamlessTransaction.create({
       transaction_id: `rbk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       user_id: user.user_id,
-      remote_id,
-      provider_transaction_id: rollbackTransactionId,
+      remote_id: remote_id.toString(),
+      provider_transaction_id: `rollback_${transaction_id}_${Date.now()}`,
       provider: provider || 'unknown',
       game_id: originalTransaction.game_id,
       game_id_hash: originalTransaction.game_id_hash,
@@ -965,21 +765,17 @@ const processRollbackRequest = async (queryParams) => {
     };
   } catch (error) {
     await t.rollback();
-    console.error('Rollback request error:', error);
-    return {
-      status: '500',
-      msg: 'Internal server error'
-    };
+    console.error('❌ Rollback request error:', error);
+    return { status: '500', msg: error.message };
   }
 };
-
 
 /**
  * Close an active game session and transfer balance back to main wallet
  * @param {string} sessionToken - Session token
  * @returns {Promise<Object>} Result
  */
-const closeGameSession = async (sessionToken) => {
+const closeGameSessionWithToken = async (sessionToken) => {
   try {
     const gameSession = await SeamlessGameSession.findOne({
       where: { session_token: sessionToken, is_active: true }
@@ -1224,10 +1020,11 @@ module.exports = {
   processDebitRequest,
   processCreditRequest,
   processRollbackRequest,
-  closeGameSession,
+  closeGameSessionWithToken,
   cleanupExpiredSessions,
   addFreeRounds,
   removeFreeRounds,
   validateGameSession,
-  generatePlayerCredentials
+  generatePlayerCredentials,
+  findUserByRemoteId,
 };

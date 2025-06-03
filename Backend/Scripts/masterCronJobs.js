@@ -21,7 +21,7 @@ const initializeDatabaseForCron = async () => {
         console.log('🔄 Initializing database connection for cron jobs...');
         
         // Import database config and connect
-        const { connectDB, waitForDatabase, getSequelize } = require('../config/db');
+        const { connectDB, waitForDatabase, getSequelizeInstance } = require('../config/db');
         
         // Connect to database
         await connectDB();
@@ -32,7 +32,7 @@ const initializeDatabaseForCron = async () => {
         console.log('✅ Database is ready for cron jobs');
         
         // Get sequelize instance
-        sequelize = await getSequelize();
+        sequelize = await getSequelizeInstance();
         console.log('✅ Sequelize instance obtained for cron jobs');
         
         // Initialize models
@@ -801,9 +801,6 @@ const processDailyVaultInterest = async () => {
     }
 };
 
-// Add to the daily cron sequence (12:30 AM IST):
-await processDailyVaultInterest();
-
 /**
  * Initialize all master cron jobs
  */
@@ -825,7 +822,6 @@ const initializeMasterCronJobs = async () => {
                 await processAttendanceBonuses();
                 await processDailyRebates();
                 await processVipLevelUpRewards();
-                // Add to daily cron job sequence:
                 await processDailyVaultInterest();
                 console.log('✅ All daily cron jobs completed successfully');
             } catch (error) {

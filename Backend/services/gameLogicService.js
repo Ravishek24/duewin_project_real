@@ -3583,165 +3583,58 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
  * @param {string} gameType - Game type (wingo, fiveD, k3, trx_wix)
  * @param {number} duration - Duration in seconds
  * @param {string} periodId - Period ID
- * @returns {Object} - Processing result
+ * @returns {Promise<Object>} - Result data
  */
 const processGameResults = async (gameType, duration, periodId) => {
-    // CRITICAL: Ensure models are initialized before any database operations
-    const models = await ensureModelsInitialized();
-
-    logger.info('=== STARTING ENHANCED GAME RESULT PROCESSING ===', {
-        gameType,
-        duration,
-        periodId,
-        timestamp: new Date().toISOString()
-    });
-
-    const t = await sequelize.transaction();
-
     try {
-        logger.info(`Processing enhanced game results for period ${periodId}`, {
-            gameType,
-            duration
-        });
-
-        // PHASE 1: Check user count threshold (>= 10 users rule)
-        const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId);
-        logger.info(`Unique users in period ${periodId}: ${uniqueUserCount}`);
-
-        let finalResult;
-
-        if (uniqueUserCount === 0) {
-            // No bets = random result
-            logger.info('No bets placed, generating random result');
-            finalResult = await generateRandomResult(gameType);
-        } else if (uniqueUserCount < 10) {
-            // Less than 10 users = all lose
-            logger.info('Less than 10 users, generating all-lose result');
-            finalResult = await generateAllLoseResult(gameType, duration, periodId);
-        } else if (await isMinimumBetPeriod(periodId)) {
-            // Every 20 periods = minimum bet result
-            logger.info('Minimum bet period detected, using minimum combination');
-            finalResult = await getMinimumBetResult(gameType, duration, periodId);
-        } else {
-            // Normal optimization flow with real-time data
-            logger.info('Normal optimization flow with real-time data');
-
-            // Try to use real-time optimized result first
-            let optimizedResult = await getRealTimeOptimizedResult(gameType, duration, periodId);
-
-            if (!optimizedResult) {
-                // Fallback to standard optimization
-                logger.info('Real-time optimization unavailable, using standard');
-                optimizedResult = await calculateOptimizedResult(gameType, duration, periodId);
-            }
-
-            // FIX: Correct access pattern for optimized result
-            if (optimizedResult && optimizedResult.optimalResult && optimizedResult.optimalResult.result) {
-                finalResult = optimizedResult.optimalResult.result;
-                logger.info('Using optimized result', {
-                    finalResult,
-                    payoutRatio: optimizedResult.validation?.payoutRatio,
-                    expectedPayout: optimizedResult.optimalResult.expectedPayout
-                });
-            } else {
-                // Fallback if optimization fails
-                logger.warn('Optimization failed, using fallback');
-                finalResult = await getMinimumBetResult(gameType, duration, periodId);
-            }
-        }
-
-        // Validate final result before saving
-        if (!finalResult) {
-            logger.error('Final result is null, generating random fallback');
-            finalResult = await generateRandomResult(gameType);
-        }
-
-        // Ensure proper formatting for each game type
-        finalResult = await enhanceResultFormat(finalResult, gameType);
-
-        logger.info(`Enhanced final result for period ${periodId}`, { finalResult });
-
-        // Save result to appropriate table based on game type
+        // Ensure models are loaded
+        await ensureModelsLoaded();
+        
+        // Generate result
+        const result = await generateRandomResult(gameType);
+        
+        // Save result to database
         let savedResult;
-        switch (gameType) {
-            case 'wingo':
-                savedResult = await models.BetResultWingo.create({
-                    bet_number: periodId,
-                    result_of_number: finalResult.number,
-                    result_of_size: finalResult.size,
-                    result_of_color: finalResult.color,
-                    duration: duration,
-                    timeline: new Date().toISOString()
-                }, { transaction: t });
-                break;
-
-            case 'fiveD':
-                savedResult = await models.BetResult5D.create({
-                    bet_number: periodId,
-                    result_a: finalResult.A,
-                    result_b: finalResult.B,
-                    result_c: finalResult.C,
-                    result_d: finalResult.D,
-                    result_e: finalResult.E,
-                    total_sum: finalResult.sum,
-                    duration: duration,
-                    timeline: new Date().toISOString()
-                }, { transaction: t });
-                break;
-
-            case 'k3':
-                savedResult = await models.BetResultK3.create({
-                    bet_number: periodId,
-                    dice_1: finalResult.dice_1,
-                    dice_2: finalResult.dice_2,
-                    dice_3: finalResult.dice_3,
-                    sum: finalResult.sum,
-                    has_pair: finalResult.has_pair,
-                    has_triple: finalResult.has_triple,
-                    is_straight: finalResult.is_straight,
-                    sum_size: finalResult.sum_size,
-                    sum_parity: finalResult.sum_parity,
-                    duration: duration,
-                    timeline: new Date().toISOString()
-                }, { transaction: t });
-                break;
-
-            case 'trx_wix':
-                // Store the result without verification in database
-                const trxResultForDB = {
-                    number: finalResult.number,
-                    size: finalResult.size,
-                    color: finalResult.color
-                };
-
-                savedResult = await models.BetResultTrxWix.create({
-                    period: periodId,
-                    result: trxResultForDB, // Store as object, not stringified
-                    verification_hash: finalResult.verification?.hash || generateVerificationHash(),
-                    verification_link: finalResult.verification?.link || generateVerificationLink(),
-                    duration: duration,
-                    timeline: new Date().toISOString()
-                }, { transaction: t });
-                break;
-
-            default:
-                throw new Error(`Unsupported game type: ${gameType}`);
+        if (gameType === 'wingo') {
+            savedResult = await models.BetResultWingo.create({
+                bet_number: periodId,
+                result_of_number: result.number,
+                result_of_size: result.size,
+                result_of_color: result.color,
+                duration: duration,
+                timeline: new Date().toISOString()
+            });
+        } else if (gameType === 'fiveD') {
+            savedResult = await models.BetResult5D.create({
+                bet_number: periodId,
+                result_of_A: result.A,
+                result_of_B: result.B,
+                result_of_C: result.C,
+                result_of_D: result.D,
+                result_of_E: result.E,
+                result_of_sum: result.sum,
+                duration: duration,
+                timeline: new Date().toISOString()
+            });
         }
-
-        logger.info(`Saved enhanced result for period ${periodId}`, {
-            resultId: savedResult.id,
-            gameType
-        });
-
-        await t.commit();
-        return savedResult;
+        
+        // Process winners
+        const winners = await processWinningBets(gameType, duration, periodId, result);
+        
+        return {
+            success: true,
+            result: savedResult,
+            winners: winners
+        };
+        
     } catch (error) {
-        logger.error(`Error processing enhanced game results for period ${periodId}`, {
+        logger.error('Error processing game results:', {
             error: error.message,
             stack: error.stack,
-            gameType
+            gameType,
+            duration,
+            periodId
         });
-        await t.rollback();
         throw error;
     }
 };

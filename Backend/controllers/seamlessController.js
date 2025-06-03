@@ -1,5 +1,5 @@
 // controllers/seamlessController.js
-const { validateSeamlessSignature } = require('../utils/seamlessUtils');
+const { validateSeamlessSignature, validateSeamlessSignatureFromURL } = require('../utils/seamlessUtils');
 const {
   getGameList,
   getGameUrl,
@@ -27,19 +27,15 @@ const debugSeamlessIntegration = async (req, res) => {
     console.log('🔍 === SEAMLESS DEBUG SESSION START ===');
     console.log('🔍 User ID:', userId);
     console.log('🔍 Game ID:', gameId);
-    console.log('🔍 Environment:', process.env.NODE_ENV);
     
     // Step 1: Check configuration
     console.log('📋 Step 1: Checking seamless configuration...');
-    const seamlessConfig = require('../config/seamlessConfig');
     const configCheck = {
-      api_login: !!seamlessConfig.api_login,
-      api_password: !!seamlessConfig.api_password,
-      salt_key: !!seamlessConfig.salt_key,
-      api_url: seamlessConfig.api_url.production,
-      home_url: seamlessConfig.home_url,
-      cashier_url: seamlessConfig.cashier_url,
-      callback_url: seamlessConfig.callback_url
+      api_login: !!process.env.SEAMLESS_API_LOGIN,
+      api_password: !!process.env.SEAMLESS_API_PASSWORD,
+      salt_key: !!process.env.SEAMLESS_SALT_KEY,
+      api_url: process.env.SEAMLESS_API_URL,
+      callback_url: process.env.SEAMLESS_CALLBACK_URL || 'https://strike.atsproduct.in/api/seamless/callback'
     };
     console.log('📋 Config check:', configCheck);
     
@@ -56,175 +52,39 @@ const debugSeamlessIntegration = async (req, res) => {
     }
     console.log('👤 User found:', { id: user.user_id, name: user.user_name });
     
-    // Step 3: Generate credentials
-    const { generatePlayerCredentials } = require('../services/seamlessWalletService');
-    const credentials = generatePlayerCredentials(user);
-    console.log('🔑 Step 3: Generated credentials:', {
-      username: credentials.username,
-      nickname: credentials.nickname
-      // Don't log password for security
-    });
+    // Step 3: Check third-party wallet
+    console.log('💰 Step 3: Checking third-party wallet...');
+    const thirdPartyWalletService = require('../services/thirdPartyWalletService');
+    const walletResult = await thirdPartyWalletService.getBalance(userId);
+    console.log('💰 Wallet result:', walletResult);
     
-    // Step 4: Test provider connectivity
-    console.log('🌐 Step 4: Testing provider connectivity...');
-    const axios = require('axios');
+    // Step 4: Test signature validation
+    console.log('🔐 Step 4: Testing signature validation...');
+    const { testSignatureValidation } = require('../utils/seamlessUtils');
+    const signatureTest = testSignatureValidation();
+    console.log('🔐 Signature test result:', signatureTest);
     
-    try {
-      // Test with getGameList first
-      const testRequest = {
-        api_login: seamlessConfig.api_login,
-        api_password: seamlessConfig.api_password,
-        method: 'getGameList',
-        show_systems: 0,
-        currency: 'EUR'
-      };
-      
-      console.log('🌐 Testing provider with getGameList...');
-      const testResponse = await axios.post(
-        seamlessConfig.api_url.production,
-        testRequest,
-        { timeout: 10000 }
-      );
-      
-      console.log('🌐 Provider connectivity test result:', {
-        status: testResponse.status,
-        error: testResponse.data.error,
-        hasGames: Array.isArray(testResponse.data.response) && testResponse.data.response.length > 0
-      });
-      
-      if (testResponse.data.error !== 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Provider connectivity failed',
-          debug: {
-            step: 'provider_connectivity',
-            error: testResponse.data.error,
-            message: testResponse.data.message
-          }
-        });
-      }
-      
-    } catch (connectError) {
-      console.error('🌐 Provider connectivity failed:', connectError.message);
-      return res.status(500).json({
-        success: false,
-        message: 'Cannot connect to game provider',
-        debug: {
-          step: 'provider_connectivity',
-          error: connectError.message,
-          code: connectError.code
-        }
-      });
-    }
-    
-    // Step 5: Test player exists
-    console.log('🔍 Step 5: Testing playerExists...');
-    const playerExistsRequest = {
-      api_login: seamlessConfig.api_login,
-      api_password: seamlessConfig.api_password,
-      method: 'playerExists',
-      user_username: credentials.username,
-      currency: 'EUR'
-    };
-    
-    const playerExistsResponse = await axios.post(
-      seamlessConfig.api_url.production,
-      playerExistsRequest
-    );
-    
-    console.log('🔍 PlayerExists result:', {
-      error: playerExistsResponse.data.error,
-      exists: !!playerExistsResponse.data.response,
-      response: playerExistsResponse.data.response
-    });
-    
-    let playerExists = playerExistsResponse.data.error === 0 && !!playerExistsResponse.data.response;
-    
-    // Step 6: Create player if doesn't exist
-    if (!playerExists) {
-      console.log('👤 Step 6: Creating player...');
-      const createPlayerRequest = {
-        api_login: seamlessConfig.api_login,
-        api_password: seamlessConfig.api_password,
-        method: 'createPlayer',
-        user_username: credentials.username,
-        user_password: credentials.password,
-        user_nickname: credentials.nickname,
-        currency: 'EUR'
-      };
-      
-      const createPlayerResponse = await axios.post(
-        seamlessConfig.api_url.production,
-        createPlayerRequest
-      );
-      
-      console.log('👤 CreatePlayer result:', {
-        error: createPlayerResponse.data.error,
-        message: createPlayerResponse.data.message,
-        response: createPlayerResponse.data.response
-      });
-      
-      if (createPlayerResponse.data.error !== 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Failed to create player',
-          debug: {
-            step: 'create_player',
-            error: createPlayerResponse.data.error,
-            message: createPlayerResponse.data.message
-          }
-        });
-      }
-    }
-    
-    // Step 7: Test getGame
-    console.log('🎮 Step 7: Testing getGame...');
-    const getGameRequest = {
-      api_login: seamlessConfig.api_login,
-      api_password: seamlessConfig.api_password,
-      method: 'getGame',
-      lang: 'en',
-      user_username: credentials.username,
-      user_password: credentials.password,
-      gameid: gameId,
-      homeurl: seamlessConfig.home_url,
-      cashierurl: seamlessConfig.cashier_url,
-      play_for_fun: 0,
-      currency: 'EUR'
-    };
-    
-    const getGameResponse = await axios.post(
-      seamlessConfig.api_url.production,
-      getGameRequest
-    );
-    
-    console.log('🎮 GetGame result:', {
-      error: getGameResponse.data.error,
-      message: getGameResponse.data.message,
-      hasUrl: !!(getGameResponse.data.url || getGameResponse.data.response),
-      sessionId: getGameResponse.data.sessionid,
-      gameSessionId: getGameResponse.data.gamesession_id
+    // Step 5: Test game launch
+    console.log('🎮 Step 5: Testing game launch...');
+    const gameResult = await getGameUrl(userId, gameId);
+    console.log('🎮 Game launch result:', {
+      success: gameResult.success,
+      hasUrl: !!gameResult.gameUrl,
+      message: gameResult.message
     });
     
     console.log('🔍 === SEAMLESS DEBUG SESSION END ===');
     
-    // Return comprehensive debug info
     return res.status(200).json({
-      success: getGameResponse.data.error === 0,
-      message: getGameResponse.data.error === 0 ? 'Debug completed successfully' : 'Debug found issues',
+      success: true,
+      message: 'Debug completed',
       debug: {
         configuration: configCheck,
         user: { id: user.user_id, name: user.user_name },
-        credentials: { username: credentials.username, nickname: credentials.nickname },
-        playerExists: playerExists,
-        gameResponse: {
-          error: getGameResponse.data.error,
-          message: getGameResponse.data.message,
-          hasUrl: !!(getGameResponse.data.url || getGameResponse.data.response),
-          sessionId: getGameResponse.data.sessionid
-        }
-      },
-      gameUrl: getGameResponse.data.url || getGameResponse.data.response
+        wallet: walletResult,
+        signatureTest: signatureTest,
+        gameResult: gameResult
+      }
     });
     
   } catch (error) {
@@ -232,8 +92,7 @@ const debugSeamlessIntegration = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Debug failed',
-      error: error.message,
-      stack: error.stack
+      error: error.message
     });
   }
 };
@@ -255,7 +114,7 @@ const getGamesController = async (req, res) => {
       return res.status(400).json(result);
     }
   } catch (error) {
-    console.error('Error in getGamesController:', error);
+    console.error('❌ Error in getGamesController:', error);
     res.status(500).json({
       success: false,
       message: 'Server error fetching games list'
@@ -274,14 +133,20 @@ const launchGameController = async (req, res) => {
     const { language } = req.query;
     const userId = req.user.user_id;
     
-    console.log('=== GAME LAUNCH DEBUG ===');
-    console.log('User ID:', userId);
-    console.log('Game ID:', gameId);
-    console.log('Language:', language);
+    console.log('🎮 === GAME LAUNCH DEBUG ===');
+    console.log('🎮 User ID:', userId);
+    console.log('🎮 Game ID:', gameId);
+    console.log('🎮 Language:', language);
+    
+    // Get the balance before launching the game
+    console.log('💰 Getting balance for user', userId);
+    const thirdPartyWalletService = require('../services/thirdPartyWalletService');
+    const balanceResult = await thirdPartyWalletService.getBalance(userId);
+    console.log('💰 Third-party wallet balance for user', userId + ':', balanceResult.balance);
     
     const result = await getGameUrl(userId, gameId, language);
     
-    console.log('Game URL result:', {
+    console.log('🎮 Game URL result:', {
       success: result.success,
       hasGameUrl: !!result.gameUrl,
       message: result.message
@@ -293,14 +158,13 @@ const launchGameController = async (req, res) => {
       return res.status(400).json(result);
     }
   } catch (error) {
-    console.error('Error in launchGameController:', error);
+    console.error('❌ Error in launchGameController:', error);
     res.status(500).json({
       success: false,
       message: 'Server error launching game'
     });
   }
 };
-
 /**
  * Controller to serve a game directly in an iframe to help bypass Cloudflare restrictions
  * @param {Object} req - Express request object
@@ -525,17 +389,15 @@ const rollbackCallbackController = async (req, res) => {
  */
 const healthCheckController = async (req, res) => {
   try {
-    const seamlessConfig = require('../config/seamlessConfig');
-    
     return res.status(200).json({
       status: 'ok',
       service: 'seamless-wallet',
       timestamp: new Date().toISOString(),
       config: {
-        api_login: !!seamlessConfig.api_login,
-        api_password: !!seamlessConfig.api_password,
-        salt_key: !!seamlessConfig.salt_key,
-        callback_url: seamlessConfig.callback_url
+        api_login: !!process.env.SEAMLESS_API_LOGIN,
+        api_password: !!process.env.SEAMLESS_API_PASSWORD,
+        salt_key: !!process.env.SEAMLESS_SALT_KEY,
+        callback_url: process.env.SEAMLESS_CALLBACK_URL || 'https://strike.atsproduct.in/api/seamless/callback'
       }
     });
   } catch (error) {
@@ -647,16 +509,16 @@ const removeFreeRoundsController = async (req, res) => {
  */
 const unifiedCallbackController = async (req, res) => {
   try {
-    console.log('=== CALLBACK REQUEST DEBUG ===');
-    console.log('Method:', req.method);
-    console.log('URL:', req.url);
-    console.log('Query:', req.query);
-    console.log('Headers:', req.headers);
-    console.log('IP:', req.ip);
+    console.log('🔄 === SEAMLESS CALLBACK START ===');
+    console.log('🔄 Method:', req.method);
+    console.log('🔄 Original URL:', req.originalUrl);
+    console.log('🔄 Query:', req.query);
+    console.log('🔄 Headers:', req.headers);
+    console.log('🔄 IP:', req.ip);
     
     // CRITICAL: The docs show GET requests for wallet callbacks
     if (req.method !== 'GET') {
-      console.error('Invalid HTTP method for callback:', req.method);
+      console.error('❌ Invalid HTTP method for callback:', req.method);
       return res.status(200).json({
         status: '400',
         msg: 'Invalid HTTP method'
@@ -666,59 +528,82 @@ const unifiedCallbackController = async (req, res) => {
     const { action } = req.query;
     
     if (!action) {
+      console.error('❌ Missing action parameter');
       return res.status(200).json({
         status: '400',
         msg: 'Missing action parameter'
       });
     }
     
-    // CRITICAL: Validate signature for all requests
-    const isValidSignature = validateSeamlessSignature(req.query);
-    if (!isValidSignature) {
-      console.error('SIGNATURE VALIDATION FAILED');
-      console.error('Query params:', req.query);
-      console.error('Salt key:', process.env.SEAMLESS_SALT_KEY);
-      return res.status(200).json({
-        status: '403',
-        msg: 'Invalid signature'
-      });
+    // CRITICAL: Validate signature using original URL parameter order
+    const skipSignatureValidation = process.env.NODE_ENV === 'development' && 
+                                   process.env.BYPASS_SIGNATURE_VALIDATION === 'true';
+    
+    if (!skipSignatureValidation) {
+      const isValidSignature = validateSeamlessSignatureFromURL(req.originalUrl, req.query);
+      if (!isValidSignature) {
+        console.error('❌ SIGNATURE VALIDATION FAILED');
+        console.error('❌ Original URL:', req.originalUrl);
+        console.error('❌ Query params:', req.query);
+        console.error('❌ Salt key present:', !!process.env.SEAMLESS_SALT_KEY);
+        return res.status(200).json({
+          status: '403',
+          msg: 'Invalid signature'
+        });
+      }
+      console.log('✅ Signature validation passed');
+    } else {
+      console.log('⚠️ SIGNATURE VALIDATION BYPASSED FOR DEVELOPMENT');
     }
+    
+    // Import service functions
+    const {
+      processBalanceRequest,
+      processDebitRequest,
+      processCreditRequest,
+      processRollbackRequest
+    } = require('../services/seamlessWalletService');
     
     let result;
     
     switch (action) {
       case 'balance':
+        console.log('💰 Processing balance request');
         result = await processBalanceRequest(req.query);
         break;
       case 'debit':
+        console.log('💸 Processing debit request');
         result = await processDebitRequest(req.query);
         break;
       case 'credit':
+        console.log('💰 Processing credit request');
         result = await processCreditRequest(req.query);
         break;
       case 'rollback':
+        console.log('🔄 Processing rollback request');
         result = await processRollbackRequest(req.query);
         break;
       default:
+        console.error('❌ Invalid action:', action);
         result = {
           status: '400',
           msg: 'Invalid action'
         };
     }
     
-    console.log('Callback response:', result);
+    console.log('🔄 Callback response:', result);
+    console.log('🔄 === SEAMLESS CALLBACK END ===');
     
     // CRITICAL: Always return HTTP 200 with JSON body
     return res.status(200).json(result);
   } catch (error) {
-    console.error('Callback error:', error);
+    console.error('❌ Callback error:', error);
     return res.status(200).json({
       status: '500',
       msg: 'Internal server error'
     });
   }
 };
-
 
 /**
  * Controller to serve a test page for seamless integration
@@ -1200,5 +1085,6 @@ module.exports = {
   getGamesList,
   refreshGamesList,
   debugSeamlessIntegration,
-  healthCheckController
+  healthCheckController,
+  
 };

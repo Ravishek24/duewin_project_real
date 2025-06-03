@@ -416,6 +416,18 @@ async function processPeriod(gameType, duration) {
     // FIXED: Get current period ID without incrementing sequence
     const periodId = await periodService.getCurrentPeriodId(gameType, duration, now);
 
+    // Add Redis lock to prevent duplicate processing
+    const lockKey = `process_lock:${gameType}:${duration}:${periodId}`;
+    const lockValue = `${Date.now()}_${process.pid}`;
+    
+    // Try to acquire lock (expires in 30 seconds)
+    const acquired = await redis.set(lockKey, lockValue, 'EX', 30, 'NX');
+    
+    if (!acquired) {
+      console.log(`⚠️ Period ${periodId} is already being processed, skipping...`);
+      return;
+    }
+
     console.log(`🔄 Closing and finalizing period: ${gameType} ${duration}s - ${periodId}`);
     
     // 1. Process the current period (generate result, process winners)

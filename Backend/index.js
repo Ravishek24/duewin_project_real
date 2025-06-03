@@ -1,9 +1,9 @@
-// Backend/index.js - SIMPLIFIED VERSION
+// Backend/index.js - UPDATED WITH PROPER WEBSOCKET INITIALIZATION
+
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http');
-const socketIo = require('socket.io');
 
 // Load environment variables first
 dotenv.config();
@@ -46,31 +46,6 @@ app.get('/', (req, res) => {
         timestamp: new Date().toISOString()
     });
 });
-
-// Initialize Socket.IO
-const io = socketIo(server, {
-    cors: {
-        origin: process.env.CORS_ORIGIN || '*',
-        methods: ['GET', 'POST']
-    }
-});
-
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-    console.log('New client connected:', socket.id);
-    socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-    });
-});
-
-// Set io instance for other modules
-try {
-    const { setIo } = require('./config/socketConfig');
-    setIo(io);
-    console.log('✅ Socket.IO configured');
-} catch (error) {
-    console.warn('⚠️ Socket config not available:', error.message);
-}
 
 // Variables to hold initialized components
 let sequelize = null;
@@ -136,6 +111,58 @@ const setupAppRoutes = () => {
     }
 };
 
+// =================== WEBSOCKET INITIALIZATION ===================
+// This is what was missing in your setup!
+
+const initializeWebSocketServices = async () => {
+    try {
+        console.log('🔧 Initializing WebSocket services...');
+        
+        // STEP 1: Initialize Socket.IO
+        console.log('📡 Setting up Socket.IO server...');
+        const { initializeWebSocket } = require('./services/websocketService');
+        const io = initializeWebSocket(server);
+        console.log('✅ Socket.IO server initialized');
+        
+        // STEP 2: Set up socket configuration
+        console.log('⚙️ Configuring socket settings...');
+        try {
+            const { setIo } = require('./config/socketConfig');
+            setIo(io);
+            console.log('✅ Socket configuration set');
+        } catch (configError) {
+            console.warn('⚠️ Socket config issue:', configError.message);
+        }
+        
+        // STEP 3: Initialize period service (CRITICAL)
+        console.log('📊 Initializing period service...');
+        const periodService = require('./services/periodService');
+        await periodService.ensureModelsLoaded();
+        console.log('✅ Period service ready');
+        
+        // STEP 4: Start game scheduler (THIS WAS MISSING!)
+        console.log('🎮 Starting game scheduler...');
+        const { startGameScheduler } = require('./scripts/gameScheduler');
+        
+        // Start scheduler in background
+        setTimeout(async () => {
+            try {
+                await startGameScheduler();
+                console.log('✅ Game scheduler started successfully');
+            } catch (schedulerError) {
+                console.error('❌ Game scheduler failed to start:', schedulerError.message);
+            }
+        }, 2000); // Give 2 seconds for everything to initialize
+        
+        console.log('✅ WebSocket services initialization completed');
+        return true;
+    } catch (error) {
+        console.error('❌ WebSocket services initialization failed:', error);
+        console.error('Stack trace:', error.stack);
+        return false;
+    }
+};
+
 // Additional services setup
 const setupAdditionalServices = async () => {
     try {
@@ -157,14 +184,22 @@ const setupAdditionalServices = async () => {
         }
         
         // Initialize payment gateways
-        const { setupPaymentGateways } = require('./services/paymentGatewayService');
-        await setupPaymentGateways();
-        console.log('✅ Payment gateways initialized');
+        try {
+            const { setupPaymentGateways } = require('./services/paymentGatewayService');
+            await setupPaymentGateways();
+            console.log('✅ Payment gateways initialized');
+        } catch (paymentError) {
+            console.warn('⚠️ Payment gateways setup failed:', paymentError.message);
+        }
         
         // Set up cron jobs
-        const { setupScheduledJobs } = require('./services/schedulerService');
-        await setupScheduledJobs();
-        console.log('✅ Scheduled jobs configured');
+        try {
+            const { setupScheduledJobs } = require('./services/schedulerService');
+            await setupScheduledJobs();
+            console.log('✅ Scheduled jobs configured');
+        } catch (cronError) {
+            console.warn('⚠️ Scheduled jobs setup failed:', cronError.message);
+        }
         
         return true;
     } catch (error) {
@@ -203,32 +238,53 @@ const setupErrorHandling = () => {
     console.log('✅ Error handling configured');
 };
 
+// =================== MAIN START SEQUENCE ===================
+
 // Start server
 const startServer = async () => {
     try {
         console.log('🚀 Starting server initialization sequence...');
         
         // Step 1: Initialize database and models (critical)
+        console.log('\n=== STEP 1: DATABASE INITIALIZATION ===');
         const dbSuccess = await initializeDatabaseAndModels();
         if (!dbSuccess) {
             throw new Error('Database and models initialization failed');
         }
         
         // Step 2: Setup routes (important but not critical)
+        console.log('\n=== STEP 2: ROUTES SETUP ===');
         setupAppRoutes();
         
-        // Step 3: Setup additional services (optional)
+        // Step 3: Initialize WebSocket services (THIS WAS MISSING!)
+        console.log('\n=== STEP 3: WEBSOCKET INITIALIZATION ===');
+        await initializeWebSocketServices();
+        
+        // Step 4: Setup additional services (optional)
+        console.log('\n=== STEP 4: ADDITIONAL SERVICES ===');
         await setupAdditionalServices();
         
-        // Step 4: Setup error handling
+        // Step 5: Setup error handling
+        console.log('\n=== STEP 5: ERROR HANDLING ===');
         setupErrorHandling();
         
-        // Step 5: Start the server
+        // Step 6: Start the HTTP server
+        console.log('\n=== STEP 6: START HTTP SERVER ===');
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`✅ Server running successfully on http://0.0.0.0:${PORT}`);
             console.log(`🌐 Health check: http://0.0.0.0:${PORT}/health`);
             console.log(`📊 Database: Connected and ready`);
+            console.log(`🔌 WebSocket: Active and ready`);
+            console.log(`🎮 Game System: Starting...`);
             console.log(`🎉 DueWin Backend Server is fully operational!`);
+            
+            // Show expected logs
+            console.log('\n📋 You should see these logs next:');
+            console.log('   🔄 Starting initialization...');
+            console.log('   ✅ Game scheduler started successfully');
+            console.log('   ⏰ Started game ticks for wingo 30s');
+            console.log('   ⏰ Started game ticks for wingo 60s');
+            console.log('   Game tick: wingo, 60s, Period: ..., Time: ...s');
         });
     } catch (error) {
         console.error('❌ Server startup failed:', error);

@@ -20,6 +20,8 @@ const mxPayRoutes = require('./mxPayRoutes');
 const vipRoutes = require('./vipRoutes');
 const thirdPartyWalletRoutes = require('./thirdPartyWalletRoutes');
 const internalGameRoutes = require('./internalGameRoutes');
+const vaultRoutes = require('./vaultRoutes');
+const activityRoutes = require('./activityRoutes');
 
 // Import middleware
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
@@ -120,6 +122,8 @@ router.use('/internal', auth, internalGameRoutes);
 router.use('/payments', auth, paymentRoutes);
 router.use('/payment-gateways', auth, paymentGatewayRoutes);
 router.use('/spribe', auth, spribeRoutes);
+router.use('/vault', auth, vaultRoutes);
+router.use('/api', auth, activityRoutes);
 
 // FIXED: Seamless wallet routes (protected, different from callback routes)
 router.use('/seamless-wallet', auth, seamlessWalletRoutes);

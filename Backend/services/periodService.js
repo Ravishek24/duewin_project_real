@@ -1,3 +1,4 @@
+// Backend/services/periodService.js - FIXED VERSION
 const redisClient = require('../config/redisConfig').redis;
 const { sequelize } = require('../config/db');
 const { Op } = require('sequelize');
@@ -52,9 +53,6 @@ const ensureModelsLoaded = async () => {
     }
     return serviceModels;
 };
-
-// REMOVED: Don't initialize models immediately on require
-// This was causing the circular dependency issue
 
 /**
  * Generate period ID based on game type, duration, and current time
@@ -120,7 +118,6 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
         throw error;
     }
 };
-
 
 /**
  * Get current sequence number for a game-duration combination
@@ -291,23 +288,22 @@ const initializePeriod = async (gameType, duration, periodId) => {
                            duration === 180 ? '3m' : 
                            duration === 300 ? '5m' : '10m';
         
-        // Create Redis keys for this period
-        const periodKey = `${gameType}:${durationKey}:${periodId}`;
-        const betsKey = `${periodKey}:bets`;
-        const resultKey = `${periodKey}:result`;
+        // Calculate times based on period ID
+        const startTime = calculatePeriodStartTime(periodId, duration);
+        const endTime = calculatePeriodEndTime(periodId, duration);
         
-        // Use current time as start time
-        const now = moment().tz('Asia/Kolkata');
-        const startTime = now.toDate();
-        const endTime = now.add(duration, 'seconds').toDate();
-        
-        console.log('Initializing period with times:', {
+        console.log('Initializing period with calculated times:', {
             periodId,
             startTime: startTime.toISOString(),
             endTime: endTime.toISOString(),
             duration,
-            currentTime: now.toISOString()
+            currentTime: new Date().toISOString()
         });
+        
+        // Create Redis keys for this period
+        const periodKey = `${gameType}:${durationKey}:${periodId}`;
+        const betsKey = `${periodKey}:bets`;
+        const resultKey = `${periodKey}:result`;
         
         // Initialize period data
         const periodData = {
@@ -319,7 +315,7 @@ const initializePeriod = async (gameType, duration, periodId) => {
             status: 'active',
             totalBets: 0,
             totalAmount: 0,
-            initializedAt: now.toISOString()
+            initializedAt: new Date().toISOString()
         };
         
         // Store period data in Redis
@@ -334,6 +330,11 @@ const initializePeriod = async (gameType, duration, periodId) => {
         await redisClient.expire(betsKey, EXPIRY_SECONDS);
         await redisClient.expire(resultKey, EXPIRY_SECONDS);
         
+        // Store this as the current period for this game/duration
+        const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
+        await redisClient.set(currentPeriodKey, periodId);
+        await redisClient.expire(currentPeriodKey, EXPIRY_SECONDS);
+        
         console.log('Period initialized:', {
             gameType,
             duration,
@@ -344,8 +345,8 @@ const initializePeriod = async (gameType, duration, periodId) => {
             periodKey,
             betsKey,
             resultKey,
-            expirySeconds: EXPIRY_SECONDS,
-            initializedAt: periodData.initializedAt
+            currentPeriodKey,
+            expirySeconds: EXPIRY_SECONDS
         });
         
         // Also store in database for persistence
@@ -370,8 +371,8 @@ const initializePeriod = async (gameType, duration, periodId) => {
                     total_bet_amount: 0,
                     total_payout_amount: 0,
                     unique_bettors: 0,
-                    created_at: now.toDate(),
-                    updated_at: now.toDate()
+                    created_at: new Date(),
+                    updated_at: new Date()
                 });
                 console.log('Period stored in database:', {
                     gameType,
@@ -416,13 +417,27 @@ const initializePeriod = async (gameType, duration, periodId) => {
  */
 const getCurrentPeriodId = async (gameType, duration, timestamp) => {
     try {
-        const istMoment = moment(timestamp).tz('Asia/Kolkata');
-        const dateStr = istMoment.format('YYYYMMDD');
-        
         const durationKey = duration === 30 ? '30s' :
                            duration === 60 ? '1m' :
                            duration === 180 ? '3m' :
                            duration === 300 ? '5m' : '10m';
+        
+        // First try to get from Redis cache
+        const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
+        const cachedPeriodId = await redisClient.get(currentPeriodKey);
+        
+        if (cachedPeriodId) {
+            // Check if this period is still active
+            const status = await getPeriodStatus(gameType, duration, cachedPeriodId);
+            if (status.active) {
+                console.log(`Current period ID from cache: ${cachedPeriodId}`);
+                return cachedPeriodId;
+            }
+        }
+        
+        // If no cached period or period expired, calculate current one
+        const istMoment = moment(timestamp).tz('Asia/Kolkata');
+        const dateStr = istMoment.format('YYYYMMDD');
         
         const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
         
@@ -437,7 +452,11 @@ const getCurrentPeriodId = async (gameType, duration, timestamp) => {
         
         const periodId = `${dateStr}${currentSequence.toString().padStart(9, '0')}`;
         
-        console.log(`Current period ID: ${periodId} (sequence: ${currentSequence})`);
+        // Cache this as current period
+        await redisClient.set(currentPeriodKey, periodId);
+        await redisClient.expire(currentPeriodKey, 3600); // 1 hour expiry
+        
+        console.log(`Current period ID calculated: ${periodId} (sequence: ${currentSequence})`);
         return periodId;
     } catch (error) {
         console.error('Error getting current period ID:', error);
@@ -479,11 +498,75 @@ const getNextPeriodId = async (gameType, duration, timestamp) => {
         
         const periodId = `${dateStr}${sequenceNumber.toString().padStart(9, '0')}`;
         
+        // Update current period cache
+        const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
+        await redisClient.set(currentPeriodKey, periodId);
+        await redisClient.expire(currentPeriodKey, 3600);
+        
         console.log(`Next period ID: ${periodId} (sequence: ${sequenceNumber})`);
         return periodId;
     } catch (error) {
         console.error('Error getting next period ID:', error);
         throw error;
+    }
+};
+
+/**
+ * FIXED: Get current period information for WebSocket
+ * This is the key function that WebSocket needs
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @returns {Object|null} - Current period info or null
+ */
+const getCurrentPeriod = async (gameType, duration) => {
+    try {
+        const now = new Date();
+        
+        // Get current period ID
+        const periodId = await getCurrentPeriodId(gameType, duration, now);
+        
+        if (!periodId) {
+            console.log(`No current period found for ${gameType} ${duration}s`);
+            return null;
+        }
+        
+        // Calculate times
+        const startTime = calculatePeriodStartTime(periodId, duration);
+        const endTime = calculatePeriodEndTime(periodId, duration);
+        const timeRemaining = Math.max(0, (endTime - now) / 1000);
+        
+        // Check if period is still active
+        if (timeRemaining <= 0) {
+            console.log(`Period ${periodId} has expired, time remaining: ${timeRemaining}`);
+            return null;
+        }
+        
+        const periodInfo = {
+            periodId,
+            gameType,
+            duration,
+            startTime,
+            endTime,
+            timeRemaining,
+            active: true,
+            bettingOpen: timeRemaining > 5 // Betting closes 5 seconds before end
+        };
+        
+        console.log(`Current period for ${gameType} ${duration}s:`, {
+            periodId,
+            timeRemaining: Math.floor(timeRemaining),
+            bettingOpen: periodInfo.bettingOpen
+        });
+        
+        return periodInfo;
+    } catch (error) {
+        console.error('Error getting current period:', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration
+        });
+        return null;
     }
 };
 
@@ -494,30 +577,32 @@ const getNextPeriodId = async (gameType, duration, timestamp) => {
  */
 const getActivePeriods = async (gameType) => {
     try {
-        const now = moment().tz('Asia/Kolkata');
+        const now = new Date();
         const activePeriods = [];
         
-        // Check all possible durations
-        const durations = [30, 60, 180, 300, 600];
+        // Check all possible durations for this game type
+        const gameConfigs = {
+            'wingo': [30, 60, 180, 300],
+            'trx_wix': [30, 60, 180, 300],
+            'fiveD': [60, 180, 300, 600],
+            'k3': [60, 180, 300, 600]
+        };
+        
+        const durations = gameConfigs[gameType] || [];
         
         for (const duration of durations) {
-            const durationKey = duration === 30 ? '30s' : 
-                              duration === 60 ? '1m' : 
-                              duration === 180 ? '3m' : 
-                              duration === 300 ? '5m' : '10m';
-            
-            // Get the last period ID
-            const lastPeriodKey = `${gameType}:${durationKey}:lastPeriod`;
-            const lastPeriodId = await redisClient.get(lastPeriodKey);
-            
-            if (lastPeriodId) {
-                const status = await getPeriodStatus(gameType, duration, lastPeriodId);
-                if (status.active) {
-                    activePeriods.push(status);
+            try {
+                const currentPeriod = await getCurrentPeriod(gameType, duration);
+                if (currentPeriod && currentPeriod.active) {
+                    activePeriods.push(currentPeriod);
                 }
+            } catch (durationError) {
+                console.error(`Error getting period for ${gameType} ${duration}s:`, durationError.message);
+                continue;
             }
         }
         
+        console.log(`Active periods for ${gameType}:`, activePeriods.length);
         return activePeriods;
     } catch (error) {
         logger.error('Error getting active periods:', {
@@ -525,7 +610,7 @@ const getActivePeriods = async (gameType) => {
             stack: error.stack,
             gameType
         });
-        throw error;
+        return [];
     }
 };
 
@@ -558,9 +643,10 @@ const generateNextPeriodId = async (currentPeriodId, gameType, duration) => {
         const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
         await redisClient.set(sequenceKey, nextSequence + 1); // +1 because Redis INCR will be used next
         
-        // Store this as the last period ID
-        const lastPeriodKey = `${gameType}:${durationKey}:lastPeriod`;
-        await redisClient.set(lastPeriodKey, nextPeriodId);
+        // Update current period cache
+        const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
+        await redisClient.set(currentPeriodKey, nextPeriodId);
+        await redisClient.expire(currentPeriodKey, 3600);
         
         // Initialize the new period
         await initializePeriod(gameType, duration, nextPeriodId);
@@ -640,24 +726,24 @@ const addPeriods = (activePeriods, gameType, duration, now) => {
     }
 };
 
-// Export the service with async model access
+// Export the service with proper WebSocket integration
 module.exports = {
-    getCurrentPeriodId,         // NEW - Add this
-    getNextPeriodId, 
-
-    // OLD  
+    // Essential functions for WebSocket
+    getCurrentPeriod,            // FIXED - This is what WebSocket needs
+    getCurrentPeriodId,          
+    getNextPeriodId,
+    getActivePeriods,           // FIXED - Updated to work properly
+    
+    // Core period management
     generatePeriodId,
     calculatePeriodStartTime,
     calculatePeriodEndTime,
     getPeriodStatus,
     initializePeriod,
-    getActivePeriods,
     generateNextPeriodId,
     addPeriods,
-    ensureModelsLoaded,
-    async getCurrentPeriod() {
-        const models = await ensureModelsLoaded();
-        const { GamePeriod } = models;
-        // ... rest of the function
-    }
+    
+    // Utility functions
+    getCurrentSequence,
+    ensureModelsLoaded
 };
