@@ -35,9 +35,14 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
     // Create Socket.io server
     io = new Server(server, {
         cors: {
-            origin: process.env.FRONTEND_URL || "*",
+            origin:[
+                process.env.FRONTEND_URL || "*",
+                "http://localhost:3000",
+                "http://localhost:3001", 
+            ],
             methods: ["GET", "POST"],
-            credentials: true
+            credentials: true,
+            allowedHeaders: ['Content-Type', 'Authorization', "X-Auth-Token"]
         },
         pingTimeout: 60000,
         pingInterval: 25000,
@@ -46,8 +51,21 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
 
     // Authentication middleware - ENHANCED
     io.use(async (socket, next) => {
-        const { authenticateWebSocket } = require('../middleware/websocketAuth');
-        await authenticateWebSocket(socket, next);
+        try {
+            console.log('🔍 WebSocket Auth: Attempting authentication...');
+            console.log('🔍 Handshake auth:', socket.handshake.auth);
+            console.log('🔍 Handshake query:', socket.handshake.query);
+            console.log('🔍 Handshake headers:', socket.handshake.headers);
+            
+            // Enhanced authentication
+            const { authenticateWebSocket } = require('../middleware/websocketAuth');
+            await authenticateWebSocket(socket, next);
+            
+        } catch (authError) {
+            console.error('❌ Auth middleware error:', authError);
+            // Provide specific error message to client
+            next(new Error(`AUTH_ERROR: ${authError.message}`));
+        }
     });
 
     // Connection handling
