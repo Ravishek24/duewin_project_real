@@ -113,15 +113,16 @@ const setupAppRoutes = () => {
 
 // =================== WEBSOCKET INITIALIZATION ===================
 // This is what was missing in your setup!
+// Backend/index.js - UPDATED WEBSOCKET INITIALIZATION SECTION
 
 const initializeWebSocketServices = async () => {
     try {
         console.log('🔧 Initializing WebSocket services...');
         
-        // STEP 1: Initialize Socket.IO
+        // STEP 1: Initialize Socket.IO (but don't start game ticks yet)
         console.log('📡 Setting up Socket.IO server...');
         const { initializeWebSocket } = require('./services/websocketService');
-        const io = initializeWebSocket(server);
+        const io = initializeWebSocket(server, false); // Pass false to skip auto-start of ticks
         console.log('✅ Socket.IO server initialized');
         
         // STEP 2: Set up socket configuration
@@ -140,7 +141,17 @@ const initializeWebSocketServices = async () => {
         await periodService.ensureModelsLoaded();
         console.log('✅ Period service ready');
         
-        // STEP 4: Start game scheduler (THIS WAS MISSING!)
+        // STEP 4: Wait for game scheduler to initialize periods
+        console.log('⏳ Waiting for game scheduler to initialize periods...');
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+        
+        // STEP 5: Now start the WebSocket game tick system
+        console.log('🕐 Starting WebSocket game tick system...');
+        const { startGameTickSystem } = require('./services/websocketService');
+        await startGameTickSystem();
+        console.log('✅ WebSocket game ticks started');
+        
+        // STEP 6: Start game scheduler (THIS WAS MISSING!)
         console.log('🎮 Starting game scheduler...');
         const { startGameScheduler } = require('./scripts/gameScheduler');
         
@@ -149,6 +160,14 @@ const initializeWebSocketServices = async () => {
             try {
                 await startGameScheduler();
                 console.log('✅ Game scheduler started successfully');
+                
+                // STEP 7: Verify game ticks are working after scheduler starts
+                setTimeout(() => {
+                    console.log('🔄 Verifying game tick system...');
+                    const { verifyGameTicks } = require('./services/websocketService');
+                    verifyGameTicks();
+                }, 3000);
+                
             } catch (schedulerError) {
                 console.error('❌ Game scheduler failed to start:', schedulerError.message);
             }

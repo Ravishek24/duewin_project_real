@@ -1,4 +1,4 @@
-// Backend/models/BetRecordWingo.js
+// Backend/models/BetRecordWingo.js - COMPLETE FIXED VERSION
 const { Model, DataTypes } = require('sequelize');
 
 class BetRecordWingo extends Model {
@@ -10,7 +10,7 @@ class BetRecordWingo extends Model {
                 primaryKey: true
             },
             user_id: {
-                type: DataTypes.UUID,
+                type: DataTypes.INTEGER, // FIXED: Changed from UUID to INTEGER to match DB
                 allowNull: false,
                 comment: 'User who placed the bet'
             },
@@ -91,7 +91,7 @@ class BetRecordWingo extends Model {
         }, {
             sequelize,
             modelName: 'BetRecordWingo',
-            tableName: 'bet_record_wingo',
+            tableName: 'bet_record_wingos', // FIXED: Correct table name
             timestamps: true,
             createdAt: 'created_at',
             updatedAt: 'updated_at',
@@ -111,7 +111,7 @@ class BetRecordWingo extends Model {
                 {
                     unique: false,
                     fields: ['bet_number', 'duration'],
-                    name: 'bet_record_wingo_bet_number_duration_idx'
+                    name: 'bet_record_wingos_bet_number_duration_idx'
                 }
             ]
         });

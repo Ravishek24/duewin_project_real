@@ -22,6 +22,7 @@ const thirdPartyWalletRoutes = require('./thirdPartyWalletRoutes');
 const internalGameRoutes = require('./internalGameRoutes');
 const vaultRoutes = require('./vaultRoutes');
 const activityRoutes = require('./activityRoutes');
+const websocketDebugRoutes = require('./websocketDebug');
 
 // Import middleware
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
@@ -110,13 +111,14 @@ router.get('/debug/referral', auth, (req, res) => {
 // CRITICAL: Routes that don't require authentication (MUST be before auth-required routes)
 router.use('/users', userRoutes);
 router.use('/otp', otpRoutes);
-router.use('/payments/mxpay', mxPayRoutes);
 router.use('/seamless', seamlessRoutes);
+router.use('/seamless-wallet', auth, seamlessWalletRoutes);
+router.use('/websocket-debug', websocketDebugRoutes);
+router.use('/wallet', auth, walletRoutes);
 
 // PROTECTED ROUTES (require authentication)
 router.use('/bank-accounts', auth, bankRoutes);
 router.use('/usdt-accounts', auth, usdtRoutes);
-router.use('/wallet', auth, walletRoutes);
 router.use('/games', auth, gameRoutes);
 router.use('/internal', auth, internalGameRoutes);
 router.use('/payments', auth, paymentRoutes);
@@ -125,15 +127,8 @@ router.use('/spribe', auth, spribeRoutes);
 router.use('/vault', auth, vaultRoutes);
 router.use('/api', auth, activityRoutes);
 
-// FIXED: Seamless wallet routes (protected, different from callback routes)
-router.use('/seamless-wallet', auth, seamlessWalletRoutes);
-
-// FIXED: Third-party wallet routes (should require auth)
-router.use('/third-party-wallet', auth, thirdPartyWalletRoutes);
-
 // Other protected routes
-router.use('/referrals', auth, referralRoutes); // FIXED: Referrals should require auth
-router.use('/vip', auth, vipRoutes); // FIXED: VIP routes should require auth
+router.use('/referrals', auth, referralRoutes);
 
 // Admin routes (handle their own auth internally)
 router.use('/admin', adminRoutes);

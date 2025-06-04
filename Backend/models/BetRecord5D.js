@@ -10,7 +10,7 @@ class BetRecord5D extends Model {
         primaryKey: true
       },
       user_id: {
-        type: DataTypes.UUID,
+        type: DataTypes.INTEGER,
         allowNull: false,
         comment: 'User who placed the bet'
       },

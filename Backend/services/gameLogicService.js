@@ -2411,31 +2411,45 @@ const validateBet = async (betData) => {
  */
 const getUserBetCount = async (userId, gameType, periodId) => {
     try {
+        // CRITICAL: Ensure models are initialized
+        const models = await ensureModelsInitialized();
+
         let betCount = 0;
         switch (gameType) {
-            case 'trx_wix':
-                betCount = await BetRecordTrxWix.count({
+            case 'wingo':
+                betCount = await models.BetRecordWingo.count({
                     where: {
                         user_id: userId,
-                        period: periodId
+                        bet_number: periodId // FIXED: using bet_number
+                    }
+                });
+                break;
+            case 'trx_wix':
+                betCount = await models.BetRecordTrxWix.count({
+                    where: {
+                        user_id: userId,
+                        bet_number: periodId // FIXED: using bet_number
                     }
                 });
                 break;
             case 'fiveD':
-                betCount = await BetRecord5D.count({
+                betCount = await models.BetRecord5D.count({
                     where: {
                         user_id: userId,
-                        period: periodId
+                        bet_number: periodId // FIXED: using bet_number
                     }
                 });
                 break;
             case 'k3':
-                betCount = await BetRecordK3.count({
+                betCount = await models.BetRecordK3.count({
                     where: {
                         user_id: userId,
-                        period: periodId
+                        bet_number: periodId // FIXED: using bet_number
                     }
                 });
+                break;
+            default:
+                logger.warn('Unknown game type in getUserBetCount', { gameType });
                 break;
         }
         return betCount;
@@ -2450,7 +2464,6 @@ const getUserBetCount = async (userId, gameType, periodId) => {
         return 0;
     }
 };
-
 /**
  * Get user's last bet time
  * @param {string} userId - User ID
@@ -2788,28 +2801,46 @@ const endRound = async (gameType, duration, periodId) => {
  */
 const markAllBetsAsLost = async (gameType, periodId) => {
     try {
+        // CRITICAL: Ensure models are initialized
+        const models = await ensureModelsInitialized();
+
         let BetRecord;
         switch (gameType.toLowerCase()) {
             case 'wingo':
-                BetRecord = BetRecordWingo;
+                BetRecord = models.BetRecordWingo;
                 break;
             case 'trx_wix':
-                BetRecord = BetRecordTrxWix;
+                BetRecord = models.BetRecordTrxWix;
                 break;
             case 'fiveD':
-                BetRecord = BetRecord5D;
+                BetRecord = models.BetRecord5D;
                 break;
             case 'k3':
-                BetRecord = BetRecordK3;
+                BetRecord = models.BetRecordK3;
                 break;
             default:
                 throw new Error('Invalid game type');
         }
 
         await BetRecord.update(
-            { status: 'lost' },
-            { where: { period: periodId, status: 'pending' } }
+            { 
+                status: 'lost',
+                payout: 0,
+                win_amount: 0
+            },
+            { 
+                where: { 
+                    bet_number: periodId, // FIXED: using bet_number
+                    status: 'pending' 
+                } 
+            }
         );
+
+        logger.info('All bets marked as lost', {
+            gameType,
+            periodId
+        });
+
     } catch (error) {
         logger.error('Error marking all bets as lost', {
             error: error.message,
@@ -2819,7 +2850,6 @@ const markAllBetsAsLost = async (gameType, periodId) => {
         throw error;
     }
 };
-
 
 /**
  * Get unique user count for a period (for >= 10 users rule)
@@ -3579,7 +3609,7 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
 };
 
 /**
- * Process game results for a period
+ * Process game results for a period - FIXED VERSION
  * @param {string} gameType - Game type (wingo, fiveD, k3, trx_wix)
  * @param {number} duration - Duration in seconds
  * @param {string} periodId - Period ID
@@ -3587,51 +3617,186 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
  */
 const processGameResults = async (gameType, duration, periodId) => {
     try {
+        console.log('🎲 FIXED: Processing game results...', { gameType, duration, periodId });
+
         // Ensure models are loaded
-        await ensureModelsInitialized();        
-        // Generate result
-        const result = await generateRandomResult(gameType);
+        const models = await ensureModelsInitialized();        
+        
+        // Generate result FIRST
+        let result;
+        
+        console.log('🎯 Generating result for game type:', gameType);
+        
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+                const wingoNumber = Math.floor(Math.random() * 10); // 0-9
+                result = {
+                    number: wingoNumber,
+                    size: wingoNumber >= 5 ? 'Big' : 'Small',
+                    color: getColorForNumber(wingoNumber)
+                };
+                console.log('✅ Generated Wingo result:', result);
+                break;
+
+            case 'fived':
+            case '5d':
+                console.log('🎲 Generating 5D dice...');
+                const dice = [];
+                for (let i = 0; i < 5; i++) {
+                    const diceValue = Math.floor(Math.random() * 6) + 1; // 1-6
+                    dice.push(diceValue);
+                    console.log(`Dice ${i + 1}: ${diceValue}`);
+                }
+                
+                result = {
+                    A: dice[0],
+                    B: dice[1], 
+                    C: dice[2],
+                    D: dice[3],
+                    E: dice[4],
+                    sum: dice.reduce((a, b) => a + b, 0)
+                };
+                
+                console.log('✅ Generated 5D result:', result);
+                
+                // CRITICAL VALIDATION
+                if (!result.A || !result.B || !result.C || !result.D || !result.E || !result.sum) {
+                    console.error('❌ Invalid 5D result generated:', result);
+                    throw new Error('Invalid 5D result generated');
+                }
+                break;
+
+            case 'k3':
+                console.log('🎲 Generating K3 dice...');
+                const k3Dice = [];
+                for (let i = 0; i < 3; i++) {
+                    const diceValue = Math.floor(Math.random() * 6) + 1; // 1-6
+                    k3Dice.push(diceValue);
+                    console.log(`K3 Dice ${i + 1}: ${diceValue}`);
+                }
+                
+                const sum = k3Dice.reduce((a, b) => a + b, 0);
+                const counts = k3Dice.reduce((acc, val) => {
+                    acc[val] = (acc[val] || 0) + 1;
+                    return acc;
+                }, {});
+
+                result = {
+                    dice_1: k3Dice[0],
+                    dice_2: k3Dice[1],
+                    dice_3: k3Dice[2],
+                    sum: sum,
+                    has_pair: Object.values(counts).includes(2) && !Object.values(counts).includes(3),
+                    has_triple: Object.values(counts).includes(3),
+                    is_straight: k3Dice.sort((a, b) => a - b).every((val, idx, arr) =>
+                        idx === 0 || val === arr[idx - 1] + 1
+                    ),
+                    sum_size: sum > 10 ? 'Big' : 'Small',
+                    sum_parity: sum % 2 === 0 ? 'Even' : 'Odd'
+                };
+                
+                console.log('✅ Generated K3 result:', result);
+                break;
+
+            case 'trx_wix':
+                const trxNumber = Math.floor(Math.random() * 10); // 0-9
+                result = {
+                    number: trxNumber,
+                    size: trxNumber >= 5 ? 'Big' : 'Small',
+                    color: getColorForNumber(trxNumber),
+                    verification: {
+                        hash: require('crypto').randomBytes(16).toString('hex'),
+                        link: 'https://tronscan.org'
+                    }
+                };
+                console.log('✅ Generated TRX_WIX result:', result);
+                break;
+
+            default:
+                throw new Error(`Unsupported game type: ${gameType}`);
+        }
+        
+        console.log('🎯 Final result to save:', result);
         
         // Save result to database
         let savedResult;
+        
         if (gameType === 'wingo') {
-            const models = await ensureModelsInitialized();
-
             savedResult = await models.BetResultWingo.create({
                 bet_number: periodId,
                 result_of_number: result.number,
                 result_of_size: result.size,
                 result_of_color: result.color,
                 duration: duration,
-                timeline: new Date().toISOString()
+                timeline: 'default'
             });
-        } else if (gameType === 'fiveD') {
-            const models = await ensureModelsInitialized();
-
+            console.log('✅ Wingo result saved to database');
+            
+        } else if (gameType === 'fiveD' || gameType === '5d') {
+            console.log('💾 Saving 5D result to database...', {
+                result_a: result.A,
+                result_b: result.B,
+                result_c: result.C,
+                result_d: result.D,
+                result_e: result.E,
+                total_sum: result.sum
+            });
+            
             savedResult = await models.BetResult5D.create({
                 bet_number: periodId,
-                result_of_A: result.A,
-                result_of_B: result.B,
-                result_of_C: result.C,
-                result_of_D: result.D,
-                result_of_E: result.E,
-                result_of_sum: result.sum,
+                result_a: result.A,
+                result_b: result.B,
+                result_c: result.C,
+                result_d: result.D,
+                result_e: result.E,
+                total_sum: result.sum,
                 duration: duration,
-                timeline: new Date().toISOString()
+                timeline: 'default'
             });
+            console.log('✅ 5D result saved to database:', savedResult.dataValues);
+            
+        } else if (gameType === 'k3') {
+            savedResult = await models.BetResultK3.create({
+                bet_number: periodId,
+                dice_1: result.dice_1,
+                dice_2: result.dice_2,
+                dice_3: result.dice_3,
+                sum: result.sum,
+                has_pair: result.has_pair,
+                has_triple: result.has_triple,
+                is_straight: result.is_straight,
+                sum_size: result.sum_size,
+                sum_parity: result.sum_parity,
+                duration: duration,
+                timeline: 'default'
+            });
+            console.log('✅ K3 result saved to database');
+            
+        } else if (gameType === 'trx_wix') {
+            savedResult = await models.BetResultTrxWix.create({
+                period: periodId,
+                result: JSON.stringify(result),
+                verification_hash: result.verification.hash,
+                verification_link: result.verification.link,
+                duration: duration,
+                timeline: 'default'
+            });
+            console.log('✅ TRX_WIX result saved to database');
         }
         
         // Process winners
         const winners = await processWinningBets(gameType, duration, periodId, result);
+        console.log(`🏆 Processed ${winners.length} winning bets`);
         
         return {
             success: true,
             result: savedResult,
+            gameResult: result,
             winners: winners
         };
         
     } catch (error) {
-        logger.error('Error processing game results:', {
+        console.error('❌ CRITICAL ERROR in processGameResults:', {
             error: error.message,
             stack: error.stack,
             gameType,
@@ -3641,7 +3806,6 @@ const processGameResults = async (gameType, duration, periodId) => {
         throw error;
     }
 };
-
 /**
  * NEW FUNCTION: Enhance result format based on game type
  * ADD this function to gameLogicService.js
@@ -3704,39 +3868,55 @@ const enhanceResultFormat = async (result, gameType) => {
  */
 const processWinningBets = async (gameType, duration, periodId, result, t) => {
     try {
+        console.log('🔄 Processing winning bets with bet_number field...', {
+            gameType, duration, periodId
+        });
+
         // CRITICAL: Ensure models are initialized
         const models = await ensureModelsInitialized();
 
         let bets = [];
         const winningBets = [];
 
-        // Get bets for the period based on game type
+        // Get bets for the period based on game type - USING bet_number ONLY
         switch (gameType.toLowerCase()) {
             case 'wingo':
+                console.log('📊 Querying BetRecordWingo with bet_number:', periodId);
                 bets = await models.BetRecordWingo.findAll({
-                    where: { period: periodId },
+                    where: { bet_number: periodId }, // ONLY bet_number, NO period
                     transaction: t
                 });
+                console.log(`✅ Found ${bets.length} wingo bets`);
                 break;
+
             case 'trx_wix':
+                console.log('📊 Querying BetRecordTrxWix with bet_number:', periodId);
                 bets = await models.BetRecordTrxWix.findAll({
-                    where: { period: periodId },
+                    where: { bet_number: periodId }, // ONLY bet_number, NO period
                     transaction: t
                 });
+                console.log(`✅ Found ${bets.length} trx_wix bets`);
                 break;
+
             case 'fived':
             case '5d':
+                console.log('📊 Querying BetRecord5D with bet_number:', periodId);
                 bets = await models.BetRecord5D.findAll({
-                    where: { period: periodId },
+                    where: { bet_number: periodId }, // ONLY bet_number, NO period
                     transaction: t
                 });
+                console.log(`✅ Found ${bets.length} 5D bets`);
                 break;
+
             case 'k3':
+                console.log('📊 Querying BetRecordK3 with bet_number:', periodId);
                 bets = await models.BetRecordK3.findAll({
-                    where: { period: periodId },
+                    where: { bet_number: periodId }, // ONLY bet_number, NO period
                     transaction: t
                 });
+                console.log(`✅ Found ${bets.length} K3 bets`);
                 break;
+
             default:
                 throw new Error(`Unsupported game type: ${gameType}`);
         }
@@ -3760,24 +3940,23 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
                     await bet.update({
                         status: 'won',
                         payout: winnings,
+                        win_amount: winnings,
+                        wallet_balance_after: parseFloat(bet.wallet_balance_before) + winnings,
                         result: JSON.stringify(result)
                     }, { transaction: t });
 
-                    // Use correct primary key field based on game type
-                    const betId = gameType === 'trx_wix' ? bet.bet_id : bet.id;
-
                     winningBets.push({
                         userId: bet.user_id,
-                        betId: betId,
+                        betId: bet.bet_id,
                         winnings,
                         betAmount: bet.bet_amount,
                         betType: bet.bet_type,
                         result: result
                     });
 
-                    logger.info('Processed winning bet', {
+                    console.log('✅ Processed winning bet:', {
                         userId: bet.user_id,
-                        betId: betId,
+                        betId: bet.bet_id,
                         winnings,
                         betType: bet.bet_type,
                         gameType
@@ -3787,43 +3966,35 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
                     await bet.update({
                         status: 'lost',
                         payout: 0,
+                        win_amount: 0,
+                        wallet_balance_after: bet.wallet_balance_before,
                         result: JSON.stringify(result)
                     }, { transaction: t });
-
-                    // Use correct primary key field based on game type
-                    const betId = gameType === 'trx_wix' ? bet.bet_id : bet.id;
-
-                    logger.info('Processed losing bet', {
-                        userId: bet.user_id,
-                        betId: betId,
-                        betType: bet.bet_type,
-                        gameType
-                    });
                 }
             } catch (betError) {
-                logger.error('Error processing individual bet', {
+                console.error('❌ Error processing individual bet:', {
                     error: betError.message,
-                    betId: gameType === 'trx_wix' ? bet.bet_id : bet.id,
+                    betId: bet.bet_id,
                     userId: bet.user_id,
                     gameType
                 });
-                // Continue processing other bets
+                continue;
             }
         }
 
+        console.log(`🎯 Processed ${winningBets.length} winning bets out of ${bets.length} total bets`);
         return winningBets;
 
     } catch (error) {
-        logger.error('Error processing winning bets', {
+        console.error('❌ Error processing winning bets:', {
             error: error.message,
             stack: error.stack,
             gameType,
             periodId
         });
-        throw error; // Re-throw to handle in transaction
+        throw error;
     }
 };
-
 
 /**
  * Check if a bet is a winner
@@ -4882,13 +5053,13 @@ const generateFallbackResult = async (gameType) => {
 };
 
 /**
- * Generate a random result for a game type (UPDATED)
+ * Generate a random result for a game type (FIXED)
  * @param {string} gameType - Game type
  * @returns {Object} - Generated random result
  */
 const generateRandomResult = async (gameType) => {
     try {
-        logger.info('Generating enhanced random result', { gameType });
+        console.log('🎲 Generating random result for:', gameType);
 
         let result;
         switch (gameType.toLowerCase()) {
@@ -4896,9 +5067,9 @@ const generateRandomResult = async (gameType) => {
                 const number = Math.floor(Math.random() * 10); // 0-9
                 result = {
                     number: number,
-                    size: number >= 5 ? 'big' : 'small',
-                    color: getColorForNumber(number), // Use deterministic color
-                    parity: number % 2 === 0 ? 'even' : 'odd' // ENHANCED: Add odd/even
+                    size: number >= 5 ? 'Big' : 'Small', // FIXED: Capital case to match DB enum
+                    color: getColorForNumber(number),
+                    parity: number % 2 === 0 ? 'even' : 'odd'
                 };
                 break;
 
@@ -4906,10 +5077,10 @@ const generateRandomResult = async (gameType) => {
                 const trxNumber = Math.floor(Math.random() * 10); // 0-9
                 result = {
                     number: trxNumber,
-                    size: trxNumber >= 5 ? 'big' : 'small',
-                    color: getColorForNumber(trxNumber), // Use deterministic color
-                    parity: trxNumber % 2 === 0 ? 'even' : 'odd', // ENHANCED: Add odd/even
-                    verification: { // ENHANCED: Add verification
+                    size: trxNumber >= 5 ? 'Big' : 'Small', // FIXED: Capital case
+                    color: getColorForNumber(trxNumber),
+                    parity: trxNumber % 2 === 0 ? 'even' : 'odd',
+                    verification: {
                         hash: generateVerificationHash(),
                         link: generateVerificationLink()
                     }
@@ -4918,19 +5089,34 @@ const generateRandomResult = async (gameType) => {
 
             case 'fived':
             case '5d':
-                const dice = Array(5).fill(0).map(() => Math.floor(Math.random() * 6) + 1); // 1-6
+                // FIXED: Generate proper 5D result with all required fields
+                const dice = [];
+                for (let i = 0; i < 5; i++) {
+                    dice.push(Math.floor(Math.random() * 6) + 1); // 1-6
+                }
+                
                 result = {
                     A: dice[0],
-                    B: dice[1],
+                    B: dice[1], 
                     C: dice[2],
                     D: dice[3],
                     E: dice[4],
                     sum: dice.reduce((a, b) => a + b, 0)
                 };
+                
+                // Validate 5D result
+                if (!result.A || !result.B || !result.C || !result.D || !result.E) {
+                    throw new Error('Invalid 5D result generated');
+                }
                 break;
 
             case 'k3':
-                const k3Dice = Array(3).fill(0).map(() => Math.floor(Math.random() * 6) + 1); // 1-6
+                // FIXED: Generate proper K3 result with all required fields
+                const k3Dice = [];
+                for (let i = 0; i < 3; i++) {
+                    k3Dice.push(Math.floor(Math.random() * 6) + 1); // 1-6
+                }
+                
                 const sum = k3Dice.reduce((a, b) => a + b, 0);
                 const counts = k3Dice.reduce((acc, val) => {
                     acc[val] = (acc[val] || 0) + 1;
@@ -4942,38 +5128,36 @@ const generateRandomResult = async (gameType) => {
                     dice_2: k3Dice[1],
                     dice_3: k3Dice[2],
                     sum: sum,
-                    has_pair: Object.values(counts).includes(2),
+                    has_pair: Object.values(counts).includes(2) && !Object.values(counts).includes(3),
                     has_triple: Object.values(counts).includes(3),
-                    is_straight: k3Dice.sort().every((val, idx, arr) =>
+                    is_straight: k3Dice.sort((a, b) => a - b).every((val, idx, arr) =>
                         idx === 0 || val === arr[idx - 1] + 1
                     ),
-                    sum_size: sum > 10 ? 'big' : 'small',
-                    sum_parity: sum % 2 === 0 ? 'even' : 'odd'
+                    sum_size: sum > 10 ? 'Big' : 'Small', // FIXED: Capital case
+                    sum_parity: sum % 2 === 0 ? 'Even' : 'Odd' // FIXED: Capital case
                 };
+                
+                // Validate K3 result
+                if (!result.dice_1 || !result.dice_2 || !result.dice_3) {
+                    throw new Error('Invalid K3 result generated');
+                }
                 break;
 
             default:
                 throw new Error(`Unsupported game type: ${gameType}`);
         }
 
-        // Validate the generated result
-        const validation = await validateFallbackResult(result, gameType);
-        if (!validation.isSafe) {
-            logger.warn('Generated random result failed validation, regenerating', {
-                gameType,
-                validation
-            });
-            return generateRandomResult(gameType); // Recursively try again
+        console.log('✅ Generated result:', result);
+        
+        // Final validation
+        if (!result) {
+            throw new Error('Failed to generate result');
         }
 
-        logger.info('Successfully generated enhanced random result', {
-            gameType,
-            result
-        });
-
         return result;
+        
     } catch (error) {
-        logger.error('Error generating enhanced random result', {
+        console.error('❌ Error generating random result:', {
             error: error.message,
             stack: error.stack,
             gameType
@@ -4983,24 +5167,20 @@ const generateRandomResult = async (gameType) => {
 };
 
 /**
- * NEW FUNCTION: Generate verification hash for TRX_WIX
- * ADD this function to gameLogicService.js
+ * Generate verification hash for TRX_WIX
  */
-
 const generateVerificationHash = () => {
     const crypto = require('crypto');
     return crypto.randomBytes(32).toString('hex');
 };
 
 /**
- * NEW FUNCTION: Generate verification link for TRX_WIX
- * ADD this function to gameLogicService.js
+ * Generate verification link for TRX_WIX
  */
 const generateVerificationLink = () => {
     const hash = generateVerificationHash();
     return `https://tronscan.org/#/transaction/${hash}`;
 };
-
 /**
  * Generate all possible results for a game type (UPDATED)
  * @param {string} gameType - Game type
@@ -5342,16 +5522,21 @@ const processBet = async (betData) => {
             // Store bet in appropriate database table
             let betRecord;
             const betTypeFormatted = `${betType}:${betValue}`;
+            const currentWalletBalance = parseFloat(user.wallet_balance);
 
             switch (gameType) {
                 case 'wingo':
                     betRecord = await models.BetRecordWingo.create({
                         user_id: userId,
-                        period: periodId,
+                        bet_number: periodId, // FIXED: using bet_number
                         bet_type: betTypeFormatted,
                         bet_amount: betAmount,
                         odds: odds,
                         status: 'pending',
+                        wallet_balance_before: currentWalletBalance,
+                        wallet_balance_after: currentWalletBalance - betAmount,
+                        timeline: 'default',
+                        duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
                     break;
@@ -5359,11 +5544,15 @@ const processBet = async (betData) => {
                 case 'trx_wix':
                     betRecord = await models.BetRecordTrxWix.create({
                         user_id: userId,
-                        period: periodId,
+                        bet_number: periodId, // FIXED: using bet_number
                         bet_type: betTypeFormatted,
                         bet_amount: betAmount,
                         odds: odds,
                         status: 'pending',
+                        wallet_balance_before: currentWalletBalance,
+                        wallet_balance_after: currentWalletBalance - betAmount,
+                        timeline: 'default',
+                        duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
                     break;
@@ -5371,11 +5560,15 @@ const processBet = async (betData) => {
                 case 'k3':
                     betRecord = await models.BetRecordK3.create({
                         user_id: userId,
-                        period: periodId,
+                        bet_number: periodId, // FIXED: using bet_number
                         bet_type: betTypeFormatted,
                         bet_amount: betAmount,
                         odds: odds,
                         status: 'pending',
+                        wallet_balance_before: currentWalletBalance,
+                        wallet_balance_after: currentWalletBalance - betAmount,
+                        timeline: 'default',
+                        duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
                     break;
@@ -5383,11 +5576,15 @@ const processBet = async (betData) => {
                 case 'fiveD':
                     betRecord = await models.BetRecord5D.create({
                         user_id: userId,
-                        period: periodId,
+                        bet_number: periodId, // FIXED: using bet_number
                         bet_type: betTypeFormatted,
                         bet_amount: betAmount,
                         odds: odds,
                         status: 'pending',
+                        wallet_balance_before: currentWalletBalance,
+                        wallet_balance_after: currentWalletBalance - betAmount,
+                        timeline: 'default',
+                        duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
                     break;
@@ -5411,6 +5608,7 @@ const processBet = async (betData) => {
                     gameType
                 });
             }
+
             // Record self rebate (after VIP experience recording)
             try {
                 const { processSelfRebate } = require('./selfRebateService');
@@ -5423,6 +5621,7 @@ const processBet = async (betData) => {
                     gameType
                 });
             }
+
             // Process activity rewards (after self rebate)
             try {
                 const { processBetForActivityReward } = require('./activityRewardService');
@@ -5458,7 +5657,9 @@ const processBet = async (betData) => {
                     odds,
                     expectedWin: betAmount * odds,
                     timeRemaining: periodStatus.timeRemaining,
-                    userBalance: parseFloat(user.wallet_balance) - betAmount
+                    userBalance: currentWalletBalance - betAmount,
+                    walletBalanceBefore: currentWalletBalance,
+                    walletBalanceAfter: currentWalletBalance - betAmount
                 }
             };
 
@@ -5698,6 +5899,14 @@ const storeHourlyMinimumCombinations = async (gameType, duration, periodId, resu
     }
 };
 
+/**
+ * Get user's bet history with pagination
+ * @param {string} userId - User ID
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {Object} options - Options object
+ * @returns {Object} - Bet history with pagination
+ */
 const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
     try {
         // CRITICAL: Ensure models are initialized
@@ -5728,7 +5937,7 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
         };
 
         if (periodId) {
-            whereClause.period = periodId;
+            whereClause.bet_number = periodId; // FIXED: using bet_number
         }
 
         if (status) {
@@ -5736,9 +5945,8 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
         }
 
         // Add duration filter if the model supports it
-        if (duration && ['wingo', 'trx_wix'].includes(gameType)) {
-            // For wingo and trx_wix, we might need to filter by period ID pattern
-            // or add duration field to bet record models
+        if (duration) {
+            whereClause.duration = duration;
         }
 
         let bets = [];
@@ -5804,20 +6012,24 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
 
             return {
                 betId: bet.bet_id || bet.id,
-                periodId: bet.period,
+                periodId: bet.bet_number, // FIXED: using bet_number
                 betType: betType,
                 betValue: betValue,
                 betAmount: parseFloat(bet.bet_amount),
                 odds: parseFloat(bet.odds || 0),
                 status: bet.status,
                 winAmount: bet.win_amount ? parseFloat(bet.win_amount) : 0,
+                payout: bet.payout ? parseFloat(bet.payout) : 0,
                 profitLoss: bet.win_amount ?
                     parseFloat(bet.win_amount) - parseFloat(bet.bet_amount) :
                     -parseFloat(bet.bet_amount),
+                walletBalanceBefore: parseFloat(bet.wallet_balance_before || 0),
+                walletBalanceAfter: parseFloat(bet.wallet_balance_after || 0),
                 createdAt: bet.created_at,
                 updatedAt: bet.updated_at,
                 gameType,
-                duration
+                duration: bet.duration || duration,
+                result: bet.result ? (typeof bet.result === 'string' ? JSON.parse(bet.result) : bet.result) : null
             };
         });
 
