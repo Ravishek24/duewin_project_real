@@ -13,7 +13,7 @@ const { auth, requirePhoneVerification } = require('../middlewares/authMiddlewar
 
 const router = express.Router();
 
-// Protected routes (require authentication)
+// Protected routes (require authentication)  
 router.get('/balance', auth, getWalletBalanceController);
 router.get('/history', auth, getTransactionHistoryController);
 router.get('/deposit-history', auth, getDepositHistoryController);

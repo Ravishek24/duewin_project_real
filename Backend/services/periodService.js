@@ -409,54 +409,35 @@ const initializePeriod = async (gameType, duration, periodId) => {
 };
 
 /**
- * Get current period ID without incrementing sequence
+ * FIXED: Get current period ID with real-time calculation
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds  
  * @param {Date} timestamp - Current date/time
  * @returns {string} - Current period ID
  */
-const getCurrentPeriodId = async (gameType, duration, timestamp) => {
+const getCurrentPeriodId = async (gameType, duration, timestamp = new Date()) => {
     try {
-        const durationKey = duration === 30 ? '30s' :
-                           duration === 60 ? '1m' :
-                           duration === 180 ? '3m' :
-                           duration === 300 ? '5m' : '10m';
-        
-        // First try to get from Redis cache
-        const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
-        const cachedPeriodId = await redisClient.get(currentPeriodKey);
-        
-        if (cachedPeriodId) {
-            // Check if this period is still active
-            const status = await getPeriodStatus(gameType, duration, cachedPeriodId);
-            if (status.active) {
-                console.log(`Current period ID from cache: ${cachedPeriodId}`);
-                return cachedPeriodId;
-            }
-        }
-        
-        // If no cached period or period expired, calculate current one
         const istMoment = moment(timestamp).tz('Asia/Kolkata');
-        const dateStr = istMoment.format('YYYYMMDD');
         
-        const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
+        // Calculate time since 2 AM today
+        let startOfPeriods = istMoment.clone().hour(2).minute(0).second(0).millisecond(0);
         
-        // Get current sequence without incrementing
-        let currentSequence = await redisClient.get(sequenceKey);
-        if (currentSequence === null) {
-            // First period of the day
-            currentSequence = 0;
-        } else {
-            currentSequence = parseInt(currentSequence, 10) - 1; // Convert to 0-based
+        // If current time is before 2 AM, use 2 AM of previous day
+        if (istMoment.hour() < 2) {
+            startOfPeriods.subtract(1, 'day');
         }
         
-        const periodId = `${dateStr}${currentSequence.toString().padStart(9, '0')}`;
+        // Calculate total seconds since period start
+        const totalSeconds = istMoment.diff(startOfPeriods, 'seconds');
         
-        // Cache this as current period
-        await redisClient.set(currentPeriodKey, periodId);
-        await redisClient.expire(currentPeriodKey, 3600); // 1 hour expiry
+        // Calculate current period number (0-based)
+        const currentPeriodNumber = Math.floor(totalSeconds / duration);
         
-        console.log(`Current period ID calculated: ${periodId} (sequence: ${currentSequence})`);
+        // Generate period ID
+        const dateStr = startOfPeriods.format('YYYYMMDD');
+        const periodId = `${dateStr}${currentPeriodNumber.toString().padStart(9, '0')}`;
+        
+        console.log(`Current period ID: ${periodId} (sequence: ${currentPeriodNumber})`);
         return periodId;
     } catch (error) {
         console.error('Error getting current period ID:', error);
@@ -465,55 +446,46 @@ const getCurrentPeriodId = async (gameType, duration, timestamp) => {
 };
 
 /**
- * Generate next period ID by incrementing sequence
+ * FIXED: Get next period ID with real-time calculation
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds
  * @param {Date} timestamp - Current date/time  
  * @returns {string} - Next period ID
  */
-const getNextPeriodId = async (gameType, duration, timestamp) => {
+const getNextPeriodId = async (gameType, duration, timestamp = new Date()) => {
     try {
         const istMoment = moment(timestamp).tz('Asia/Kolkata');
-        const dateStr = istMoment.format('YYYYMMDD');
         
-        const durationKey = duration === 30 ? '30s' :
-                           duration === 60 ? '1m' :
-                           duration === 180 ? '3m' :
-                           duration === 300 ? '5m' : '10m';
+        // Calculate time since 2 AM today
+        let startOfPeriods = istMoment.clone().hour(2).minute(0).second(0).millisecond(0);
         
-        const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
+        // If current time is before 2 AM, use 2 AM of previous day
+        if (istMoment.hour() < 2) {
+            startOfPeriods.subtract(1, 'day');
+        }
         
-        // Increment sequence atomically
-        const nextSequence = await redisClient.incr(sequenceKey);
-        const sequenceNumber = nextSequence - 1; // Convert to 0-based
+        // Calculate total seconds since period start
+        const totalSeconds = istMoment.diff(startOfPeriods, 'seconds');
         
-        // Set expiry
-        const tomorrow2AM = moment.tz('Asia/Kolkata')
-            .add(1, 'day')
-            .hour(2)
-            .minute(0)
-            .second(0);
-        const expirySeconds = Math.max(3600, tomorrow2AM.diff(istMoment, 'seconds'));
-        await redisClient.expire(sequenceKey, expirySeconds);
+        // Calculate NEXT period number
+        const currentPeriodNumber = Math.floor(totalSeconds / duration);
+        const nextPeriodNumber = currentPeriodNumber + 1;
         
-        const periodId = `${dateStr}${sequenceNumber.toString().padStart(9, '0')}`;
+        // Generate next period ID
+        const dateStr = startOfPeriods.format('YYYYMMDD');
+        const nextPeriodId = `${dateStr}${nextPeriodNumber.toString().padStart(9, '0')}`;
         
-        // Update current period cache
-        const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
-        await redisClient.set(currentPeriodKey, periodId);
-        await redisClient.expire(currentPeriodKey, 3600);
-        
-        console.log(`Next period ID: ${periodId} (sequence: ${sequenceNumber})`);
-        return periodId;
+        console.log(`Next period ID: ${nextPeriodId} (sequence: ${nextPeriodNumber})`);
+        return nextPeriodId;
     } catch (error) {
         console.error('Error getting next period ID:', error);
         throw error;
     }
 };
 
+
 /**
- * FIXED: Get current period information for WebSocket
- * This is the key function that WebSocket needs
+ * FIXED: Get current period using real-time calculation
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds
  * @returns {Object|null} - Current period info or null
@@ -521,21 +493,35 @@ const getNextPeriodId = async (gameType, duration, timestamp) => {
 const getCurrentPeriod = async (gameType, duration) => {
     try {
         const now = new Date();
+        const istMoment = moment(now).tz('Asia/Kolkata');
         
-        // Get current period ID
-        const periodId = await getCurrentPeriodId(gameType, duration, now);
+        // Calculate time since 2 AM today
+        let startOfPeriods = istMoment.clone().hour(2).minute(0).second(0).millisecond(0);
         
-        if (!periodId) {
-            console.log(`No current period found for ${gameType} ${duration}s`);
-            return null;
+        // If current time is before 2 AM, use 2 AM of previous day
+        if (istMoment.hour() < 2) {
+            startOfPeriods.subtract(1, 'day');
         }
         
-        // Calculate times
-        const startTime = calculatePeriodStartTime(periodId, duration);
-        const endTime = calculatePeriodEndTime(periodId, duration);
-        const timeRemaining = Math.max(0, (endTime - now) / 1000);
+        // Calculate total seconds since period start
+        const totalSeconds = istMoment.diff(startOfPeriods, 'seconds');
         
-        // Check if period is still active
+        // Calculate current period number (0-based)
+        const currentPeriodNumber = Math.floor(totalSeconds / duration);
+        
+        // Calculate when current period started
+        const currentPeriodStart = startOfPeriods.clone().add(currentPeriodNumber * duration, 'seconds');
+        
+        // Calculate when current period ends
+        const currentPeriodEnd = currentPeriodStart.clone().add(duration, 'seconds');
+        
+        // Calculate time remaining in current period
+        const timeRemaining = Math.max(0, currentPeriodEnd.diff(istMoment, 'seconds'));
+        
+        // Generate period ID
+        const dateStr = startOfPeriods.format('YYYYMMDD');
+        const periodId = `${dateStr}${currentPeriodNumber.toString().padStart(9, '0')}`;
+        
         if (timeRemaining <= 0) {
             console.log(`Period ${periodId} has expired, time remaining: ${timeRemaining}`);
             return null;
@@ -545,8 +531,8 @@ const getCurrentPeriod = async (gameType, duration) => {
             periodId,
             gameType,
             duration,
-            startTime,
-            endTime,
+            startTime: currentPeriodStart.toDate(),
+            endTime: currentPeriodEnd.toDate(),
             timeRemaining,
             active: true,
             bettingOpen: timeRemaining > 5 // Betting closes 5 seconds before end
@@ -555,7 +541,9 @@ const getCurrentPeriod = async (gameType, duration) => {
         console.log(`Current period for ${gameType} ${duration}s:`, {
             periodId,
             timeRemaining: Math.floor(timeRemaining),
-            bettingOpen: periodInfo.bettingOpen
+            bettingOpen: periodInfo.bettingOpen,
+            currentTime: istMoment.format(),
+            endTime: currentPeriodEnd.format()
         });
         
         return periodInfo;
@@ -726,8 +714,47 @@ const addPeriods = (activePeriods, gameType, duration, now) => {
     }
 };
 
+/**
+ * Calculate exact time remaining for a period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {Date} timestamp - Current time
+ * @returns {number} - Time remaining in seconds
+ */
+const calculateTimeRemaining = (gameType, duration, timestamp = new Date()) => {
+    try {
+        const istMoment = moment(timestamp).tz('Asia/Kolkata');
+        
+        // Calculate time since 2 AM today
+        let startOfPeriods = istMoment.clone().hour(2).minute(0).second(0).millisecond(0);
+        
+        // If current time is before 2 AM, use 2 AM of previous day
+        if (istMoment.hour() < 2) {
+            startOfPeriods.subtract(1, 'day');
+        }
+        
+        // Calculate total seconds since period start
+        const totalSeconds = istMoment.diff(startOfPeriods, 'seconds');
+        
+        // Calculate current period number
+        const currentPeriodNumber = Math.floor(totalSeconds / duration);
+        
+        // Calculate when current period ends
+        const currentPeriodEnd = startOfPeriods.clone().add((currentPeriodNumber + 1) * duration, 'seconds');
+        
+        // Calculate time remaining
+        const timeRemaining = Math.max(0, currentPeriodEnd.diff(istMoment, 'seconds'));
+        
+        return timeRemaining;
+    } catch (error) {
+        console.error('Error calculating time remaining:', error);
+        return 0;
+    }
+};
+
 // Export the service with proper WebSocket integration
 module.exports = {
+    calculateTimeRemaining,
     // Essential functions for WebSocket
     getCurrentPeriod,            // FIXED - This is what WebSocket needs
     getCurrentPeriodId,          

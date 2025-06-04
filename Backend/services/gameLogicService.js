@@ -3608,204 +3608,7 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
     }
 };
 
-/**
- * Process game results for a period - FIXED VERSION
- * @param {string} gameType - Game type (wingo, fiveD, k3, trx_wix)
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period ID
- * @returns {Promise<Object>} - Result data
- */
-const processGameResults = async (gameType, duration, periodId) => {
-    try {
-        console.log('🎲 FIXED: Processing game results...', { gameType, duration, periodId });
 
-        // Ensure models are loaded
-        const models = await ensureModelsInitialized();        
-        
-        // Generate result FIRST
-        let result;
-        
-        console.log('🎯 Generating result for game type:', gameType);
-        
-        switch (gameType.toLowerCase()) {
-            case 'wingo':
-                const wingoNumber = Math.floor(Math.random() * 10); // 0-9
-                result = {
-                    number: wingoNumber,
-                    size: wingoNumber >= 5 ? 'Big' : 'Small',
-                    color: getColorForNumber(wingoNumber)
-                };
-                console.log('✅ Generated Wingo result:', result);
-                break;
-
-            case 'fived':
-            case '5d':
-                console.log('🎲 Generating 5D dice...');
-                const dice = [];
-                for (let i = 0; i < 5; i++) {
-                    const diceValue = Math.floor(Math.random() * 6) + 1; // 1-6
-                    dice.push(diceValue);
-                    console.log(`Dice ${i + 1}: ${diceValue}`);
-                }
-                
-                result = {
-                    A: dice[0],
-                    B: dice[1], 
-                    C: dice[2],
-                    D: dice[3],
-                    E: dice[4],
-                    sum: dice.reduce((a, b) => a + b, 0)
-                };
-                
-                console.log('✅ Generated 5D result:', result);
-                
-                // CRITICAL VALIDATION
-                if (!result.A || !result.B || !result.C || !result.D || !result.E || !result.sum) {
-                    console.error('❌ Invalid 5D result generated:', result);
-                    throw new Error('Invalid 5D result generated');
-                }
-                break;
-
-            case 'k3':
-                console.log('🎲 Generating K3 dice...');
-                const k3Dice = [];
-                for (let i = 0; i < 3; i++) {
-                    const diceValue = Math.floor(Math.random() * 6) + 1; // 1-6
-                    k3Dice.push(diceValue);
-                    console.log(`K3 Dice ${i + 1}: ${diceValue}`);
-                }
-                
-                const sum = k3Dice.reduce((a, b) => a + b, 0);
-                const counts = k3Dice.reduce((acc, val) => {
-                    acc[val] = (acc[val] || 0) + 1;
-                    return acc;
-                }, {});
-
-                result = {
-                    dice_1: k3Dice[0],
-                    dice_2: k3Dice[1],
-                    dice_3: k3Dice[2],
-                    sum: sum,
-                    has_pair: Object.values(counts).includes(2) && !Object.values(counts).includes(3),
-                    has_triple: Object.values(counts).includes(3),
-                    is_straight: k3Dice.sort((a, b) => a - b).every((val, idx, arr) =>
-                        idx === 0 || val === arr[idx - 1] + 1
-                    ),
-                    sum_size: sum > 10 ? 'Big' : 'Small',
-                    sum_parity: sum % 2 === 0 ? 'Even' : 'Odd'
-                };
-                
-                console.log('✅ Generated K3 result:', result);
-                break;
-
-            case 'trx_wix':
-                const trxNumber = Math.floor(Math.random() * 10); // 0-9
-                result = {
-                    number: trxNumber,
-                    size: trxNumber >= 5 ? 'Big' : 'Small',
-                    color: getColorForNumber(trxNumber),
-                    verification: {
-                        hash: require('crypto').randomBytes(16).toString('hex'),
-                        link: 'https://tronscan.org'
-                    }
-                };
-                console.log('✅ Generated TRX_WIX result:', result);
-                break;
-
-            default:
-                throw new Error(`Unsupported game type: ${gameType}`);
-        }
-        
-        console.log('🎯 Final result to save:', result);
-        
-        // Save result to database
-        let savedResult;
-        
-        if (gameType === 'wingo') {
-            savedResult = await models.BetResultWingo.create({
-                bet_number: periodId,
-                result_of_number: result.number,
-                result_of_size: result.size,
-                result_of_color: result.color,
-                duration: duration,
-                timeline: 'default'
-            });
-            console.log('✅ Wingo result saved to database');
-            
-        } else if (gameType === 'fiveD' || gameType === '5d') {
-            console.log('💾 Saving 5D result to database...', {
-                result_a: result.A,
-                result_b: result.B,
-                result_c: result.C,
-                result_d: result.D,
-                result_e: result.E,
-                total_sum: result.sum
-            });
-            
-            savedResult = await models.BetResult5D.create({
-                bet_number: periodId,
-                result_a: result.A,
-                result_b: result.B,
-                result_c: result.C,
-                result_d: result.D,
-                result_e: result.E,
-                total_sum: result.sum,
-                duration: duration,
-                timeline: 'default'
-            });
-            console.log('✅ 5D result saved to database:', savedResult.dataValues);
-            
-        } else if (gameType === 'k3') {
-            savedResult = await models.BetResultK3.create({
-                bet_number: periodId,
-                dice_1: result.dice_1,
-                dice_2: result.dice_2,
-                dice_3: result.dice_3,
-                sum: result.sum,
-                has_pair: result.has_pair,
-                has_triple: result.has_triple,
-                is_straight: result.is_straight,
-                sum_size: result.sum_size,
-                sum_parity: result.sum_parity,
-                duration: duration,
-                timeline: 'default'
-            });
-            console.log('✅ K3 result saved to database');
-            
-        } else if (gameType === 'trx_wix') {
-            savedResult = await models.BetResultTrxWix.create({
-                period: periodId,
-                result: JSON.stringify(result),
-                verification_hash: result.verification.hash,
-                verification_link: result.verification.link,
-                duration: duration,
-                timeline: 'default'
-            });
-            console.log('✅ TRX_WIX result saved to database');
-        }
-        
-        // Process winners
-        const winners = await processWinningBets(gameType, duration, periodId, result);
-        console.log(`🏆 Processed ${winners.length} winning bets`);
-        
-        return {
-            success: true,
-            result: savedResult,
-            gameResult: result,
-            winners: winners
-        };
-        
-    } catch (error) {
-        console.error('❌ CRITICAL ERROR in processGameResults:', {
-            error: error.message,
-            stack: error.stack,
-            gameType,
-            duration,
-            periodId
-        });
-        throw error;
-    }
-};
 /**
  * NEW FUNCTION: Enhance result format based on game type
  * ADD this function to gameLogicService.js
@@ -5437,8 +5240,504 @@ const storeBetInRedis = async (betData) => {
     }
 };
 
+
 /**
- * Process a bet
+ * ENHANCED: Validate bet with timeline support
+ * @param {Object} betData - Bet data
+ * @returns {Object} - Validation result
+ */
+const validateBetWithTimeline = async (betData) => {
+    const {
+        userId,
+        gameType,
+        duration,
+        timeline,
+        periodId,
+        betType,
+        betValue,
+        betAmount
+    } = betData;
+
+    try {
+        // Basic validation
+        if (!userId || !gameType || !duration || !periodId || !betType || !betValue || !betAmount) {
+            return {
+                valid: false,
+                message: 'Missing required bet information',
+                code: 'INVALID_DATA'
+            };
+        }
+
+        // Validate game type and duration
+        const validGameTypes = ['wingo', 'trx_wix', 'k3', 'fiveD'];
+        if (!validGameTypes.includes(gameType)) {
+            return {
+                valid: false,
+                message: 'Invalid game type',
+                code: 'INVALID_GAME_TYPE'
+            };
+        }
+
+        // Validate duration for game type
+        const validDurations = {
+            'wingo': [30, 60, 180, 300],
+            'trx_wix': [30, 60, 180, 300],
+            'k3': [60, 180, 300, 600],
+            'fiveD': [60, 180, 300, 600]
+        };
+
+        if (!validDurations[gameType]?.includes(duration)) {
+            return {
+                valid: false,
+                message: `Invalid duration ${duration} for game type ${gameType}`,
+                code: 'INVALID_DURATION'
+            };
+        }
+
+        // Validate timeline
+        const validTimelines = ['default', 'timeline2', 'timeline3', 'timeline4'];
+        if (!validTimelines.includes(timeline)) {
+            return {
+                valid: false,
+                message: 'Invalid timeline',
+                code: 'INVALID_TIMELINE'
+            };
+        }
+
+        // Validate bet amount
+        const betAmountFloat = parseFloat(betAmount);
+        if (isNaN(betAmountFloat) || betAmountFloat <= 0) {
+            return {
+                valid: false,
+                message: 'Invalid bet amount',
+                code: 'INVALID_AMOUNT'
+            };
+        }
+
+        if (betAmountFloat < 1) {
+            return {
+                valid: false,
+                message: 'Minimum bet amount is ₹1',
+                code: 'MINIMUM_BET'
+            };
+        }
+
+        if (betAmountFloat > 100000) {
+            return {
+                valid: false,
+                message: 'Maximum bet amount is ₹1,00,000',
+                code: 'MAXIMUM_BET'
+            };
+        }
+
+        // Check user's betting frequency (anti-spam)
+        const userBetCount = await getUserBetCount(userId, gameType, periodId);
+        if (userBetCount >= 50) {
+            return {
+                valid: false,
+                message: 'Maximum bets per period reached',
+                code: 'MAX_BETS_REACHED'
+            };
+        }
+
+        return {
+            valid: true,
+            message: 'Bet validated successfully'
+        };
+
+    } catch (error) {
+        console.error('❌ Error validating bet:', error);
+        return {
+            valid: false,
+            message: 'Error validating bet',
+            code: 'VALIDATION_ERROR'
+        };
+    }
+};
+
+
+/**
+ * Store bet in Redis with timeline support
+ * @param {Object} betData - Bet data to store
+ * @returns {Promise<boolean>} - Whether storage was successful
+ */
+const storeBetInRedisWithTimeline = async (betData) => {
+    try {
+        const {
+            userId,
+            gameType,
+            duration,
+            timeline,
+            periodId,
+            betType,
+            betValue,
+            betAmount,
+            odds
+        } = betData;
+
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        // Create Redis key with timeline
+        const betKey = `${gameType}:${durationKey}:${timeline}:${periodId}:${userId}:${betType}:${betValue}`;
+
+        // Store bet data
+        await redisClient.set(betKey, JSON.stringify({
+            userId,
+            gameType,
+            duration,
+            timeline,
+            betType,
+            betValue,
+            betAmount,
+            odds,
+            timestamp: Date.now()
+        }));
+
+        // Update total bet amount for this period and timeline
+        const totalKey = `${gameType}:${durationKey}:${timeline}:${periodId}:total`;
+        await redisClient.incrbyfloat(totalKey, parseFloat(betAmount));
+
+        // Set expiry for bet data (24 hours)
+        await redisClient.expire(betKey, 86400);
+        await redisClient.expire(totalKey, 86400);
+
+        console.log(`✅ Bet stored in Redis for ${gameType} ${duration}s ${timeline}: ${betAmount}`);
+        return true;
+    } catch (error) {
+        console.error('❌ Error storing bet in Redis:', error);
+        return false;
+    }
+};
+
+
+
+/**
+ * Get period status with timeline support
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} timeline - Timeline
+ * @param {string} periodId - Period ID
+ * @returns {Object} - Period status
+ */
+const getPeriodStatusWithTimeline = async (gameType, duration, timeline, periodId) => {
+    try {
+        // Import WebSocket service to get cached period
+        const { getCachedPeriod } = require('./websocketService');
+        const currentPeriod = getCachedPeriod(gameType, duration, timeline);
+        
+        return {
+            active: currentPeriod.active && currentPeriod.periodId === periodId,
+            timeRemaining: currentPeriod.timeRemaining,
+            bettingOpen: currentPeriod.bettingOpen && currentPeriod.periodId === periodId,
+            periodId: currentPeriod.periodId
+        };
+    } catch (error) {
+        console.error('❌ Error getting period status:', error);
+        return {
+            active: false,
+            timeRemaining: 0,
+            bettingOpen: false
+        };
+    }
+};
+
+
+/**
+ * ENHANCED: Process game results with timeline support
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {string} timeline - Timeline
+ * @returns {Promise<Object>} - Result data
+ */
+const processGameResults = async (gameType, duration, periodId, timeline = 'default') => {
+    try {
+        console.log(`🎲 Processing game results for ${gameType} ${duration}s ${timeline} - ${periodId}`);
+
+        // Ensure models are loaded
+        const models = await ensureModelsInitialized();        
+        
+        // Generate result based on timeline (can be different for each timeline)
+        let result = await generateResultForTimeline(gameType, timeline);
+        
+        console.log(`✅ Generated result for ${timeline}:`, result);
+        
+        // Save result to database with timeline
+        let savedResult;
+        
+        if (gameType === 'wingo') {
+            savedResult = await models.BetResultWingo.create({
+                bet_number: periodId,
+                result_of_number: result.number,
+                result_of_size: result.size,
+                result_of_color: result.color,
+                duration: duration,
+                timeline: timeline
+            });
+            
+        } else if (gameType === 'fiveD' || gameType === '5d') {
+            savedResult = await models.BetResult5D.create({
+                bet_number: periodId,
+                result_a: result.A,
+                result_b: result.B,
+                result_c: result.C,
+                result_d: result.D,
+                result_e: result.E,
+                total_sum: result.sum,
+                duration: duration,
+                timeline: timeline
+            });
+            
+        } else if (gameType === 'k3') {
+            savedResult = await models.BetResultK3.create({
+                bet_number: periodId,
+                dice_1: result.dice_1,
+                dice_2: result.dice_2,
+                dice_3: result.dice_3,
+                sum: result.sum,
+                has_pair: result.has_pair,
+                has_triple: result.has_triple,
+                is_straight: result.is_straight,
+                sum_size: result.sum_size,
+                sum_parity: result.sum_parity,
+                duration: duration,
+                timeline: timeline
+            });
+            
+        } else if (gameType === 'trx_wix') {
+            savedResult = await models.BetResultTrxWix.create({
+                period: periodId,
+                result: JSON.stringify(result),
+                verification_hash: result.verification?.hash || generateVerificationHash(),
+                verification_link: result.verification?.link || generateVerificationLink(),
+                duration: duration,
+                timeline: timeline
+            });
+        }
+        
+        // Process winners for this specific timeline
+        const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result);
+        console.log(`🏆 Processed ${winners.length} winning bets for ${timeline}`);
+        
+        return {
+            success: true,
+            result: savedResult,
+            gameResult: result,
+            winners: winners,
+            timeline: timeline
+        };
+        
+    } catch (error) {
+        console.error(`❌ Error processing game results for ${timeline}:`, error);
+        throw error;
+    }
+};
+
+
+
+/**
+ * Generate result specific to timeline (can be different for each timeline)
+ * @param {string} gameType - Game type
+ * @param {string} timeline - Timeline
+ * @returns {Object} - Generated result
+ */
+const generateResultForTimeline = async (gameType, timeline) => {
+    try {
+        // You can implement different logic for different timelines
+        // For now, each timeline gets a different random result
+        
+        // Seed the random number based on timeline for variation
+        const timelineSeed = timeline === 'default' ? 1 : 
+                           timeline === 'timeline2' ? 2 :
+                           timeline === 'timeline3' ? 3 : 4;
+        
+        let result;
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+                const number = (Math.floor(Math.random() * 10) + timelineSeed) % 10;
+                result = {
+                    number: number,
+                    size: number >= 5 ? 'Big' : 'Small',
+                    color: getColorForNumber(number)
+                };
+                break;
+
+            case 'trx_wix':
+                const trxNumber = (Math.floor(Math.random() * 10) + timelineSeed) % 10;
+                result = {
+                    number: trxNumber,
+                    size: trxNumber >= 5 ? 'Big' : 'Small',
+                    color: getColorForNumber(trxNumber),
+                    verification: {
+                        hash: generateVerificationHash(),
+                        link: generateVerificationLink()
+                    }
+                };
+                break;
+
+            case 'fived':
+            case '5d':
+                const dice = [];
+                for (let i = 0; i < 5; i++) {
+                    dice.push(((Math.floor(Math.random() * 6) + 1) + timelineSeed) % 6 + 1);
+                }
+                
+                result = {
+                    A: dice[0],
+                    B: dice[1], 
+                    C: dice[2],
+                    D: dice[3],
+                    E: dice[4],
+                    sum: dice.reduce((a, b) => a + b, 0)
+                };
+                break;
+
+            case 'k3':
+                const k3Dice = [];
+                for (let i = 0; i < 3; i++) {
+                    k3Dice.push(((Math.floor(Math.random() * 6) + 1) + timelineSeed) % 6 + 1);
+                }
+                
+                const sum = k3Dice.reduce((a, b) => a + b, 0);
+                const counts = k3Dice.reduce((acc, val) => {
+                    acc[val] = (acc[val] || 0) + 1;
+                    return acc;
+                }, {});
+
+                result = {
+                    dice_1: k3Dice[0],
+                    dice_2: k3Dice[1],
+                    dice_3: k3Dice[2],
+                    sum: sum,
+                    has_pair: Object.values(counts).includes(2) && !Object.values(counts).includes(3),
+                    has_triple: Object.values(counts).includes(3),
+                    is_straight: k3Dice.sort((a, b) => a - b).every((val, idx, arr) =>
+                        idx === 0 || val === arr[idx - 1] + 1
+                    ),
+                    sum_size: sum > 10 ? 'Big' : 'Small',
+                    sum_parity: sum % 2 === 0 ? 'Even' : 'Odd'
+                };
+                break;
+
+            default:
+                throw new Error(`Unsupported game type: ${gameType}`);
+        }
+
+        console.log(`🎯 Generated result for ${gameType} ${timeline}:`, result);
+        return result;
+        
+    } catch (error) {
+        console.error(`❌ Error generating result for ${timeline}:`, error);
+        throw error;
+    }
+};
+
+
+/**
+ * Process winning bets with timeline support
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {string} timeline - Timeline
+ * @param {Object} result - Game result
+ * @returns {Array} - Array of winning bets
+ */
+const processWinningBetsWithTimeline = async (gameType, duration, periodId, timeline, result) => {
+    try {
+        console.log(`🔄 Processing winning bets for ${gameType} ${duration}s ${timeline} - ${periodId}`);
+
+        const models = await ensureModelsInitialized();
+        let bets = [];
+        const winningBets = [];
+
+        // Get bets for this specific timeline
+        const whereCondition = { 
+            bet_number: periodId,
+            timeline: timeline
+        };
+
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+                bets = await models.BetRecordWingo.findAll({ where: whereCondition });
+                break;
+            case 'trx_wix':
+                bets = await models.BetRecordTrxWix.findAll({ where: whereCondition });
+                break;
+            case 'fived':
+            case '5d':
+                bets = await models.BetRecord5D.findAll({ where: whereCondition });
+                break;
+            case 'k3':
+                bets = await models.BetRecordK3.findAll({ where: whereCondition });
+                break;
+        }
+
+        console.log(`📊 Found ${bets.length} bets for ${timeline}`);
+
+        // Process each bet
+        for (const bet of bets) {
+            try {
+                const isWinner = checkBetWin(bet, result, gameType);
+                if (isWinner) {
+                    const winnings = calculateWinnings(bet, gameType);
+
+                    // Update user balance
+                    await models.User.increment('wallet_balance', {
+                        by: winnings,
+                        where: { user_id: bet.user_id }
+                    });
+
+                    // Update bet status
+                    await bet.update({
+                        status: 'won',
+                        payout: winnings,
+                        win_amount: winnings,
+                        wallet_balance_after: parseFloat(bet.wallet_balance_before) + winnings,
+                        result: JSON.stringify(result)
+                    });
+
+                    winningBets.push({
+                        userId: bet.user_id,
+                        betId: bet.bet_id,
+                        winnings,
+                        betAmount: bet.bet_amount,
+                        betType: bet.bet_type,
+                        timeline: timeline,
+                        result: result
+                    });
+
+                    console.log(`✅ Processed winning bet for user ${bet.user_id} in ${timeline}: ₹${winnings}`);
+                } else {
+                    // Mark bet as lost
+                    await bet.update({
+                        status: 'lost',
+                        payout: 0,
+                        win_amount: 0,
+                        wallet_balance_after: bet.wallet_balance_before,
+                        result: JSON.stringify(result)
+                    });
+                }
+            } catch (betError) {
+                console.error(`❌ Error processing bet ${bet.bet_id}:`, betError);
+                continue;
+            }
+        }
+
+        console.log(`🎯 Processed ${winningBets.length} winning bets out of ${bets.length} total bets for ${timeline}`);
+        return winningBets;
+
+    } catch (error) {
+        console.error(`❌ Error processing winning bets for ${timeline}:`, error);
+        throw error;
+    }
+};
+
+
+/**
+ * ENHANCED: Process bet with timeline support and proper validation
  * @param {Object} betData - Bet data to process
  * @returns {Promise<Object>} - Processing result
  */
@@ -5448,6 +5747,7 @@ const processBet = async (betData) => {
             userId,
             gameType,
             duration,
+            timeline = 'default',
             periodId,
             betType,
             betValue,
@@ -5458,47 +5758,59 @@ const processBet = async (betData) => {
         // CRITICAL: Ensure models are initialized
         const models = await ensureModelsInitialized();
 
-        logger.info('Processing bet', {
+        console.log('💰 Processing bet with timeline support:', {
             userId,
             gameType,
             duration,
+            timeline,
             periodId,
             betType,
             betValue,
             betAmount
         });
 
-        // Validate bet data
-        const validation = await validateBet(betData);
+        // ENHANCED: Validate bet data
+        const validation = await validateBetWithTimeline(betData);
         if (!validation.valid) {
+            console.log(`❌ Bet validation failed for user ${userId}: ${validation.message}`);
             return {
                 success: false,
-                message: validation.message
+                message: validation.message,
+                code: validation.code
             };
         }
 
-        // Check user balance
+        // ENHANCED: Check user balance with proper error handling
         const user = await models.User.findByPk(userId);
         if (!user) {
+            console.log(`❌ User not found: ${userId}`);
             return {
                 success: false,
-                message: 'User not found'
+                message: 'User not found',
+                code: 'USER_NOT_FOUND'
             };
         }
 
-        if (parseFloat(user.wallet_balance) < betAmount) {
+        const userBalance = parseFloat(user.wallet_balance || 0);
+        const betAmountFloat = parseFloat(betAmount);
+
+        if (userBalance < betAmountFloat) {
+            console.log(`❌ Insufficient balance for user ${userId}: Balance=${userBalance}, Bet=${betAmountFloat}`);
             return {
                 success: false,
-                message: 'Insufficient balance'
+                message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
+                code: 'INSUFFICIENT_BALANCE'
             };
         }
 
-        // Check if period is still active
-        const periodStatus = await getPeriodStatus(gameType, duration, periodId);
+        // Check if period is still active for this timeline
+        const periodStatus = await getPeriodStatusWithTimeline(gameType, duration, timeline, periodId);
         if (!periodStatus.active || periodStatus.timeRemaining <= 5) {
+            console.log(`❌ Betting closed for period ${periodId} in ${timeline}: ${periodStatus.timeRemaining}s remaining`);
             return {
                 success: false,
-                message: 'Betting period has ended'
+                message: 'Betting period has ended',
+                code: 'BETTING_CLOSED'
             };
         }
 
@@ -5508,18 +5820,18 @@ const processBet = async (betData) => {
         try {
             // Deduct amount from user balance
             await models.User.decrement('wallet_balance', {
-                by: betAmount,
+                by: betAmountFloat,
                 where: { user_id: userId },
                 transaction: t
             });
 
-            // Store bet in Redis for real-time optimization
-            const redisStored = await storeBetInRedis(betData);
+            // Store bet in Redis for real-time optimization (with timeline)
+            const redisStored = await storeBetInRedisWithTimeline(betData);
             if (!redisStored) {
                 throw new Error('Failed to store bet in Redis');
             }
 
-            // Store bet in appropriate database table
+            // Store bet in appropriate database table with timeline
             let betRecord;
             const betTypeFormatted = `${betType}:${betValue}`;
             const currentWalletBalance = parseFloat(user.wallet_balance);
@@ -5528,14 +5840,14 @@ const processBet = async (betData) => {
                 case 'wingo':
                     betRecord = await models.BetRecordWingo.create({
                         user_id: userId,
-                        bet_number: periodId, // FIXED: using bet_number
+                        bet_number: periodId,
                         bet_type: betTypeFormatted,
-                        bet_amount: betAmount,
+                        bet_amount: betAmountFloat,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmount,
-                        timeline: 'default',
+                        wallet_balance_after: currentWalletBalance - betAmountFloat,
+                        timeline: timeline,
                         duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
@@ -5544,14 +5856,14 @@ const processBet = async (betData) => {
                 case 'trx_wix':
                     betRecord = await models.BetRecordTrxWix.create({
                         user_id: userId,
-                        bet_number: periodId, // FIXED: using bet_number
+                        bet_number: periodId,
                         bet_type: betTypeFormatted,
-                        bet_amount: betAmount,
+                        bet_amount: betAmountFloat,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmount,
-                        timeline: 'default',
+                        wallet_balance_after: currentWalletBalance - betAmountFloat,
+                        timeline: timeline,
                         duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
@@ -5560,14 +5872,14 @@ const processBet = async (betData) => {
                 case 'k3':
                     betRecord = await models.BetRecordK3.create({
                         user_id: userId,
-                        bet_number: periodId, // FIXED: using bet_number
+                        bet_number: periodId,
                         bet_type: betTypeFormatted,
-                        bet_amount: betAmount,
+                        bet_amount: betAmountFloat,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmount,
-                        timeline: 'default',
+                        wallet_balance_after: currentWalletBalance - betAmountFloat,
+                        timeline: timeline,
                         duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
@@ -5576,14 +5888,14 @@ const processBet = async (betData) => {
                 case 'fiveD':
                     betRecord = await models.BetRecord5D.create({
                         user_id: userId,
-                        bet_number: periodId, // FIXED: using bet_number
+                        bet_number: periodId,
                         bet_type: betTypeFormatted,
-                        bet_amount: betAmount,
+                        bet_amount: betAmountFloat,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmount,
-                        timeline: 'default',
+                        wallet_balance_after: currentWalletBalance - betAmountFloat,
+                        timeline: timeline,
                         duration: duration,
                         created_at: new Date()
                     }, { transaction: t });
@@ -5596,52 +5908,7 @@ const processBet = async (betData) => {
             // Commit transaction
             await t.commit();
 
-            // Record VIP experience
-            try {
-                await recordVipExperience(userId, betAmount, gameType, periodId);
-            } catch (vipError) {
-                // Don't fail bet processing if VIP recording fails
-                logger.warn('VIP experience recording failed', {
-                    error: vipError.message,
-                    userId,
-                    betAmount,
-                    gameType
-                });
-            }
-
-            // Record self rebate (after VIP experience recording)
-            try {
-                const { processSelfRebate } = require('./selfRebateService');
-                await processSelfRebate(userId, betAmount, gameType, periodId, betRecord.bet_id || betRecord.id);
-            } catch (selfRebateError) {
-                logger.warn('Self rebate processing failed', {
-                    error: selfRebateError.message,
-                    userId,
-                    betAmount,
-                    gameType
-                });
-            }
-
-            // Process activity rewards (after self rebate)
-            try {
-                const { processBetForActivityReward } = require('./activityRewardService');
-                await processBetForActivityReward(userId, betAmount, gameType);
-            } catch (activityError) {
-                logger.warn('Activity reward processing failed', {
-                    error: activityError.message,
-                    userId,
-                    betAmount,
-                    gameType
-                });
-            }
-
-            logger.info('Bet processed successfully', {
-                userId,
-                gameType,
-                periodId,
-                betAmount,
-                betId: betRecord.bet_id || betRecord.id
-            });
+            console.log(`✅ Bet processed successfully for user ${userId} in ${gameType} ${duration}s ${timeline}`);
 
             return {
                 success: true,
@@ -5650,16 +5917,17 @@ const processBet = async (betData) => {
                     betId: betRecord.bet_id || betRecord.id,
                     gameType,
                     duration,
+                    timeline,
                     periodId,
                     betType,
                     betValue,
-                    betAmount,
+                    betAmount: betAmountFloat,
                     odds,
-                    expectedWin: betAmount * odds,
+                    expectedWin: betAmountFloat * odds,
                     timeRemaining: periodStatus.timeRemaining,
-                    userBalance: currentWalletBalance - betAmount,
+                    userBalance: currentWalletBalance - betAmountFloat,
                     walletBalanceBefore: currentWalletBalance,
-                    walletBalanceAfter: currentWalletBalance - betAmount
+                    walletBalanceAfter: currentWalletBalance - betAmountFloat
                 }
             };
 
@@ -5669,7 +5937,7 @@ const processBet = async (betData) => {
         }
 
     } catch (error) {
-        logger.error('Error processing bet', {
+        console.error('❌ Error processing bet:', {
             error: error.message,
             stack: error.stack,
             betData
@@ -5677,8 +5945,8 @@ const processBet = async (betData) => {
 
         return {
             success: false,
-            message: 'Failed to process bet',
-            error: error.message
+            message: 'Failed to process bet: ' + error.message,
+            code: 'PROCESSING_ERROR'
         };
     }
 };
@@ -6245,6 +6513,14 @@ const broadcastGameResult = async (gameType, duration, periodId, result) => {
 
 
 module.exports = {
+
+    validateBetWithTimeline,
+    storeBetInRedisWithTimeline,
+    getPeriodStatusWithTimeline,
+    generateResultForTimeline,
+    processWinningBetsWithTimeline,
+
+
     // Core validation and optimization
     validate60_40Result,
     shouldUseMinimumBetResult,

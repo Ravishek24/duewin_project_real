@@ -1,4 +1,4 @@
-// Backend/services/websocketService.js - FIXED VERSION WITH ALL ORIGINAL FEATURES
+// Backend/services/websocketService.js - FIXED WITH TIMELINE SUPPORT
 
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
@@ -7,9 +7,27 @@ const { redis, isConnected } = require('../config/redisConfig');
 const { logger } = require('../utils/logger');
 const moment = require('moment-timezone');
 
-// Import your services (lazy loaded to avoid circular dependencies)
+// Import services properly
 let periodService;
 let gameLogicService;
+
+// Load services with error handling
+const loadServices = () => {
+    try {
+        if (!periodService) {
+            periodService = require('./periodService');
+            console.log('✅ Period service loaded');
+        }
+        if (!gameLogicService) {
+            gameLogicService = require('./gameLogicService');
+            console.log('✅ Game logic service loaded');
+        }
+        return true;
+    } catch (error) {
+        console.warn('⚠️ Services not ready yet:', error.message);
+        return false;
+    }
+};
 
 // Socket.io server instance
 let io;
@@ -18,19 +36,112 @@ let io;
 const gameIntervals = new Map();
 let gameTicksStarted = false;
 
+// Period cache to track current periods (with timeline support)
+const currentPeriods = new Map();
+
+// User bet tracking for personalized results
+const userBets = new Map(); // userId -> { gameType, duration, timeline, periodId, betData }
+
 // Constants
 const GAME_CONFIGS = {
-    wingo: [30, 60, 180, 300],    // 30s, 1m, 3m, 5m
-    trx_wix: [30, 60, 180, 300],  // 30s, 1m, 3m, 5m
-    fiveD: [60, 180, 300, 600],   // 1m, 3m, 5m, 10m
-    k3: [60, 180, 300, 600]       // 1m, 3m, 5m, 10m
+    wingo: {
+        durations: [30, 60, 180, 300],
+        timelines: ['default', 'timeline2', 'timeline3', 'timeline4']
+    },
+    trx_wix: {
+        durations: [30, 60, 180, 300], 
+        timelines: ['default', 'timeline2', 'timeline3', 'timeline4']
+    },
+    fiveD: {
+        durations: [60, 180, 300, 600],
+        timelines: ['default', 'timeline2', 'timeline3', 'timeline4']
+    },
+    k3: {
+        durations: [60, 180, 300, 600],
+        timelines: ['default', 'timeline2', 'timeline3', 'timeline4']
+    }
+};
+
+/**
+ * Calculate real-time period information with timeline support
+ */
+const calculateRealTimePeriod = (gameType, duration, timeline = 'default', now = new Date()) => {
+    try {
+        const istMoment = moment(now).tz('Asia/Kolkata');
+        
+        // Calculate time since 2 AM today
+        let startOfPeriods = istMoment.clone().hour(2).minute(0).second(0).millisecond(0);
+        
+        // If current time is before 2 AM, use 2 AM of previous day
+        if (istMoment.hour() < 2) {
+            startOfPeriods.subtract(1, 'day');
+        }
+        
+        // Calculate total seconds since period start
+        const totalSeconds = istMoment.diff(startOfPeriods, 'seconds');
+        
+        // Calculate current period number (0-based)
+        const currentPeriodNumber = Math.floor(totalSeconds / duration);
+        
+        // Calculate when current period started
+        const currentPeriodStart = startOfPeriods.clone().add(currentPeriodNumber * duration, 'seconds');
+        
+        // Calculate when current period ends
+        const currentPeriodEnd = currentPeriodStart.clone().add(duration, 'seconds');
+        
+        // Calculate time remaining in current period
+        const timeRemaining = Math.max(0, currentPeriodEnd.diff(istMoment, 'seconds'));
+        
+        // Generate period ID with timeline
+        const dateStr = startOfPeriods.format('YYYYMMDD');
+        const periodId = `${dateStr}${currentPeriodNumber.toString().padStart(9, '0')}`;
+        
+        return {
+            periodId,
+            gameType,
+            duration,
+            timeline,
+            startTime: currentPeriodStart.toDate(),
+            endTime: currentPeriodEnd.toDate(),
+            timeRemaining,
+            active: timeRemaining > 0,
+            bettingOpen: timeRemaining > 5
+        };
+    } catch (error) {
+        console.error('Error calculating real-time period:', error);
+        throw error;
+    }
+};
+
+/**
+ * Get cached period or calculate new one
+ */
+const getCachedPeriod = (gameType, duration, timeline = 'default') => {
+    const key = `${gameType}_${duration}_${timeline}`;
+    let cached = currentPeriods.get(key);
+    
+    if (!cached) {
+        cached = calculateRealTimePeriod(gameType, duration, timeline);
+        currentPeriods.set(key, cached);
+    }
+    
+    // Recalculate time remaining
+    const now = new Date();
+    const timeRemaining = Math.max(0, (cached.endTime - now) / 1000);
+    
+    return {
+        ...cached,
+        timeRemaining,
+        active: timeRemaining > 0,
+        bettingOpen: timeRemaining > 5
+    };
 };
 
 /**
  * Initialize the WebSocket server
  */
 const initializeWebSocket = (server, autoStartTicks = true) => {
-    console.log('🔄 Initializing WebSocket server...');
+    console.log('🔄 Initializing WebSocket server with timeline support...');
     
     // Create Socket.io server
     io = new Server(server, {
@@ -49,68 +160,71 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
         transports: ['websocket', 'polling']
     });
 
-    // Authentication middleware - ENHANCED
+    // Authentication middleware
     io.use(async (socket, next) => {
         try {
-            console.log('🔍 WebSocket Auth: Attempting authentication...');
-            console.log('🔍 Handshake auth:', socket.handshake.auth);
-            console.log('🔍 Handshake query:', socket.handshake.query);
-            console.log('🔍 Handshake headers:', socket.handshake.headers);
-            
-            // Enhanced authentication
             const { authenticateWebSocket } = require('../middleware/websocketAuth');
             await authenticateWebSocket(socket, next);
-            
         } catch (authError) {
             console.error('❌ Auth middleware error:', authError);
-            // Provide specific error message to client
             next(new Error(`AUTH_ERROR: ${authError.message}`));
         }
     });
 
     // Connection handling
     io.on('connection', (socket) => {
-        console.log('🔗 New WebSocket connection:', socket.id, 'User:', socket.user.userId || socket.user.id);
+        const userId = socket.user.userId || socket.user.id;
+        console.log('🔗 New WebSocket connection:', socket.id, 'User:', userId);
 
-        // Send connection confirmation immediately
+        // Send connection confirmation
         socket.emit('connected', {
             message: 'Connected to game server',
             timestamp: new Date().toISOString(),
             gameTicksActive: gameTicksStarted,
-            userId: socket.user.userId || socket.user.id
+            userId: userId
         });
 
-        // Handle join game
+        // Handle join game with timeline
         socket.on('joinGame', async (data) => {
             try {
                 console.log('🎮 Join game request:', data);
                 
-                const { gameType, duration } = data;
+                const { gameType, duration, timeline = 'default' } = data;
                 
                 // Validate game type and duration
-                if (!GAME_CONFIGS[gameType] || !GAME_CONFIGS[gameType].includes(duration)) {
+                if (!GAME_CONFIGS[gameType] || !GAME_CONFIGS[gameType].durations.includes(duration)) {
                     socket.emit('error', { message: 'Invalid game type or duration' });
                     return;
                 }
-
-                const roomId = `${gameType}_${duration}`;
                 
-                // Join the room
-                socket.join(roomId);
-                console.log(`✅ User ${socket.user.userId || socket.user.id} joined room: ${roomId}`);
+                // Validate timeline
+                if (!GAME_CONFIGS[gameType].timelines.includes(timeline)) {
+                    socket.emit('error', { message: 'Invalid timeline' });
+                    return;
+                }
 
-                // Confirm join FIRST
+                const roomId = `${gameType}_${duration}_${timeline}`;
+                
+                // Join the specific timeline room
+                socket.join(roomId);
+                console.log(`✅ User ${userId} joined room: ${roomId}`);
+
+                // Store user's current game context
+                socket.currentGame = { gameType, duration, timeline };
+
+                // Confirm join
                 socket.emit('joinedGame', {
                     gameType,
                     duration,
+                    timeline,
                     roomId,
-                    message: `Successfully joined ${gameType} ${duration}s game`,
+                    message: `Successfully joined ${gameType} ${duration}s ${timeline}`,
                     gameTicksActive: gameTicksStarted,
                     timestamp: new Date().toISOString()
                 });
 
-                // Send current game state immediately AFTER join confirmation
-                await sendCurrentGameState(socket, gameType, duration);
+                // Send current game state for this timeline
+                await sendCurrentGameState(socket, gameType, duration, timeline);
 
             } catch (error) {
                 console.error('❌ Error joining game:', error);
@@ -121,55 +235,101 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
         // Handle leave game
         socket.on('leaveGame', (data) => {
             try {
-                const { gameType, duration } = data;
-                const roomId = `${gameType}_${duration}`;
+                const { gameType, duration, timeline = 'default' } = data;
+                const roomId = `${gameType}_${duration}_${timeline}`;
                 
                 socket.leave(roomId);
-                console.log(`👋 User ${socket.user.userId || socket.user.id} left room: ${roomId}`);
+                console.log(`👋 User ${userId} left room: ${roomId}`);
                 
-                socket.emit('leftGame', { gameType, duration });
+                // Clear user's game context
+                delete socket.currentGame;
+                
+                socket.emit('leftGame', { gameType, duration, timeline });
             } catch (error) {
                 console.error('❌ Error leaving game:', error);
             }
         });
 
-        // Handle ping/pong for connection testing
-        socket.on('ping', () => {
-            socket.emit('pong', { 
-                timestamp: new Date().toISOString(),
-                gameTicksActive: gameTicksStarted 
-            });
-        });
-
-        // Handle betting
+        // Handle betting with enhanced validation
         socket.on('placeBet', async (data) => {
             try {
                 console.log('💰 Bet placement request:', data);
                 
-                // Ensure game logic service is loaded
-                if (!gameLogicService) {
-                    gameLogicService = require('./gameLogicService');
+                if (!loadServices()) {
+                    socket.emit('betError', { message: 'Game services not ready' });
+                    return;
                 }
+
+                const { gameType, duration, timeline = 'default', betAmount, periodId } = data;
                 
-                // Process bet using your game logic service
-                const result = await gameLogicService.processBet({
-                    userId: socket.user.userId || socket.user.id,
+                // Enhanced validation
+                if (!gameType || !duration || !betAmount || !periodId) {
+                    socket.emit('betError', { message: 'Missing required bet data' });
+                    return;
+                }
+
+                // Validate user is in the correct room
+                if (!socket.currentGame || 
+                    socket.currentGame.gameType !== gameType || 
+                    socket.currentGame.duration !== duration ||
+                    socket.currentGame.timeline !== timeline) {
+                    socket.emit('betError', { message: 'You must join the game room first' });
+                    return;
+                }
+
+                // Check if betting is still open for this period
+                const currentPeriod = getCachedPeriod(gameType, duration, timeline);
+                if (!currentPeriod.bettingOpen || currentPeriod.periodId !== periodId) {
+                    socket.emit('betError', { message: 'Betting is closed for this period' });
+                    return;
+                }
+
+                // Process bet with enhanced data
+                const betData = {
+                    userId,
+                    gameType,
+                    duration,
+                    timeline,
+                    periodId,
                     ...data
-                });
+                };
+
+                const result = await gameLogicService.processBet(betData);
 
                 if (result.success) {
-                    socket.emit('betPlaced', result.data);
+                    // Store user bet for personalized results
+                    userBets.set(userId, {
+                        gameType,
+                        duration,
+                        timeline,
+                        periodId,
+                        betData: result.data,
+                        socketId: socket.id
+                    });
+
+                    socket.emit('betPlaced', {
+                        ...result.data,
+                        timeline,
+                        message: `Bet placed successfully in ${gameType} ${duration}s ${timeline}`
+                    });
                     
-                    // Broadcast bet update to room (for admins only)
-                    const roomId = `${data.gameType}_${data.duration}`;
-                    io.to(roomId).emit('betUpdate', {
-                        gameType: data.gameType,
-                        duration: data.duration,
-                        periodId: data.periodId,
+                    // Broadcast bet update to specific timeline room only
+                    const roomId = `${gameType}_${duration}_${timeline}`;
+                    socket.to(roomId).emit('betUpdate', {
+                        gameType,
+                        duration,
+                        timeline,
+                        periodId,
                         timestamp: new Date().toISOString()
                     });
+
+                    console.log(`✅ Bet placed by user ${userId} in ${roomId}: ${betAmount}`);
                 } else {
-                    socket.emit('betError', { message: result.message });
+                    console.log(`❌ Bet failed for user ${userId}: ${result.message}`);
+                    socket.emit('betError', { 
+                        message: result.message,
+                        code: result.code || 'BET_FAILED'
+                    });
                 }
             } catch (error) {
                 console.error('❌ Error processing bet:', error);
@@ -180,57 +340,67 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
         // Handle disconnect
         socket.on('disconnect', () => {
             console.log('🔌 WebSocket disconnected:', socket.id);
+            // Clean up user bet tracking
+            userBets.delete(userId);
         });
     });
 
-    // Only start game tick system if autoStartTicks is true
+    // Start game tick system
     if (autoStartTicks) {
         setTimeout(() => {
             startGameTickSystem();
         }, 1000);
     }
     
-    console.log('✅ WebSocket server initialized successfully');
+    console.log('✅ WebSocket server initialized with timeline support');
     return io;
 };
 
 /**
- * Start the game tick system for all games
+ * Start the game tick system for all games and timelines
  */
 const startGameTickSystem = async () => {
     try {
-        console.log('🕐 Starting game tick system...');
+        console.log('🕐 Starting game tick system with timeline support...');
         
-        // Load services if not already loaded
-        if (!periodService) {
-            try {
-                periodService = require('./periodService');
-            } catch (e) {
-                console.warn('⚠️ Period service not available yet');
-            }
-        }
-        if (!gameLogicService) {
-            try {
-                gameLogicService = require('./gameLogicService');
-            } catch (e) {
-                console.warn('⚠️ Game logic service not available yet');
-            }
+        // Load services
+        const servicesReady = loadServices();
+        if (!servicesReady) {
+            console.warn('⚠️ Services not ready, retrying in 3 seconds...');
+            setTimeout(startGameTickSystem, 3000);
+            return;
         }
         
-        // Wait for services to be ready
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Initialize periods for all games and timelines
+        Object.entries(GAME_CONFIGS).forEach(([gameType, config]) => {
+            config.durations.forEach(duration => {
+                config.timelines.forEach(timeline => {
+                    const key = `${gameType}_${duration}_${timeline}`;
+                    const currentPeriod = calculateRealTimePeriod(gameType, duration, timeline);
+                    currentPeriods.set(key, currentPeriod);
+                    
+                    // Initialize period in database
+                    if (periodService && periodService.initializePeriod) {
+                        periodService.initializePeriod(gameType, duration, currentPeriod.periodId, timeline)
+                            .catch(err => console.warn(`Failed to initialize period ${currentPeriod.periodId} for ${timeline}:`, err.message));
+                    }
+                });
+            });
+        });
         
-        // Start game ticks for all configured games
-        Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
-            durations.forEach(duration => {
-                startGameTicks(gameType, duration);
+        // Start game ticks for all games and timelines
+        Object.entries(GAME_CONFIGS).forEach(([gameType, config]) => {
+            config.durations.forEach(duration => {
+                config.timelines.forEach(timeline => {
+                    startGameTicks(gameType, duration, timeline);
+                });
             });
         });
         
         gameTicksStarted = true;
-        console.log('✅ Game tick system started for all games');
+        console.log('✅ Game tick system started for all games and timelines');
         
-        // Broadcast to all connected clients that game ticks are now active
+        // Broadcast to all connected clients
         if (io) {
             io.emit('gameTicksStarted', {
                 message: 'Game tick system is now active',
@@ -240,14 +410,15 @@ const startGameTickSystem = async () => {
         
     } catch (error) {
         console.error('❌ Error starting game tick system:', error);
+        setTimeout(startGameTickSystem, 5000);
     }
 };
 
 /**
- * Start game ticks for a specific game and duration
+ * Start game ticks for a specific game, duration, and timeline
  */
-const startGameTicks = (gameType, duration) => {
-    const key = `${gameType}_${duration}`;
+const startGameTicks = (gameType, duration, timeline) => {
+    const key = `${gameType}_${duration}_${timeline}`;
     
     // Clear existing interval if any
     if (gameIntervals.has(key)) {
@@ -256,685 +427,242 @@ const startGameTicks = (gameType, duration) => {
     
     // Start new interval - tick every second
     const intervalId = setInterval(async () => {
-        await gameTick(gameType, duration);
+        await gameTick(gameType, duration, timeline);
     }, 1000);
     
     gameIntervals.set(key, intervalId);
-    console.log(`⏰ Started game ticks for ${gameType} ${duration}s`);
+    console.log(`⏰ Started game ticks for ${gameType} ${duration}s ${timeline}`);
 };
 
 /**
- * Main game tick function - ENHANCED with original functionality
+ * Main game tick function with timeline support
  */
-const gameTick = async (gameType, duration) => {
+const gameTick = async (gameType, duration, timeline) => {
     try {
-        // Skip if Redis not connected
         if (!isConnected()) {
             return;
         }
 
         const now = new Date();
+        const key = `${gameType}_${duration}_${timeline}`;
         
-        // Generate current period ID using the original method
-        const currentPeriodId = generatePeriodId(gameType, duration, now);
+        // Get current period for this timeline
+        const currentPeriod = getCachedPeriod(gameType, duration, timeline);
+        const cachedPeriod = currentPeriods.get(key);
         
-        // Calculate end time using the original method
-        const endTime = calculatePeriodEndTime(currentPeriodId, duration);
+        // Check if we need to start a new period
+        if (!cachedPeriod || cachedPeriod.periodId !== currentPeriod.periodId) {
+            console.log(`🔄 Period change detected for ${gameType} ${duration}s ${timeline}: ${cachedPeriod?.periodId} -> ${currentPeriod.periodId}`);
+            
+            // If there was a previous period, process its results
+            if (cachedPeriod && cachedPeriod.periodId !== currentPeriod.periodId) {
+                await handlePeriodEnd(gameType, duration, timeline, cachedPeriod.periodId);
+            }
+            
+            // Update cached period
+            currentPeriods.set(key, currentPeriod);
+            
+            // Broadcast new period start to specific timeline room
+            const roomId = `${gameType}_${duration}_${timeline}`;
+            io.to(roomId).emit('periodStart', {
+                gameType,
+                duration,
+                timeline,
+                periodId: currentPeriod.periodId,
+                timeRemaining: Math.floor(currentPeriod.timeRemaining),
+                endTime: currentPeriod.endTime.toISOString(),
+                message: `New period started - betting is open! (${timeline})`
+            });
+        }
         
-        // Calculate time remaining
-        const timeRemaining = Math.max(0, Math.floor((endTime - now) / 1000));
+        const { periodId, timeRemaining, endTime, bettingOpen } = currentPeriod;
+        const roomId = `${gameType}_${duration}_${timeline}`;
         
-        const roomId = `${gameType}_${duration}`;
-        
-        // Broadcast time update every second (for all users)
+        // Broadcast time update to specific timeline room only
         io.to(roomId).emit('timeUpdate', {
             gameType,
             duration,
-            periodId: currentPeriodId,
-            timeRemaining,
+            timeline,
+            periodId,
+            timeRemaining: Math.floor(timeRemaining),
             endTime: endTime.toISOString(),
-            bettingOpen: timeRemaining > 5,
+            bettingOpen,
             timestamp: now.toISOString()
         });
 
-        // Handle different time stages
-        if (timeRemaining === 5) {
-            // 5 seconds left - close betting
+        // Handle betting close
+        if (timeRemaining <= 5 && timeRemaining > 0 && bettingOpen) {
             io.to(roomId).emit('bettingClosed', {
                 gameType,
                 duration,
-                periodId: currentPeriodId,
-                message: 'Betting is now closed for this period'
+                timeline,
+                periodId,
+                message: `Betting is now closed for this period (${timeline})`
             });
-        } else if (timeRemaining === 0) {
-            // Period ended - process results
-            await handlePeriodEnd(gameType, duration, currentPeriodId, roomId);
-        } else if (timeRemaining % 10 === 0 && timeRemaining > 5) {
-            // Every 10 seconds - send betting updates (admin only)
-            await broadcastBettingStats(gameType, duration, currentPeriodId);
-        }
-
-        // For development: log every 15 seconds
-        if (timeRemaining % 15 === 0) {
-            console.log(`Game tick: ${gameType}, ${duration}s, Period: ${currentPeriodId}, Time: ${timeRemaining}s`);
         }
 
     } catch (error) {
-        // Reduce noise - only log every minute for the same error
-        const errorKey = `${gameType}_${duration}_error`;
+        const errorKey = `${gameType}_${duration}_${timeline}_error`;
         const lastLogTime = global[errorKey] || 0;
         const now = Date.now();
         
-        if (now - lastLogTime > 60000) { // 1 minute
-            console.error(`❌ Error in game tick for ${gameType} ${duration}s:`, error.message);
+        if (now - lastLogTime > 60000) {
+            console.error(`❌ Error in game tick for ${gameType} ${duration}s ${timeline}:`, error.message);
             global[errorKey] = now;
         }
     }
 };
 
 /**
- * Handle period end and result processing - ENHANCED
+ * Handle period end with personalized results
  */
-const handlePeriodEnd = async (gameType, duration, periodId, roomId) => {
+const handlePeriodEnd = async (gameType, duration, timeline, periodId) => {
     try {
-        console.log(`🏁 Period ended: ${gameType} ${duration}s - ${periodId}`);
+        console.log(`🏁 Period ended: ${gameType} ${duration}s ${timeline} - ${periodId}`);
         
-        const durationKey = duration === 30 ? '30s' : 
-                           duration === 60 ? '1m' : 
-                           duration === 180 ? '3m' : 
-                           duration === 300 ? '5m' : '10m';
-        
-        // Check for an overridden result first
-        const overrideKey = `${gameType}:${durationKey}:${periodId}:result:override`;
-        const overrideResult = await redis.get(overrideKey);
-        
-        let result;
-        if (overrideResult) {
-            result = JSON.parse(overrideResult);
-        } else {
-            // Get the result from Redis
-            const resultKey = `${gameType}:${durationKey}:${periodId}:result`;
-            const resultStr = await redis.get(resultKey);
-            result = resultStr ? JSON.parse(resultStr) : null;
+        if (!loadServices()) {
+            console.error('❌ Services not ready for period end processing');
+            return;
         }
         
-        // Broadcast result to all users in the room
-        if (result) {
-            io.to(roomId).emit('periodResult', {
-                gameType,
-                duration,
-                periodId,
-                result,
-                timestamp: new Date().toISOString()
-            });
+        const roomId = `${gameType}_${duration}_${timeline}`;
+        
+        // Process the game results for this specific timeline
+        try {
+            console.log(`🎲 Processing results for ${periodId} in ${timeline}...`);
+            const gameResult = await gameLogicService.processGameResults(gameType, duration, periodId, timeline);
             
-            console.log(`📢 Broadcasted result for ${gameType} ${duration}s - ${periodId}`);
+            if (gameResult.success) {
+                // Broadcast general result to timeline room
+                const resultData = {
+                    gameType,
+                    duration,
+                    timeline,
+                    periodId,
+                    result: gameResult.gameResult,
+                    winners: gameResult.winners?.length || 0,
+                    timestamp: new Date().toISOString()
+                };
+                
+                io.to(roomId).emit('periodResult', resultData);
+                
+                // Send personalized results to users who bet in this period/timeline
+                await sendPersonalizedResults(gameType, duration, timeline, periodId, gameResult);
+                
+                console.log(`📢 Broadcasted result for ${gameType} ${duration}s ${timeline} - ${periodId}`);
+                
+            } else {
+                console.error(`❌ Failed to process game results for ${periodId} ${timeline}:`, gameResult.message);
+                
+                io.to(roomId).emit('periodError', {
+                    gameType,
+                    duration,
+                    timeline,
+                    periodId,
+                    message: 'Failed to process results',
+                    timestamp: new Date().toISOString()
+                });
+            }
+        } catch (processError) {
+            console.error(`❌ Error processing game results for ${periodId} ${timeline}:`, processError.message);
         }
-
-        // Wait a moment, then broadcast next period start
-        setTimeout(async () => {
-            const nextPeriodId = getNextPeriodId(periodId);
-            const nextEndTime = new Date(Date.now() + duration * 1000);
-            
-            io.to(roomId).emit('periodStart', {
-                gameType,
-                duration,
-                periodId: nextPeriodId,
-                timeRemaining: duration,
-                endTime: nextEndTime.toISOString(),
-                message: 'New period started - betting is open!'
-            });
-        }, 2000);
 
     } catch (error) {
-        console.error(`❌ Error handling period end for ${gameType} ${duration}s:`, error);
+        console.error(`❌ Error handling period end for ${gameType} ${duration}s ${timeline}:`, error);
     }
 };
 
 /**
- * Send current game state to a newly connected client
+ * Send personalized win/loss results to users
  */
-const sendCurrentGameState = async (socket, gameType, duration) => {
+const sendPersonalizedResults = async (gameType, duration, timeline, periodId, gameResult) => {
     try {
-        // Skip if services not ready
-        if (!periodService && !gameLogicService) {
-            socket.emit('serviceNotReady', {
-                gameType,
-                duration,
-                message: 'Game services are still initializing, please wait...'
-            });
-            return;
+        // Find users who bet in this specific period/timeline
+        for (const [userId, userBet] of userBets.entries()) {
+            if (userBet.gameType === gameType && 
+                userBet.duration === duration && 
+                userBet.timeline === timeline && 
+                userBet.periodId === periodId) {
+                
+                // Find the socket for this user
+                const userSocket = io.sockets.sockets.get(userBet.socketId);
+                
+                if (userSocket) {
+                    // Determine if user won or lost
+                    const userWon = gameResult.winners?.some(winner => winner.userId === userId) || false;
+                    
+                    // Send personalized result
+                    userSocket.emit('personalResult', {
+                        gameType,
+                        duration,
+                        timeline,
+                        periodId,
+                        result: gameResult.gameResult,
+                        userResult: userWon ? 'WON' : 'LOST',
+                        betData: userBet.betData,
+                        winAmount: userWon ? (gameResult.winners?.find(w => w.userId === userId)?.winnings || 0) : 0,
+                        timestamp: new Date().toISOString()
+                    });
+                    
+                    console.log(`📤 Sent personalized result to user ${userId}: ${userWon ? 'WON' : 'LOST'}`);
+                }
+                
+                // Remove user bet from tracking
+                userBets.delete(userId);
+            }
         }
-        
-        const now = new Date();
-        const currentPeriodId = generatePeriodId(gameType, duration, now);
-        const endTime = calculatePeriodEndTime(currentPeriodId, duration);
-        const timeRemaining = Math.max(0, Math.floor((endTime - now) / 1000));
+    } catch (error) {
+        console.error('❌ Error sending personalized results:', error);
+    }
+};
 
-        // Send current period info
+/**
+ * Send current game state for specific timeline
+ */
+const sendCurrentGameState = async (socket, gameType, duration, timeline) => {
+    try {
+        const currentPeriod = getCachedPeriod(gameType, duration, timeline);
+        
+        // Send current period info for this timeline
         socket.emit('periodInfo', {
             gameType,
             duration,
-            periodId: currentPeriodId,
-            timeRemaining,
-            endTime: endTime.toISOString(),
-            bettingOpen: timeRemaining > 5,
-            timestamp: now.toISOString()
+            timeline,
+            periodId: currentPeriod.periodId,
+            timeRemaining: Math.floor(currentPeriod.timeRemaining),
+            endTime: currentPeriod.endTime.toISOString(),
+            bettingOpen: currentPeriod.bettingOpen,
+            timestamp: new Date().toISOString()
         });
 
-        // Send recent results if available
-        try {
-            if (gameLogicService) {
-                const recentResults = await gameLogicService.getGameHistory(gameType, duration, 5, 0);
+        // Send recent results for this timeline if available
+        if (loadServices()) {
+            try {
+                const recentResults = await gameLogicService.getGameHistory(gameType, duration, 5, 0, timeline);
                 if (recentResults && recentResults.success) {
                     socket.emit('recentResults', {
                         gameType,
                         duration,
+                        timeline,
                         results: recentResults.data.results
                     });
                 }
+            } catch (historyError) {
+                console.warn('⚠️ Could not get recent results:', historyError.message);
             }
-        } catch (historyError) {
-            console.warn('⚠️ Could not get recent results:', historyError.message);
         }
 
-        // Send betting closed status if needed
-        if (timeRemaining <= 5) {
-            socket.emit('bettingClosed', {
-                gameType,
-                duration,
-                periodId: currentPeriodId
-            });
-        }
-
-        console.log(`📤 Sent current game state to user for ${gameType} ${duration}s`);
+        console.log(`📤 Sent current game state to user for ${gameType} ${duration}s ${timeline} - Period: ${currentPeriod.periodId}, Time: ${Math.floor(currentPeriod.timeRemaining)}s`);
 
     } catch (error) {
         console.error('❌ Error sending current game state:', error);
         socket.emit('error', { 
             message: 'Failed to get current game state',
             gameType,
-            duration 
-        });
-    }
-};
-
-/**
- * Broadcast betting statistics (admin only)
- */
-const broadcastBettingStats = async (gameType, duration, periodId) => {
-    try {
-        const durationKey = duration === 30 ? '30s' : 
-                           duration === 60 ? '1m' : 
-                           duration === 180 ? '3m' : 
-                           duration === 300 ? '5m' : '10m';
-        
-        // Get basic betting stats
-        const totalAmount = parseFloat(await redis.get(`${gameType}:${durationKey}:${periodId}:total`) || 0);
-        const betCount = await redis.get(`${gameType}:${durationKey}:${periodId}:betCount`) || 0;
-        
-        // Broadcast to admin room only
-        const adminRoomId = `admin_${gameType}_${duration}`;
-        
-        // Get detailed distribution for admins
-        const distribution = await getBetDistribution(gameType, durationKey, periodId);
-        
-        io.to(adminRoomId).emit('bettingStats', {
-            gameType,
             duration,
-            periodId,
-            totalAmount,
-            betCount,
-            distribution,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        // Reduce error noise
-        const errorKey = `broadcast_stats_error_${gameType}_${duration}`;
-        const lastLogTime = global[errorKey] || 0;
-        const now = Date.now();
-        
-        if (now - lastLogTime > 60000) { // 1 minute
-            console.warn('⚠️ Error broadcasting betting stats:', error.message);
-            global[errorKey] = now;
-        }
-    }
-};
-
-/**
- * Generate period ID - ORIGINAL IMPLEMENTATION
- */
-const generatePeriodId = (gameType, duration, now) => {
-    try {
-        const date = moment(now).tz('Asia/Kolkata');
-        const dateStr = date.format('YYYYMMDD');
-        
-        // Calculate periods since 2 AM
-        const startOfDay = date.clone().hour(2).minute(0).second(0).millisecond(0);
-        const secondsSinceStart = Math.max(0, date.diff(startOfDay, 'seconds'));
-        const periodNumber = Math.floor(secondsSinceStart / duration);
-        
-        // Format: YYYYMMDD000000000 (with 9-digit sequence)
-        const sequenceStr = periodNumber.toString().padStart(9, '0');
-        
-        return `${dateStr}${sequenceStr}`;
-    } catch (error) {
-        console.error('Error generating period ID:', error);
-        // Fallback
-        const dateStr = moment().tz('Asia/Kolkata').format('YYYYMMDD');
-        return `${dateStr}000000001`;
-    }
-};
-
-/**
- * Calculate period end time - ORIGINAL IMPLEMENTATION
- */
-const calculatePeriodEndTime = (periodId, duration) => {
-    try {
-        // Parse period ID to get date and sequence
-        const dateStr = periodId.substring(0, 8);
-        const sequenceStr = periodId.substring(8);
-
-        const year = parseInt(dateStr.substring(0, 4), 10);
-        const month = parseInt(dateStr.substring(4, 6), 10) - 1; // 0-indexed
-        const day = parseInt(dateStr.substring(6, 8), 10);
-        const sequenceNumber = parseInt(sequenceStr, 10);
-
-        // Create start time (base time = 2 AM IST + sequence * duration)
-        const baseTime = moment.tz([year, month, day, 2, 0, 0], 'Asia/Kolkata');
-        const startTime = baseTime.add(sequenceNumber * duration, 'seconds');
-
-        // Add duration to get end time
-        const endTime = startTime.clone().add(duration, 'seconds');
-
-        return endTime.toDate();
-    } catch (error) {
-        console.error('Error calculating period end time:', error);
-        // Return current time + duration as fallback
-        return new Date(Date.now() + (duration * 1000));
-    }
-};
-
-/**
- * Get bet distribution (admin only) - ORIGINAL IMPLEMENTATION
- */
-const getBetDistribution = async (gameType, durationKey, periodId) => {
-    try {
-        const totalAmount = parseFloat(await redis.get(`${gameType}:${durationKey}:${periodId}:total`) || 0);
-        
-        if (totalAmount === 0) {
-            return {
-                totalAmount: 0,
-                totalBets: 0,
-                uniqueBettors: 0,
-                distribution: {}
-            };
-        }
-
-        let distribution = {};
-        
-        switch (gameType) {
-            case 'wingo':
-            case 'trx_wix':
-                distribution = await getWingoDistribution(gameType, durationKey, periodId, totalAmount);
-                break;
-            case 'fiveD':
-                distribution = await getFiveDDistribution(durationKey, periodId, totalAmount);
-                break;
-            case 'k3':
-                distribution = await getK3Distribution(durationKey, periodId, totalAmount);
-                break;
-        }
-
-        return {
-            totalAmount,
-            totalBets: await redis.get(`${gameType}:${durationKey}:${periodId}:betCount`) || 0,
-            uniqueBettors: await redis.get(`${gameType}:${durationKey}:${periodId}:uniqueBettors`) || 0,
-            distribution
-        };
-    } catch (error) {
-        console.error('Error getting bet distribution:', error);
-        return null;
-    }
-};
-
-/**
- * Get Wingo distribution (admin only) - ORIGINAL IMPLEMENTATION
- */
-const getWingoDistribution = async (gameType, durationKey, periodId, totalAmount) => {
-    const distribution = {
-        numbers: [],
-        colors: [],
-        sizes: [],
-        parities: []
-    };
-
-    // Get number distribution
-    for (let i = 0; i < 10; i++) {
-        const amount = parseFloat(await redis.get(`${gameType}:${durationKey}:${periodId}:number:${i}`) || 0);
-        distribution.numbers.push({
-            value: i,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
+            timeline
         });
     }
-
-    // Get color distribution
-    for (const color of ['red', 'green', 'violet', 'red_violet', 'green_violet']) {
-        const amount = parseFloat(await redis.get(`${gameType}:${durationKey}:${periodId}:color:${color}`) || 0);
-        distribution.colors.push({
-            value: color,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    // Get size distribution
-    for (const size of ['big', 'small']) {
-        const amount = parseFloat(await redis.get(`${gameType}:${durationKey}:${periodId}:size:${size}`) || 0);
-        distribution.sizes.push({
-            value: size,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    // Get parity distribution
-    for (const parity of ['odd', 'even']) {
-        const amount = parseFloat(await redis.get(`${gameType}:${durationKey}:${periodId}:parity:${parity}`) || 0);
-        distribution.parities.push({
-            value: parity,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    return distribution;
-};
-
-/**
- * Get 5D distribution (admin only) - ORIGINAL IMPLEMENTATION
- */
-const getFiveDDistribution = async (durationKey, periodId, totalAmount) => {
-    const distribution = {
-        positions: {
-            A: [], B: [], C: [], D: [], E: []
-        },
-        sums: [],
-        sizes: [],
-        parities: []
-    };
-
-    // Get position distributions
-    for (const pos of ['A', 'B', 'C', 'D', 'E']) {
-        for (let i = 0; i < 10; i++) {
-            const amount = parseFloat(await redis.get(`fiveD:${durationKey}:${periodId}:${pos}:${i}`) || 0);
-            distribution.positions[pos].push({
-                value: i,
-                amount,
-                percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-            });
-        }
-    }
-
-    // Get sum distribution
-    for (let sum = 0; sum <= 45; sum++) {
-        const amount = parseFloat(await redis.get(`fiveD:${durationKey}:${periodId}:sum:${sum}`) || 0);
-        distribution.sums.push({
-            value: sum,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    // Get size and parity distributions
-    for (const size of ['big', 'small']) {
-        const amount = parseFloat(await redis.get(`fiveD:${durationKey}:${periodId}:size:${size}`) || 0);
-        distribution.sizes.push({
-            value: size,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    for (const parity of ['odd', 'even']) {
-        const amount = parseFloat(await redis.get(`fiveD:${durationKey}:${periodId}:parity:${parity}`) || 0);
-        distribution.parities.push({
-            value: parity,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    return distribution;
-};
-
-/**
- * Get K3 distribution (admin only) - ORIGINAL IMPLEMENTATION
- */
-const getK3Distribution = async (durationKey, periodId, totalAmount) => {
-    const distribution = {
-        sums: [],
-        categories: {
-            size: [],
-            parity: []
-        },
-        matching: {
-            triple_exact: [],
-            triple_any: [],
-            pair_any: [],
-            pair_specific: []
-        },
-        patterns: {
-            all_different: [],
-            straight: [],
-            two_different: []
-        }
-    };
-
-    // Get sum distribution
-    for (let sum = 3; sum <= 18; sum++) {
-        const amount = parseFloat(await redis.get(`k3:${durationKey}:${periodId}:sum:${sum}`) || 0);
-        distribution.sums.push({
-            value: sum,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    // Get category distributions
-    for (const size of ['big', 'small']) {
-        const amount = parseFloat(await redis.get(`k3:${durationKey}:${periodId}:size:${size}`) || 0);
-        distribution.categories.size.push({
-            value: size,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    for (const parity of ['odd', 'even']) {
-        const amount = parseFloat(await redis.get(`k3:${durationKey}:${periodId}:parity:${parity}`) || 0);
-        distribution.categories.parity.push({
-            value: parity,
-            amount,
-            percentage: totalAmount > 0 ? (amount / totalAmount) * 100 : 0
-        });
-    }
-
-    return distribution;
-};
-
-/**
- * Get next period ID - ORIGINAL IMPLEMENTATION
- */
-const getNextPeriodId = (currentPeriodId) => {
-    try {
-        // Extract the numerical part of the period ID (last 9 digits)
-        const dateStr = currentPeriodId.substring(0, 8);
-        const sequenceStr = currentPeriodId.substring(8);
-        const periodNumber = parseInt(sequenceStr, 10);
-        
-        // Increment period number
-        const nextPeriodNumber = periodNumber + 1;
-        
-        // Format with leading zeros (9 digits)
-        const nextSequenceStr = nextPeriodNumber.toString().padStart(9, '0');
-        
-        return `${dateStr}${nextSequenceStr}`;
-    } catch (error) {
-        console.error('Error getting next period ID:', error);
-        return currentPeriodId;
-    }
-};
-
-/**
- * Get previous period ID - ORIGINAL IMPLEMENTATION
- */
-const getPreviousPeriodId = (currentPeriodId) => {
-    try {
-        // Extract the numerical part of the period ID (last 9 digits)
-        const dateStr = currentPeriodId.substring(0, 8);
-        const sequenceStr = currentPeriodId.substring(8);
-        const periodNumber = parseInt(sequenceStr, 10);
-        
-        // Decrement period number
-        const previousPeriodNumber = Math.max(0, periodNumber - 1);
-        
-        // Format with leading zeros (9 digits)
-        const prevSequenceStr = previousPeriodNumber.toString().padStart(9, '0');
-        
-        return `${dateStr}${prevSequenceStr}`;
-    } catch (error) {
-        console.error('Error getting previous period ID:', error);
-        return currentPeriodId;
-    }
-};
-
-/**
- * Broadcast to specific game room - ENHANCED
- */
-const broadcastToGame = async (gameType, durationOrData, event, data) => {
-    try {
-        if (!io) {
-            console.warn('⚠️ WebSocket not initialized, skipping broadcast');
-            return;
-        }
-
-        // Handle both function signatures
-        if (typeof durationOrData === 'number') {
-            // Original signature: (gameType, duration, event, data)
-            const roomId = `${gameType}_${durationOrData}`;
-            io.to(roomId).emit(event, data);
-            console.log(`📢 Broadcasted ${event} to ${roomId}`);
-        } else {
-            // New signature: (gameType, data)
-            // Broadcast to all durations of this game type
-            const durations = GAME_CONFIGS[gameType] || [];
-            durations.forEach(duration => {
-                const roomId = `${gameType}_${duration}`;
-                io.to(roomId).emit('gameUpdate', durationOrData);
-            });
-            console.log(`📢 Broadcasted to all ${gameType} rooms`);
-        }
-    } catch (error) {
-        console.error('❌ Error broadcasting to game:', error);
-    }
-};
-
-/**
- * Broadcast an event to all connected clients - ORIGINAL
- */
-const broadcastToAll = (event, data) => {
-    try {
-        if (!io) {
-            console.warn(`⚠️ WebSocket not initialized, cannot broadcast ${event} to all`);
-            return;
-        }
-        
-        io.emit(event, data);
-        console.log(`📢 Broadcast ${event} to all clients successful`);
-    } catch (error) {
-        console.error(`❌ Error broadcasting to all:`, error.message);
-    }
-};
-
-/**
- * Join a game channel - ORIGINAL
- */
-const joinGameChannel = async (socketId, gameType) => {
-    try {
-        if (!io) {
-            console.warn('⚠️ WebSocket not initialized, skipping channel join');
-            return;
-        }
-
-        const socket = io.sockets.sockets.get(socketId);
-        if (!socket) {
-            console.warn('⚠️ Socket not found:', socketId);
-            return;
-        }
-
-        const channel = `${gameType}_channel`;
-        await socket.join(channel);
-        
-        console.log(`✅ Socket ${socketId} joined channel: ${channel}`);
-    } catch (error) {
-        console.error('❌ Error joining game channel:', error);
-    }
-};
-
-/**
- * Leave a game channel - ORIGINAL
- */
-const leaveGameChannel = async (socketId, gameType) => {
-    try {
-        if (!io) {
-            console.warn('⚠️ WebSocket not initialized, skipping channel leave');
-            return;
-        }
-
-        const socket = io.sockets.sockets.get(socketId);
-        if (!socket) {
-            console.warn('⚠️ Socket not found:', socketId);
-            return;
-        }
-
-        const channel = `${gameType}_channel`;
-        await socket.leave(channel);
-        
-        console.log(`✅ Socket ${socketId} left channel: ${channel}`);
-    } catch (error) {
-        console.error('❌ Error leaving game channel:', error);
-    }
-};
-
-/**
- * Verify game ticks are working
- */
-const verifyGameTicks = () => {
-    console.log('🔍 Verifying game tick system...');
-    
-    const activeIntervals = gameIntervals.size;
-    const expectedIntervals = Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0);
-    
-    console.log(`📊 Game ticks status:`);
-    console.log(`   - Active intervals: ${activeIntervals}`);
-    console.log(`   - Expected intervals: ${expectedIntervals}`);
-    console.log(`   - System started: ${gameTicksStarted}`);
-    
-    if (activeIntervals === expectedIntervals && gameTicksStarted) {
-        console.log('✅ Game tick system is working correctly');
-    } else {
-        console.warn('⚠️ Game tick system may have issues');
-    }
-    
-    return {
-        active: activeIntervals,
-        expected: expectedIntervals,
-        started: gameTicksStarted,
-        working: activeIntervals === expectedIntervals && gameTicksStarted
-    };
 };
 
 /**
@@ -943,7 +671,7 @@ const verifyGameTicks = () => {
 const getIo = () => io;
 
 /**
- * Stop all game ticks (for cleanup)
+ * Stop all game ticks
  */
 const stopGameTicks = () => {
     gameIntervals.forEach((intervalId, key) => {
@@ -951,150 +679,61 @@ const stopGameTicks = () => {
         console.log(`⏹️ Stopped game ticks for ${key}`);
     });
     gameIntervals.clear();
+    currentPeriods.clear();
+    userBets.clear();
     gameTicksStarted = false;
 };
 
 /**
- * WebSocket Service Class - ORIGINAL IMPLEMENTATION
+ * Verify that game ticks are running properly
+ * @returns {Object} Status of game ticks
  */
-class WebSocketService {
-    constructor(server) {
-        this.wss = new WebSocket.Server({ server });
-        this.clients = new Map();
-        this.setupWebSocket();
-    }
+const verifyGameTicks = () => {
+    try {
+        const status = {
+            success: true,
+            gameTicksActive: gameTicksStarted,
+            activeGames: [],
+            timestamp: new Date().toISOString()
+        };
 
-    setupWebSocket() {
-        this.wss.on('connection', async (socket, req) => {
-            try {
-                // Get token from query string
-                const url = new URL(req.url, 'http://localhost');
-                const token = url.searchParams.get('token');
-                
-                if (!token) {
-                    socket.close(1008, 'No token provided');
-                    return;
-                }
-
-                // Verify token
-                const decoded = jwt.verify(token, JWT_SECRET);
-                const userId = decoded.userId || decoded.id;
-                
-                console.log('WebSocket token decoded:', decoded);
-
-                // Get user (if User model is available)
-                try {
-                    const User = require('../models/User');
-                    const user = await User.findByPk(userId);
-                    if (!user) {
-                        console.error(`WebSocket: User not found for ID ${userId}`);
-                        socket.close(1008, 'User not found');
-                        return;
-                    }
-
-                    // Check if user is active
-                    if (!user.is_active) {
-                        socket.close(1008, 'Account is deactivated');
-                        return;
-                    }
-                } catch (userError) {
-                    console.warn('⚠️ User model not available, skipping user validation');
-                }
-
-                // Store client connection
-                this.clients.set(userId, socket);
-
-                // Send welcome message
-                socket.send(JSON.stringify({
-                    type: 'connection',
-                    message: 'Connected successfully',
-                    userId: userId,
-                    timestamp: new Date().toISOString()
-                }));
-
-                // Handle messages
-                socket.on('message', async (message) => {
-                    try {
-                        const data = JSON.parse(message);
-                        
-                        console.log('WebSocket message received:', data.type);
-
-                        // Handle different message types
-                        switch (data.type) {
-                            case 'ping':
-                                socket.send(JSON.stringify({
-                                    type: 'pong',
-                                    timestamp: Date.now()
-                                }));
-                                break;
-                            case 'joinGame':
-                                // Handle join game via WebSocket
-                                const { gameType, duration } = data;
-                                socket.send(JSON.stringify({
-                                    type: 'joinedGame',
-                                    gameType,
-                                    duration,
-                                    message: `Joined ${gameType} ${duration}s game`
-                                }));
-                                break;
-                            default:
-                                console.log('Unknown WebSocket message type:', data.type);
-                        }
-                    } catch (error) {
-                        console.error('Error handling WebSocket message:', error);
-                        socket.send(JSON.stringify({
-                            type: 'error',
-                            message: 'Invalid message format'
-                        }));
-                    }
+        // Check each game configuration
+        Object.entries(GAME_CONFIGS).forEach(([gameType, config]) => {
+            config.durations.forEach(duration => {
+                config.timelines.forEach(timeline => {
+                    const key = `${gameType}_${duration}_${timeline}`;
+                    const intervalId = gameIntervals.get(key);
+                    const period = currentPeriods.get(key);
+                    
+                    status.activeGames.push({
+                        gameType,
+                        duration,
+                        timeline,
+                        hasInterval: !!intervalId,
+                        hasPeriod: !!period,
+                        periodId: period?.periodId,
+                        timeRemaining: period?.timeRemaining
+                    });
                 });
-
-                // Handle disconnection
-                socket.on('close', () => {
-                    this.clients.delete(userId);
-                    console.log(`WebSocket client disconnected: ${userId}`);
-                });
-
-            } catch (error) {
-                console.error('WebSocket connection error:', error);
-                if (error.name === 'JsonWebTokenError') {
-                    socket.close(1008, 'Invalid token');
-                } else if (error.name === 'TokenExpiredError') {
-                    socket.close(1008, 'Token expired');
-                } else {
-                    socket.close(1011, 'Internal server error');
-                }
-            }
+            });
         });
-    }
 
-    // Broadcast message to all connected clients
-    broadcast(message) {
-        this.wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify(message));
-            }
-        });
+        return status;
+    } catch (error) {
+        console.error('Error verifying game ticks:', error);
+        return {
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        };
     }
-
-    // Send message to specific user
-    sendToUser(userId, message) {
-        const client = this.clients.get(userId);
-        if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(message));
-        }
-    }
-}
+};
 
 module.exports = {
     initializeWebSocket,
-    broadcastToGame,
-    broadcastToAll,
-    WebSocketService,
-    joinGameChannel,
-    leaveGameChannel,
     startGameTickSystem,
     stopGameTicks,
-    verifyGameTicks,
-    getIo
+    getIo,
+    getCachedPeriod,
+    verifyGameTicks
 };
