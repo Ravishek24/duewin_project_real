@@ -4,26 +4,68 @@ const { Model, DataTypes } = require('sequelize');
 class BetRecordTrxWix extends Model {
   static init(sequelize) {
     return super.init({
-      result_id: {
+      bet_id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true
       },
-      period: {
+      user_id: {
+        type: DataTypes.UUID,
+        allowNull: false,
+        comment: 'User who placed the bet'
+      },
+      bet_number: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: false,
+        comment: 'Game period identifier'
+      },
+      bet_type: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        comment: 'Type of bet (e.g., NUMBER:5, COLOR:red, SIZE:big, PARITY:even)'
+      },
+      bet_amount: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        comment: 'Amount wagered'
+      },
+      odds: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false,
+        defaultValue: 1.0,
+        comment: 'Betting odds'
+      },
+      status: {
+        type: DataTypes.ENUM('pending', 'won', 'lost'),
+        defaultValue: 'pending',
+        comment: 'Bet status'
+      },
+      win_amount: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: true,
+        defaultValue: 0,
+        comment: 'Amount won (if applicable)'
+      },
+      payout: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: true,
+        defaultValue: 0,
+        comment: 'Total payout amount'
       },
       result: {
         type: DataTypes.JSON,
-        allowNull: false
+        allowNull: true,
+        comment: 'Game result data'
       },
-      verification_hash: {
-        type: DataTypes.STRING,
-        allowNull: false
+      wallet_balance_before: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        comment: 'User wallet balance before bet'
       },
-      verification_link: {
-        type: DataTypes.STRING,
-        allowNull: false
+      wallet_balance_after: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        comment: 'User wallet balance after bet result'
       },
       created_at: {
         type: DataTypes.DATE,
@@ -43,8 +85,8 @@ class BetRecordTrxWix extends Model {
       duration: {
         type: DataTypes.INTEGER,
         allowNull: false,
-        defaultValue: 60,
-        comment: 'Duration in seconds (60, 180, 300, 600)'
+        defaultValue: 30,
+        comment: 'Duration in seconds (30, 60, 180, 300)'
       }
     }, {
       sequelize,
@@ -55,16 +97,33 @@ class BetRecordTrxWix extends Model {
       updatedAt: 'updated_at',
       indexes: [
         {
-          unique: true,
-          fields: ['period', 'duration'],
-          name: 'bet_record_trx_wix_period_duration_unique'
+          fields: ['user_id']
+        },
+        {
+          fields: ['bet_number']
+        },
+        {
+          fields: ['status']
+        },
+        {
+          fields: ['created_at']
+        },
+        {
+          unique: false,
+          fields: ['bet_number', 'duration'],
+          name: 'bet_record_trx_wix_bet_number_duration_idx'
         }
       ]
     });
   }
 
   static associate(models) {
-    // define associations here
+    if (models.User) {
+      this.belongsTo(models.User, {
+        foreignKey: 'user_id',
+        as: 'user'
+      });
+    }
   }
 }
 

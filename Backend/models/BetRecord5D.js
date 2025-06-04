@@ -5,44 +5,74 @@ class BetRecord5D extends Model {
   static init(sequelize) {
     return super.init({
       bet_id: {
-        type: DataTypes.INTEGER,
-        primaryKey: true,
-        autoIncrement: true
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+      },
+      user_id: {
+        type: DataTypes.UUID,
+        allowNull: false,
+        comment: 'User who placed the bet'
       },
       bet_number: {
         type: DataTypes.STRING,
-        allowNull: false
+        allowNull: false,
+        comment: 'Game period identifier'
       },
-      result_a: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      bet_type: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        comment: 'Type of bet (e.g., POSITION:A_5, SUM:big, DRAGON_TIGER:dragon)'
       },
-      result_b: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      bet_amount: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        comment: 'Amount wagered'
       },
-      result_c: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      odds: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false,
+        defaultValue: 1.0,
+        comment: 'Betting odds'
       },
-      result_d: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      status: {
+        type: DataTypes.ENUM('pending', 'won', 'lost'),
+        defaultValue: 'pending',
+        comment: 'Bet status'
       },
-      result_e: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      win_amount: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: true,
+        defaultValue: 0,
+        comment: 'Amount won (if applicable)'
       },
-      total_sum: {
-        type: DataTypes.INTEGER,
-        allowNull: false
+      payout: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: true,
+        defaultValue: 0,
+        comment: 'Total payout amount'
       },
-      time: {
+      result: {
+        type: DataTypes.JSON,
+        allowNull: true,
+        comment: 'Game result data'
+      },
+      wallet_balance_before: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        comment: 'User wallet balance before bet'
+      },
+      wallet_balance_after: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        comment: 'User wallet balance after bet result'
+      },
+      created_at: {
         type: DataTypes.DATE,
         allowNull: false,
         defaultValue: DataTypes.NOW
       },
-      created_at: {
+      updated_at: {
         type: DataTypes.DATE,
         allowNull: false,
         defaultValue: DataTypes.NOW
@@ -62,19 +92,38 @@ class BetRecord5D extends Model {
       sequelize,
       modelName: 'BetRecord5D',
       tableName: 'bet_record_5ds',
-      timestamps: false,
+      timestamps: true,
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
       indexes: [
         {
-          unique: true,
+          fields: ['user_id']
+        },
+        {
+          fields: ['bet_number']
+        },
+        {
+          fields: ['status']
+        },
+        {
+          fields: ['created_at']
+        },
+        {
+          unique: false,
           fields: ['bet_number', 'duration'],
-          name: 'bet_record_5ds_bet_number_duration_unique'
+          name: 'bet_record_5ds_bet_number_duration_idx'
         }
       ]
     });
   }
 
   static associate(models) {
-    // define associations here
+    if (models.User) {
+      this.belongsTo(models.User, {
+        foreignKey: 'user_id',
+        as: 'user'
+      });
+    }
   }
 }
 
