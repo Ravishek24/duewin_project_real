@@ -107,6 +107,10 @@ const initializeModels = async () => {
                 'SeamlessTransaction',
                 'SeamlessGameSession',
 
+                // Spribe Game Models
+                'SpribeGameSession',
+                'SpribeTransaction',
+
                 // Payment & Wallet Models
                 'PaymentGateway',
                 'PaymentGatewaySettings',
