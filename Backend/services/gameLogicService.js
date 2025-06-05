@@ -5398,7 +5398,9 @@ const storeBetInRedisWithTimeline = async (betData) => {
 
         // Update total bet amount for this period and timeline
         const totalKey = `${gameType}:${durationKey}:${timeline}:${periodId}:total`;
-        await redisClient.incrbyfloat(totalKey, parseFloat(betAmount));
+        const currentTotal = await redisClient.get(totalKey) || '0';
+        const newTotal = parseFloat(currentTotal) + parseFloat(betAmount);
+        await redisClient.set(totalKey, newTotal.toString());
 
         // Set expiry for bet data (24 hours)
         await redisClient.expire(betKey, 86400);
@@ -5424,9 +5426,9 @@ const storeBetInRedisWithTimeline = async (betData) => {
  */
 const getPeriodStatusWithTimeline = async (gameType, duration, timeline, periodId) => {
     try {
-        // Import WebSocket service to get cached period
-        const { getCachedPeriod } = require('./websocketService');
-        const currentPeriod = getCachedPeriod(gameType, duration, timeline);
+        // Import WebSocket service to get current period
+        const { getCurrentPeriodInfo } = require('./websocketService');
+        const currentPeriod = getCurrentPeriodInfo(gameType, duration);
         
         return {
             active: currentPeriod.active && currentPeriod.periodId === periodId,

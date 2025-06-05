@@ -1,4 +1,4 @@
-// Backend/models/GamePeriod.js
+// Backend/models/GamePeriod.js - FIXED VERSION
 const { Model, DataTypes } = require('sequelize');
 
 class GamePeriod extends Model {
@@ -12,8 +12,8 @@ class GamePeriod extends Model {
       period_id: {
         type: DataTypes.STRING,
         allowNull: false,
-        unique: true,
-        comment: 'Unique period identifier (e.g., wingo20230501001)'
+        // IMPORTANT: Remove any unique constraint
+        comment: 'Period identifier (duplicates allowed)'
       },
       game_type: {
         type: DataTypes.ENUM('wingo', 'fiveD', 'k3', 'trx_wix'),
@@ -36,33 +36,27 @@ class GamePeriod extends Model {
       },
       is_completed: {
         type: DataTypes.BOOLEAN,
-        defaultValue: false,
-        comment: 'Whether the period has completed and results processed'
+        defaultValue: false
       },
       result_override: {
         type: DataTypes.TEXT,
-        allowNull: true,
-        comment: 'JSON string of admin override result (if any)'
+        allowNull: true
       },
       override_by: {
         type: DataTypes.INTEGER,
-        allowNull: true,
-        comment: 'Admin user ID who overrode the result'
+        allowNull: true
       },
       total_bet_amount: {
         type: DataTypes.DECIMAL(15, 2),
-        defaultValue: 0,
-        comment: 'Total amount bet on this period'
+        defaultValue: 0
       },
       total_payout_amount: {
         type: DataTypes.DECIMAL(15, 2),
-        defaultValue: 0,
-        comment: 'Total payout for this period'
+        defaultValue: 0
       },
       unique_bettors: {
         type: DataTypes.INTEGER,
-        defaultValue: 0,
-        comment: 'Number of unique users who placed bets'
+        defaultValue: 0
       },
       created_at: {
         type: DataTypes.DATE,
@@ -78,9 +72,9 @@ class GamePeriod extends Model {
       tableName: 'game_periods',
       timestamps: false,
       indexes: [
+        // NO unique constraints - only regular indexes
         {
-          unique: true,
-          fields: ['period_id', 'game_type', 'duration']
+          fields: ['period_id']  // Regular index for performance
         },
         {
           fields: ['game_type', 'duration']
@@ -96,28 +90,6 @@ class GamePeriod extends Model {
         }
       ]
     });
-
-    // Ensure all required methods are available
-    if (!model.findOne) {
-      model.findOne = async function(options) {
-        return await this.findOne(options);
-      };
-    }
-    if (!model.create) {
-      model.create = async function(values, options) {
-        return await this.create(values, options);
-      };
-    }
-    if (!model.update) {
-      model.update = async function(values, options) {
-        return await this.update(values, options);
-      };
-    }
-    if (!model.findAll) {
-      model.findAll = async function(options) {
-        return await this.findAll(options);
-      };
-    }
 
     return model;
   }

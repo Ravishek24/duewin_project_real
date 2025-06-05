@@ -228,10 +228,19 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
                     return;
                 }
                 
-                const result = await gameLogicService.processBet({
+                // Map the incoming data to the expected format
+                const mappedData = {
                     userId: socket.user.userId || socket.user.id,
-                    ...data
-                });
+                    gameType: data.gameType,
+                    duration: data.duration,
+                    periodId: data.periodId,
+                    betType: data.type,
+                    betValue: data.selection,
+                    betAmount: data.amount,
+                    timeline: 'default'  // Explicitly set timeline to default
+                };
+                
+                const result = await gameLogicService.processBet(mappedData);
 
                 if (result.success) {
                     socket.emit('betPlaced', result.data);
@@ -485,7 +494,7 @@ const handlePeriodEnd = async (gameType, duration, periodId, roomId) => {
                     duration,
                     periodId,
                     message: 'Failed to process results',
-                    timestamp: new Date().toISOString()
+                    //timestamp: new Date().toISOString()
                 });
             }
         } catch (processError) {

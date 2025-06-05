@@ -58,7 +58,7 @@ async function updateBalance() {
 
         // Update balance
         await user.update({
-            wallet_balance: 1000
+            wallet_balance: 100000
         });
 
         console.log('Balance updated successfully!');
