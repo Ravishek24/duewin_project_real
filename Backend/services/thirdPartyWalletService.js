@@ -348,11 +348,12 @@ const transferToMainWallet = async (userId) => {
 /**
  * FIXED: Get balance from third-party wallet with better error handling
  * @param {number} userId - User ID
+ * @param {string} currency - Currency code (USD or EUR)
  * @returns {Promise<Object>} Balance info
  */
-const getBalance = async (userId) => {
+const getBalance = async (userId, currency = 'EUR') => {
   try {
-    console.log(`Getting balance for user ${userId}`);
+    console.log(`Getting balance for user ${userId} in ${currency}`);
     
     // Try to find wallet
     const wallet = await ThirdPartyWallet.findOne({
@@ -369,7 +370,36 @@ const getBalance = async (userId) => {
     }
     
     const balance = parseFloat(wallet.balance);
-    console.log(`Third-party wallet balance for user ${userId}: ${balance}`);
+    console.log(`Third-party wallet balance for user ${userId}: ${balance} ${wallet.currency}`);
+    
+    // If requested currency matches wallet currency, return as is
+    if (wallet.currency === currency) {
+      return {
+        success: true,
+        balance: balance,
+        currency: currency
+      };
+    }
+    
+    // If wallet is in EUR but request is for USD, convert
+    if (wallet.currency === 'EUR' && currency === 'USD') {
+      const usdBalance = balance * 1.08; // Approximate EUR to USD conversion
+      return {
+        success: true,
+        balance: usdBalance,
+        currency: 'USD'
+      };
+    }
+    
+    // If wallet is in USD but request is for EUR, convert
+    if (wallet.currency === 'USD' && currency === 'EUR') {
+      const eurBalance = balance / 1.08; // Approximate USD to EUR conversion
+      return {
+        success: true,
+        balance: eurBalance,
+        currency: 'EUR'
+      };
+    }
     
     return {
       success: true,

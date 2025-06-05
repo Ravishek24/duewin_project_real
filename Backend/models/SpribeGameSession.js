@@ -1,4 +1,4 @@
-// models/SpribeGameSession.js
+// models/SpribeGameSession.js - UPDATED FOR USD AND ASSOCIATIONS
 const { Model, DataTypes } = require('sequelize');
 
 class SpribeGameSession extends Model {
@@ -41,7 +41,7 @@ class SpribeGameSession extends Model {
             currency: {
                 type: DataTypes.STRING,
                 allowNull: false,
-                defaultValue: 'INR',
+                defaultValue: 'USD',
                 comment: 'Game currency'
             },
             platform: {
@@ -96,20 +96,55 @@ class SpribeGameSession extends Model {
                     fields: ['status']
                 },
                 {
+                    fields: ['game_id']
+                },
+                {
                     fields: ['created_at']
+                },
+                {
+                    // ADDED: Composite index for finding active sessions
+                    name: 'idx_user_game_active',
+                    fields: ['user_id', 'game_id', 'status']
                 }
             ]
         });
     }
 
     static associate(models) {
+        // User association
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
                 as: 'user'
             });
         }
+
+        // ADDED: Transactions association
+        if (models.SpribeTransaction) {
+            this.hasMany(models.SpribeTransaction, {
+                foreignKey: 'session_id',
+                as: 'transactions'
+            });
+        }
+    }
+
+    // ADDED: Instance methods for session management
+    
+    // Check if session is still valid
+    isValid() {
+        const now = new Date();
+        const sessionAge = now - new Date(this.started_at);
+        const maxAge = 4 * 60 * 60 * 1000; // 4 hours
+        
+        return this.status === 'active' && sessionAge < maxAge;
+    }
+
+    // ADDED: Get session duration in seconds
+    getDuration() {
+        const endTime = this.ended_at || new Date();
+        const startTime = new Date(this.started_at);
+        return Math.floor((endTime - startTime) / 1000);
     }
 }
 
-module.exports = SpribeGameSession; 
+module.exports = SpribeGameSession;

@@ -1,88 +1,138 @@
-// utils/spriteUtils.js
+// utils/spribeUtils.js - UPDATED FOR EUR CURRENCY
 const crypto = require('crypto');
-// utils/spribeUtils.js (renamed from spriteUtils.js)
-const { spribeConfig } = require('../config/spribeConfig');
+const spribeConfig = require('../config/spribeConfig');
 
 /**
- * Generate a unique one-time token for game launch
- * @returns {string} Generated token
+ * Format amount for SPRIBE API (convert from decimal to integer units)
+ * For fiat currencies (USD/EUR): 1 unit = 1000 (e.g., 5.32 USD = 5320 units)
+ * For crypto: 1 unit = 100000000 (e.g., 0.0532 BTC = 5320000 units)
+ * @param {number} amount - Amount in decimal format (e.g., 5.32)
+ * @param {string} currency - Currency code
+ * @returns {number} - Amount in smallest units
  */
-const generateOneTimeToken = () => {
-  return crypto.randomBytes(32).toString('hex');
+const formatAmount = (amount, currency = 'USD') => {
+  const numAmount = parseFloat(amount);
+  
+  switch (currency.toUpperCase()) {
+    case 'EUR':
+    case 'USD':
+    case 'INR':
+      // Fiat currencies: 1 unit = 1000 smallest units
+      return Math.round(numAmount * 1000);
+    case 'BTC':
+      // Bitcoin: 1 BTC = 100,000,000 satoshi
+      return Math.round(numAmount * 100000000);
+    default:
+      // Default to fiat format
+      return Math.round(numAmount * 1000);
+  }
 };
 
 /**
- * Generate a game launch URL for SPRIBE games
+ * Parse amount from SPRIBE API (convert from integer units to decimal)
+ * @param {number} amount - Amount in smallest units
+ * @param {string} currency - Currency code
+ * @returns {number} - Amount in decimal format
+ */
+const parseAmount = (amount, currency = 'USD') => {
+  const numAmount = parseInt(amount);
+  
+  switch (currency.toUpperCase()) {
+    case 'EUR':
+    case 'USD':
+    case 'INR':
+      // Fiat currencies: divide by 1000
+      return numAmount / 1000;
+    case 'BTC':
+      // Bitcoin: divide by 100,000,000
+      return numAmount / 100000000;
+    default:
+      // Default to fiat format
+      return numAmount / 1000;
+  }
+};
+
+/**
+ * Generate game launch URL
  * @param {string} gameId - Game identifier
  * @param {Object} user - User object
- * @param {Object} options - Additional options
- * @returns {string} Complete game launch URL
+ * @param {Object} options - Launch options
+ * @returns {string} - Complete launch URL
  */
 const generateGameLaunchUrl = (gameId, user, options = {}) => {
-  // Generate a one-time token for this launch
-  const token = options.token || generateOneTimeToken();
-  
-  // Base URL parameters
-  const params = {
-    game: gameId,
-    user: user.user_id,
-    token: token,
-    currency: options.currency || spribeConfig.defaultCurrency,
-    operator: spribeConfig.operatorKey,
-    lang: options.language || spribeConfig.defaultLanguage,
-    callback_url: spribeConfig.callbackUrl // Use the unified callback URL
-  };
-  
-  // Add optional parameters if provided
-  if (options.returnUrl) params.return_url = options.returnUrl;
-  if (options.accountHistoryUrl) params.account_history_url = options.accountHistoryUrl;
-  if (options.ircDuration) params.irc_duration = options.ircDuration;
-  if (options.ircElapsed) params.irc_elapsed = options.ircElapsed;
-  
-  // Build query string
-  const queryString = Object.entries(params)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join('&');
-  
-  // Return complete URL
-  return `${spribeConfig.launchUrl}/${gameId}?${queryString}`;
-};
+  const {
+    currency = 'USD', // Default to USD for SPRIBE
+    token,
+    returnUrl,
+    accountHistoryUrl,
+    ircDuration,
+    ircElapsed,
+    lang = 'en'
+  } = options;
 
-/**
- * Generate the X-Spribe-Client-Signature header value
- * @param {number} timestamp - Current timestamp in seconds
- * @param {string} path - Request path including query params
- * @param {string|Object} body - Request body (can be JSON string or object)
- * @returns {string} The HMAC-SHA256 signature in hex format
- */
-const generateSignature = (timestamp, path, body = '') => {
-  const hmac = crypto.createHmac('sha256', spribeConfig.clientSecret);
-  
-  // Add timestamp and path
-  hmac.update(`${timestamp}${path}`);
-  
-  // Add body if present
-  if (body) {
-    if (typeof body === 'object') {
-      hmac.update(JSON.stringify(body));
-    } else {
-      hmac.update(body);
-    }
+  // Validate game exists in staging
+  if (!spribeConfig.availableGames.includes(gameId)) {
+    throw new Error(`Game ${gameId} is not available in staging environment`);
+  }
+
+  // Get operator key from environment variable or config
+  const operatorKey = process.env.SPRIBE_OPERATOR_KEY || spribeConfig.operatorKey;
+  if (!operatorKey) {
+    throw new Error('SPRIBE operator key is not configured');
+  }
+
+  // Build query parameters
+  const params = new URLSearchParams({
+    user: user.user_id.toString(),
+    token: token,
+    lang: lang,
+    currency: currency,
+    operator: operatorKey, // Use operator key from environment or config
+    callback_url: spribeConfig.callbackUrl // Add callback URL
+  });
+
+  // Add optional parameters if provided
+  if (returnUrl) {
+    params.append('return_url', returnUrl);
   }
   
-  // Return signature in hex format
-  return hmac.digest('hex');
+  if (accountHistoryUrl) {
+    params.append('account_history_url', accountHistoryUrl);
+  }
+  
+  if (ircDuration) {
+    params.append('irc_duration', ircDuration.toString());
+  }
+  
+  if (ircElapsed) {
+    params.append('irc_elapsed', ircElapsed.toString());
+  }
+
+  // Construct final URL
+  const launchUrl = `${spribeConfig.launchUrl}/${gameId}?${params.toString()}`;
+  console.log('Generated SPRIBE launch URL:', {
+    gameId,
+    userId: user.user_id,
+    currency,
+    tokenLength: token?.length,
+    operator: operatorKey,
+    url: launchUrl
+  });
+
+  return launchUrl;
 };
 
 /**
- * Generate all required security headers for SPRIBE API requests
- * @param {string} path - Request path including query params
- * @param {string|Object} body - Request body
- * @returns {Object} Headers object with all required security headers
+ * Generate security headers for API requests
+ * @param {string} requestUri - Request URI with query parameters
+ * @param {Object|string} requestBody - Request body (for POST requests)
+ * @returns {Object} - Security headers object
  */
-const generateSecurityHeaders = (path, body = '') => {
-  const timestamp = Math.floor(Date.now() / 1000); // Current time in seconds
-  const signature = generateSignature(timestamp, path, body);
+const generateSecurityHeaders = (requestUri, requestBody = null) => {
+  const timestamp = Math.floor(Date.now() / 1000);
+  
+  // Create signature
+  const signature = createSignature(timestamp, requestUri, requestBody);
   
   return {
     'X-Spribe-Client-ID': spribeConfig.clientId,
@@ -93,71 +143,144 @@ const generateSecurityHeaders = (path, body = '') => {
 };
 
 /**
- * Validate a SPRIBE API signature from incoming requests
- * @param {string} clientId - Client ID from request header
- * @param {number} timestamp - Timestamp from request header
- * @param {string} signature - Signature from request header
- * @param {string} path - Request path
+ * Create signature for request validation
+ * @param {number} timestamp - Unix timestamp
+ * @param {string} path - Request path with query parameters
  * @param {Object|string} body - Request body
- * @returns {boolean} True if signature is valid, false otherwise
+ * @returns {string} - Generated signature
  */
-const validateSignature = (clientId, timestamp, signature, path, body = '') => {
-  // Check if client ID matches our expected ID
-  if (clientId !== spribeConfig.clientId) {
-    return false;
+const createSignature = (timestamp, path, body) => {
+  try {
+    const hmac = crypto.createHmac('sha256', spribeConfig.clientSecret);
+    
+    // Concatenate in exact order: timestamp + path + body
+    const timestampStr = timestamp.toString();
+    const bodyStr = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : '';
+    
+    // Update in exact order as per SPRIBE docs
+    hmac.update(timestampStr);
+    hmac.update(path);
+    if (bodyStr) {
+      hmac.update(bodyStr);
+    }
+    
+    return hmac.digest('hex');
+  } catch (error) {
+    console.error('Error creating signature:', error);
+    throw new Error(`Error creating signature: ${error.message}`);
   }
-  
-  // Check if timestamp is within valid range (prevent replay attacks)
-  const currentTime = Math.floor(Date.now() / 1000);
-  if (currentTime - timestamp > spribeConfig.signatureExpirationTime) {
-    return false;
-  }
-  
-  // Generate expected signature
-  const expectedSignature = generateSignature(timestamp, path, body);
-  
-  // Compare signatures (case-insensitive)
-  return signature.toLowerCase() === expectedSignature.toLowerCase();
 };
 
 /**
- * Convert amount to the format expected by SPRIBE
- * @param {number} amount - Amount in standard unit (e.g., 5.32 USD)
- * @param {string} currency - Currency code
- * @returns {number} Amount in SPRIBE format (integer)
+ * Validate incoming request signature from SPRIBE
+ * @param {string} clientId - Client ID from header
+ * @param {string} timestamp - Timestamp from header
+ * @param {string} signature - Signature from header
+ * @param {string} path - Request path with query parameters
+ * @param {Object} body - Request body
+ * @returns {boolean} - True if signature is valid
  */
-const formatAmount = (amount, currency) => {
-  // Crypto currencies use 8 decimal places (10^8)
-  const cryptoCurrencies = ['BTC', 'ETH', 'USDT', 'XRP', 'LTC'];
-  
-  // Fiat currencies use 3 decimal places (10^3)
-  const multiplier = cryptoCurrencies.includes(currency) ? 100000000 : 1000;
-  
-  return Math.round(parseFloat(amount) * multiplier);
+const validateSignature = (clientId, timestamp, signature, path, body) => {
+  try {
+    console.log('Validating signature:', {
+      receivedClientId: clientId,
+      expectedClientId: spribeConfig.clientId,
+      receivedTimestamp: timestamp,
+      currentTimestamp: Math.floor(Date.now() / 1000),
+      receivedSignature: signature,
+      path,
+      body
+    });
+
+    // Validate client ID
+    if (clientId !== spribeConfig.clientId) {
+      console.error('Invalid client ID:', {
+        received: clientId,
+        expected: spribeConfig.clientId
+      });
+      return false;
+    }
+    
+    // Validate timestamp (within 5 minutes)
+    const now = Math.floor(Date.now() / 1000);
+    const requestTime = parseInt(timestamp);
+    
+    if (Math.abs(now - requestTime) > spribeConfig.signatureExpirationTime) {
+      console.error('Request timestamp expired:', {
+        requestTime,
+        currentTime: now,
+        difference: Math.abs(now - requestTime),
+        maxAllowed: spribeConfig.signatureExpirationTime
+      });
+      return false;
+    }
+    
+    // Generate expected signature
+    const expectedSignature = createSignature(requestTime, path, body);
+    
+    console.log('Signature comparison:', {
+      received: signature,
+      expected: expectedSignature,
+      matches: signature === expectedSignature
+    });
+    
+    return signature === expectedSignature;
+  } catch (error) {
+    console.error('Error validating signature:', error);
+    return false;
+  }
 };
 
 /**
- * Parse amount from SPRIBE format to standard format
- * @param {number} amount - Amount in SPRIBE format (integer)
- * @param {string} currency - Currency code
- * @returns {number} Amount in standard unit (e.g., 5.32 USD)
+ * Validate request IP against allowed SPRIBE IPs
+ * @param {string} clientIP - Client IP address
+ * @returns {boolean} - True if IP is allowed
  */
-const parseAmount = (amount, currency) => {
-  // Crypto currencies use 8 decimal places (10^8)
-  const cryptoCurrencies = ['BTC', 'ETH', 'USDT', 'XRP', 'LTC'];
+const validateIP = (clientIP) => {
+  // Remove IPv6 prefix if present
+  const cleanIP = clientIP.replace(/^::ffff:/, '');
   
-  // Fiat currencies use 3 decimal places (10^3)
-  const divisor = cryptoCurrencies.includes(currency) ? 100000000 : 1000;
+  console.log('Validating IP:', {
+    originalIP: clientIP,
+    cleanIP,
+    environment: process.env.NODE_ENV,
+    allowedIPs: spribeConfig.allowedIPs
+  });
   
-  return parseFloat(amount) / divisor;
+  // In development or staging, allow all IPs
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('Development/Staging mode: Allowing all IPs');
+    return true;
+  }
+  
+  // In production, only allow SPRIBE IPs
+  const isAllowed = spribeConfig.allowedIPs.includes(cleanIP);
+  console.log('IP validation result:', {
+    cleanIP,
+    isAllowed,
+    allowedIPs: spribeConfig.allowedIPs
+  });
+  
+  return isAllowed;
+};
+
+/**
+ * Get user's preferred currency with USD as default for SPRIBE
+ * @param {Object} user - User object
+ * @returns {string} - Currency code
+ */
+const getUserCurrency = (user) => {
+  // Always return USD for SPRIBE games
+  return 'USD';
 };
 
 module.exports = {
-  generateOneTimeToken,
-  generateGameLaunchUrl,
-  generateSignature,
-  generateSecurityHeaders,
-  validateSignature,
   formatAmount,
-  parseAmount
+  parseAmount,
+  generateGameLaunchUrl,
+  generateSecurityHeaders,
+  createSignature,
+  validateSignature,
+  validateIP,
+  getUserCurrency
 };

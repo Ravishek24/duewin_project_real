@@ -116,6 +116,9 @@ router.use('/seamless-wallet', auth, seamlessWalletRoutes);
 router.use('/websocket-debug', websocketDebugRoutes);
 router.use('/wallet', auth, walletRoutes);
 
+// SPRIBE routes - public endpoints first, then protected ones
+router.use('/spribe', spribeRoutes);  // This will handle both public and protected routes
+
 // PROTECTED ROUTES (require authentication)
 router.use('/bank-accounts', auth, bankRoutes);
 router.use('/usdt-accounts', auth, usdtRoutes);
@@ -123,9 +126,6 @@ router.use('/games', auth, gameRoutes);
 router.use('/internal', auth, internalGameRoutes);
 router.use('/payments', auth, paymentRoutes);
 router.use('/payment-gateways', auth, paymentGatewayRoutes);
-router.use('/spribe', auth, spribeRoutes);
-router.use('/vault', auth, vaultRoutes);
-router.use('/api', auth, activityRoutes);
 
 // Other protected routes
 router.use('/referrals', auth, referralRoutes);

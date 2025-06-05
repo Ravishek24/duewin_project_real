@@ -1,4 +1,4 @@
-// models/SpribeTransaction.js
+// models/SpribeTransaction.js - UPDATED FOR USD AND ASSOCIATIONS
 const { Model, DataTypes } = require('sequelize');
 
 class SpribeTransaction extends Model {
@@ -37,7 +37,7 @@ class SpribeTransaction extends Model {
             currency: {
                 type: DataTypes.STRING,
                 allowNull: false,
-                defaultValue: 'INR'
+                defaultValue: 'USD'
             },
             provider: {
                 type: DataTypes.STRING,
@@ -74,12 +74,12 @@ class SpribeTransaction extends Model {
             old_balance: {
                 type: DataTypes.BIGINT,
                 allowNull: false,
-                comment: 'Balance before transaction'
+                comment: 'Balance before transaction (in smallest currency units)'
             },
             new_balance: {
                 type: DataTypes.BIGINT,
                 allowNull: false,
-                comment: 'Balance after transaction'
+                comment: 'Balance after transaction (in smallest currency units)'
             },
             status: {
                 type: DataTypes.ENUM('pending', 'completed', 'failed', 'rolled_back'),
@@ -90,6 +90,17 @@ class SpribeTransaction extends Model {
                 type: DataTypes.STRING,
                 allowNull: true,
                 comment: 'Reference to original bet transaction for wins'
+            },
+            // ADDED: Additional metadata
+            platform: {
+                type: DataTypes.ENUM('mobile', 'desktop'),
+                allowNull: true,
+                comment: 'Platform where transaction occurred'
+            },
+            ip_address: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'IP address where transaction occurred'
             },
             created_at: {
                 type: DataTypes.DATE,
@@ -127,18 +138,31 @@ class SpribeTransaction extends Model {
                 },
                 {
                     fields: ['created_at']
+                },
+                {
+                    // ADDED: Index for finding related transactions
+                    name: 'idx_withdraw_provider_tx',
+                    fields: ['withdraw_provider_tx_id']
+                },
+                {
+                    // ADDED: Composite index for session transactions
+                    name: 'idx_session_type_status',
+                    fields: ['session_id', 'type', 'status']
                 }
             ]
         });
     }
 
     static associate(models) {
+        // User association
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
                 as: 'user'
             });
         }
+        
+        // FIXED: Session association
         if (models.SpribeGameSession) {
             this.belongsTo(models.SpribeGameSession, {
                 foreignKey: 'session_id',
@@ -146,6 +170,79 @@ class SpribeTransaction extends Model {
             });
         }
     }
+
+    // ADDED: Instance methods for transaction management
+    
+    // Get amount in decimal format
+    getDecimalAmount() {
+        // For EUR/USD: divide by 100 to get from cents to euros/dollars
+        switch (this.currency.toUpperCase()) {
+            case 'EUR':
+            case 'USD':
+            case 'INR':
+                return this.amount / 100;
+            case 'BTC':
+                return this.amount / 100000000; // satoshi to BTC
+            default:
+                return this.amount / 100; // default to fiat format
+        }
+    }
+
+    // Get old balance in decimal format
+    getDecimalOldBalance() {
+        switch (this.currency.toUpperCase()) {
+            case 'EUR':
+            case 'USD':
+            case 'INR':
+                return this.old_balance / 100;
+            case 'BTC':
+                return this.old_balance / 100000000;
+            default:
+                return this.old_balance / 100;
+        }
+    }
+
+    // Get new balance in decimal format
+    getDecimalNewBalance() {
+        switch (this.currency.toUpperCase()) {
+            case 'EUR':
+            case 'USD':
+            case 'INR':
+                return this.new_balance / 100;
+            case 'BTC':
+                return this.new_balance / 100000000;
+            default:
+                return this.new_balance / 100;
+        }
+    }
+
+    // Check if transaction can be rolled back
+    canRollback() {
+        return this.status === 'completed' && 
+               ['bet', 'win'].includes(this.type) &&
+               !this.isRolledBack();
+    }
+
+    // Check if transaction has been rolled back
+    isRolledBack() {
+        return this.status === 'rolled_back';
+    }
+
+    // Get transaction summary for display
+    getSummary() {
+        return {
+            id: this.id,
+            type: this.type,
+            amount: this.getDecimalAmount(),
+            currency: this.currency,
+            status: this.status,
+            game_id: this.game_id,
+            provider: this.provider,
+            created_at: this.created_at,
+            operator_tx_id: this.operator_tx_id,
+            provider_tx_id: this.provider_tx_id
+        };
+    }
 }
 
-module.exports = SpribeTransaction; 
+module.exports = SpribeTransaction;

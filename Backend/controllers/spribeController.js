@@ -8,8 +8,9 @@ const {
     handleRollback,
     listGames
 } = require('../services/spribeService');
-const { validateSignature } = require('../utils/spribeUtils');
+const { validateSignature, validateIP } = require('../utils/spribeUtils');
 const spribeService = require('../services/spribeService');
+const spribeConfig = require('../config/spribeConfig');
 
 /**
  * Get a list of available SPRIBE games
@@ -18,20 +19,103 @@ const spribeService = require('../services/spribeService');
  */
 const getGamesController = async (req, res) => {
     try {
+        console.log('📋 Fetching SPRIBE games list...');
+        console.log('Available games:', spribeConfig.availableGames);
+        console.log('Providers:', spribeConfig.providers);
+        
         const result = await listGames();
+        
+        console.log('Games list result:', {
+            success: result.success,
+            gamesCount: result.games?.length || 0,
+            error: result.message
+        });
         
         if (result.success) {
             return res.status(200).json(result);
         } else {
+            console.error('Failed to list games:', result.message);
             return res.status(400).json(result);
         }
     } catch (error) {
         console.error('Error getting games list:', error);
+        console.error('Error stack:', error.stack);
         res.status(500).json({
             success: false,
-            message: 'Server error retrieving games list'
+            message: 'Server error retrieving games list',
+            error: error.message
         });
     }
+};
+
+const validateSpribeRequest = (req) => {
+    // 1. Validate IP address
+    const clientIP = req.headers['x-forwarded-for'] || 
+                    req.headers['x-real-ip'] || 
+                    req.connection.remoteAddress;
+    
+    console.log('Validating SPRIBE request:', {
+        headers: {
+            'x-forwarded-for': req.headers['x-forwarded-for'],
+            'x-real-ip': req.headers['x-real-ip'],
+            'remote-address': req.connection.remoteAddress
+        },
+        clientIP,
+        environment: process.env.NODE_ENV || 'development',
+        nodeEnv: process.env.NODE_ENV,
+        isProduction: process.env.NODE_ENV === 'production'
+    });
+    
+    if (!validateIP(clientIP)) {
+        console.error(`Unauthorized IP attempt: ${clientIP}`);
+        return {
+            isValid: false,
+            code: 403,
+            message: 'Unauthorized IP address'
+        };
+    }
+    
+    // 2. Validate required headers
+    const clientId = req.header('X-Spribe-Client-ID');
+    const timestamp = req.header('X-Spribe-Client-TS');
+    const signature = req.header('X-Spribe-Client-Signature');
+    
+    console.log('Validating SPRIBE headers:', {
+        clientId,
+        timestamp,
+        signature: signature ? 'present' : 'missing',
+        expectedClientId: spribeConfig.clientId,
+        environment: process.env.NODE_ENV || 'development'
+    });
+    
+    if (!clientId || !timestamp || !signature) {
+        return {
+            isValid: false,
+            code: 400,
+            message: 'Missing required security headers'
+        };
+    }
+    
+    // 3. Validate signature
+    const fullPath = req.originalUrl;
+    const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
+    
+    console.log('Signature validation result:', {
+        isValidSignature,
+        fullPath,
+        body: req.body,
+        environment: process.env.NODE_ENV || 'development'
+    });
+    
+    if (!isValidSignature) {
+        return {
+            isValid: false,
+            code: 413,
+            message: 'Invalid Client-Signature'
+        };
+    }
+    
+    return { isValid: true };
 };
 
 /**
@@ -60,42 +144,53 @@ const getLaunchUrlController = async (req, res) => {
     }
 };
 
+const logSpribeRequest = (req, actionName) => {
+    console.log(`\n===== SPRIBE ${actionName} REQUEST =====`);
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Headers:', {
+        'X-Spribe-Client-ID': req.header('X-Spribe-Client-ID'),
+        'X-Spribe-Client-TS': req.header('X-Spribe-Client-TS'),
+        'X-Spribe-Client-Signature': req.header('X-Spribe-Client-Signature'),
+        'Content-Type': req.header('Content-Type'),
+        'IP': req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection.remoteAddress
+    });
+    console.log('Original URL:', req.originalUrl);
+    console.log('Body:', JSON.stringify(req.body));
+    console.log('========================================\n');
+};
+
+const logSpribeResponse = (actionName, response) => {
+    console.log(`\n===== SPRIBE ${actionName} RESPONSE =====`);
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Response:', JSON.stringify(response));
+    console.log('========================================\n');
+};
+
 /**
  * Handle authentication request from SPRIBE
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
 const authCallbackController = async (req, res) => {
+    logSpribeRequest(req, 'AUTH');
     try {
-        // Verify the request signature
         const clientId = req.header('X-Spribe-Client-ID');
         const timestamp = req.header('X-Spribe-Client-TS');
         const signature = req.header('X-Spribe-Client-Signature');
-        
-        // Get the full path including query parameters
         const fullPath = req.originalUrl;
-        
-        // Validate signature
         const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
-        
         if (!isValidSignature) {
-            return res.status(200).json({
-                code: 413,
-                message: 'Invalid Client-Signature'
-            });
+            const resp = { code: 413, message: 'Invalid Client-Signature' };
+            logSpribeResponse('AUTH', resp);
+            return res.status(200).json(resp);
         }
-        
-        // Process authentication request
         const result = await handleAuth(req.body);
-        
-        // Always return HTTP 200 with proper SPRIBE response codes
+        logSpribeResponse('AUTH', result);
         return res.status(200).json(result);
     } catch (error) {
-        console.error('Error handling auth callback:', error);
-        res.status(200).json({
-            code: 500,
-            message: 'Internal server error'
-        });
+        const resp = { code: 500, message: 'Internal server error' };
+        logSpribeResponse('AUTH', resp);
+        res.status(200).json(resp);
     }
 };
 
@@ -105,36 +200,25 @@ const authCallbackController = async (req, res) => {
  * @param {Object} res - Express response object
  */
 const infoCallbackController = async (req, res) => {
+    logSpribeRequest(req, 'INFO');
     try {
-        // Verify the request signature
         const clientId = req.header('X-Spribe-Client-ID');
         const timestamp = req.header('X-Spribe-Client-TS');
         const signature = req.header('X-Spribe-Client-Signature');
-        
-        // Get the full path including query parameters
         const fullPath = req.originalUrl;
-        
-        // Validate signature
         const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
-        
         if (!isValidSignature) {
-            return res.status(200).json({
-                code: 413,
-                message: 'Invalid Client-Signature'
-            });
+            const resp = { code: 413, message: 'Invalid Client-Signature' };
+            logSpribeResponse('INFO', resp);
+            return res.status(200).json(resp);
         }
-        
-        // Process player info request
         const result = await handlePlayerInfo(req.body);
-        
-        // Always return HTTP 200 with proper SPRIBE response codes
+        logSpribeResponse('INFO', result);
         return res.status(200).json(result);
     } catch (error) {
-        console.error('Error handling info callback:', error);
-        res.status(200).json({
-            code: 500,
-            message: 'Internal server error'
-        });
+        const resp = { code: 500, message: 'Internal server error' };
+        logSpribeResponse('INFO', resp);
+        res.status(200).json(resp);
     }
 };
 
@@ -144,36 +228,25 @@ const infoCallbackController = async (req, res) => {
  * @param {Object} res - Express response object
  */
 const withdrawCallbackController = async (req, res) => {
+    logSpribeRequest(req, 'WITHDRAW');
     try {
-        // Verify the request signature
         const clientId = req.header('X-Spribe-Client-ID');
         const timestamp = req.header('X-Spribe-Client-TS');
         const signature = req.header('X-Spribe-Client-Signature');
-        
-        // Get the full path including query parameters
         const fullPath = req.originalUrl;
-        
-        // Validate signature
         const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
-        
         if (!isValidSignature) {
-            return res.status(200).json({
-                code: 413,
-                message: 'Invalid Client-Signature'
-            });
+            const resp = { code: 413, message: 'Invalid Client-Signature' };
+            logSpribeResponse('WITHDRAW', resp);
+            return res.status(200).json(resp);
         }
-        
-        // Process withdraw request
         const result = await handleWithdraw(req.body);
-        
-        // Always return HTTP 200 with proper SPRIBE response codes
+        logSpribeResponse('WITHDRAW', result);
         return res.status(200).json(result);
     } catch (error) {
-        console.error('Error handling withdraw callback:', error);
-        res.status(200).json({
-            code: 500,
-            message: 'Internal server error'
-        });
+        const resp = { code: 500, message: 'Internal server error' };
+        logSpribeResponse('WITHDRAW', resp);
+        res.status(200).json(resp);
     }
 };
 
@@ -183,36 +256,25 @@ const withdrawCallbackController = async (req, res) => {
  * @param {Object} res - Express response object
  */
 const depositCallbackController = async (req, res) => {
+    logSpribeRequest(req, 'DEPOSIT');
     try {
-        // Verify the request signature
         const clientId = req.header('X-Spribe-Client-ID');
         const timestamp = req.header('X-Spribe-Client-TS');
         const signature = req.header('X-Spribe-Client-Signature');
-        
-        // Get the full path including query parameters
         const fullPath = req.originalUrl;
-        
-        // Validate signature
         const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
-        
         if (!isValidSignature) {
-            return res.status(200).json({
-                code: 413,
-                message: 'Invalid Client-Signature'
-            });
+            const resp = { code: 413, message: 'Invalid Client-Signature' };
+            logSpribeResponse('DEPOSIT', resp);
+            return res.status(200).json(resp);
         }
-        
-        // Process deposit request
         const result = await handleDeposit(req.body);
-        
-        // Always return HTTP 200 with proper SPRIBE response codes
+        logSpribeResponse('DEPOSIT', result);
         return res.status(200).json(result);
     } catch (error) {
-        console.error('Error handling deposit callback:', error);
-        res.status(200).json({
-            code: 500,
-            message: 'Internal server error'
-        });
+        const resp = { code: 500, message: 'Internal server error' };
+        logSpribeResponse('DEPOSIT', resp);
+        res.status(200).json(resp);
     }
 };
 
@@ -222,148 +284,149 @@ const depositCallbackController = async (req, res) => {
  * @param {Object} res - Express response object
  */
 const rollbackCallbackController = async (req, res) => {
+    logSpribeRequest(req, 'ROLLBACK');
     try {
-        // Verify the request signature
         const clientId = req.header('X-Spribe-Client-ID');
         const timestamp = req.header('X-Spribe-Client-TS');
         const signature = req.header('X-Spribe-Client-Signature');
-        
-        // Get the full path including query parameters
         const fullPath = req.originalUrl;
-        
-        // Validate signature
         const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
-        
         if (!isValidSignature) {
-            return res.status(200).json({
-                code: 413,
-                message: 'Invalid Client-Signature'
-            });
+            const resp = { code: 413, message: 'Invalid Client-Signature' };
+            logSpribeResponse('ROLLBACK', resp);
+            return res.status(200).json(resp);
         }
-        
-        // Process rollback request
         const result = await handleRollback(req.body);
-        
-        // Always return HTTP 200 with proper SPRIBE response codes
+        logSpribeResponse('ROLLBACK', result);
         return res.status(200).json(result);
     } catch (error) {
-        console.error('Error handling rollback callback:', error);
-        res.status(200).json({
-            code: 500,
-            message: 'Internal server error'
-        });
+        const resp = { code: 500, message: 'Internal server error' };
+        logSpribeResponse('ROLLBACK', resp);
+        res.status(200).json(resp);
     }
 };
 
 /**
- * Unified callback handler for Spribe
- * 
- * This single endpoint replaces the multiple endpoints that were previously used
- * for different Spribe operations (auth, player info, withdraw, deposit, rollback).
- * 
- * How it works:
- * 1. Spribe sends all callback requests to this single endpoint
- * 2. Each request includes an 'action' field that identifies the operation type
- * 3. Based on the action type, we route the request to the appropriate handler in spribeService
- * 
- * Expected action types from Spribe:
- * - 'auth': Player authentication
- * - 'player_info': Retrieve player information
- * - 'withdraw': Deduct money from player's wallet (betting)
- * - 'deposit': Add money to player's wallet (winning)
- * - 'rollback': Reverse a previous transaction
- * 
- * The spribeUtils.generateGameLaunchUrl function includes this callback URL
- * in the game launch parameters, so Spribe knows where to send all requests.
- * 
- * @param {Object} req - Request object
- * @param {Object} res - Response object
+ * Handle all SPRIBE callbacks
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
  */
 const handleCallback = async (req, res) => {
   try {
-    // IMPORTANT: Verify the request signature first (per Spribe v1.9.0 requirements)
-    const clientId = req.header('X-Spribe-Client-ID');
-    const timestamp = req.header('X-Spribe-Client-TS');
-    const signature = req.header('X-Spribe-Client-Signature');
-    
-    // Get the full path including query parameters
-    const fullPath = req.originalUrl;
-    
-    // Log incoming headers for debugging
-    console.log('Incoming Spribe headers:', { 
-      clientId, 
-      timestamp, 
-      signature,
-      path: fullPath
+    // Log environment and configuration
+    console.log('SPRIBE Environment:', {
+      NODE_ENV: process.env.NODE_ENV,
+      SPRIBE_CLIENT_ID: process.env.SPRIBE_CLIENT_ID,
+      SPRIBE_OPERATOR_KEY: process.env.SPRIBE_OPERATOR_KEY,
+      SPRIBE_CALLBACK_URL: process.env.SPRIBE_CALLBACK_URL
     });
-    
-    // Validate signature
-    const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
-    
-    if (!isValidSignature) {
-      console.error('Invalid signature in Spribe callback');
-      // IMPORTANT: Per documentation, always return HTTP 200 with appropriate code
+
+    // Log request details
+    console.log('SPRIBE Callback Request:', {
+      method: req.method,
+      url: req.originalUrl,
+      headers: req.headers,
+      body: req.body,
+      ip: req.ip,
+      ips: req.ips,
+      protocol: req.protocol,
+      secure: req.secure
+    });
+
+    // STEP 1: Enhanced security validation
+    const securityCheck = validateSpribeRequest(req);
+    if (!securityCheck.isValid) {
+      console.error('SPRIBE security validation failed:', securityCheck.message);
       return res.status(200).json({
-        code: 413,
-        message: 'Invalid Client-Signature'
+        code: securityCheck.code,
+        message: securityCheck.message
       });
     }
     
-    // Get the action type from the request
-    const { action } = req.body;
-    
-    // Log the incoming request (useful for debugging)
-    console.log(`Received Spribe callback with action: ${action}`, { 
-      body: req.body,
-      headers: req.headers
+    // STEP 2: Log incoming request for monitoring
+    console.log('Valid SPRIBE callback received:', {
+      timestamp: new Date().toISOString(),
+      ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+      action: req.body.action,
+      user_id: req.body.user_id,
+      provider_tx_id: req.body.provider_tx_id
     });
     
-    // Variable for the result
-    let result;
+    // STEP 3: Extract action and validate
+    const { action } = req.body;
     
-    // Handle the request based on the action type
+    if (!action) {
+      return res.status(200).json({
+        code: 400,
+        message: 'Missing action parameter'
+      });
+    }
+    
+    // STEP 4: Handle the request based on action type
+    let result;
     switch (action) {
       case 'auth':
         result = await spribeService.handleAuth(req.body);
         break;
-        
       case 'player_info':
         result = await spribeService.handlePlayerInfo(req.body);
         break;
-        
-      case 'withdraw': // Betting - deduct money
+      case 'withdraw':
         result = await spribeService.handleWithdraw(req.body);
         break;
-        
-      case 'deposit': // Winning - add money
+      case 'deposit':
         result = await spribeService.handleDeposit(req.body);
         break;
-        
-      case 'rollback': // Rollback previous transaction
+      case 'rollback':
         result = await spribeService.handleRollback(req.body);
         break;
-        
       default:
-        console.error(`Unsupported Spribe action: ${action}`);
-        // IMPORTANT: Per documentation, always return HTTP 200 with appropriate code
         return res.status(200).json({
           code: 400,
-          message: `Unsupported action: ${action}`
+          message: `Invalid action: ${action}`
         });
     }
     
-    // Log the response (useful for debugging)
-    console.log(`Sending Spribe callback response for action ${action}:`, result);
-    
-    // Always return HTTP 200 with the result from the service (per Spribe documentation)
+    // STEP 5: Always return HTTP 200 with proper SPRIBE response format
     return res.status(200).json(result);
-    
   } catch (error) {
-    console.error('Error handling Spribe callback:', error);
-    // IMPORTANT: Per documentation, always return HTTP 200 with appropriate code
+    console.error('Error handling SPRIBE callback:', error);
     return res.status(200).json({
       code: 500,
       message: 'Internal server error'
+    });
+  }
+};
+
+const healthCheck = async (req, res) => {
+  try {
+    // Check if all required config is present
+    const spribeConfig = require('../config/spribeConfig');
+    const configCheck = {
+      hasClientId: !!spribeConfig.clientId,
+      hasClientSecret: !!spribeConfig.clientSecret,
+      hasOperatorKey: !!spribeConfig.operatorKey,
+      environment: 'staging',
+      availableGames: spribeConfig.availableGames.length,
+      supportedCurrencies: spribeConfig.supportedCurrencies
+    };
+    
+    res.json({
+      success: true,
+      message: 'SPRIBE integration health check',
+      timestamp: new Date().toISOString(),
+      config: configCheck,
+      endpoints: {
+        games: '/api/spribe/games',
+        launch: '/api/spribe/launch/:gameId',
+        callback: '/api/spribe/callback'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'SPRIBE integration health check failed',
+      error: error.message
     });
   }
 };
@@ -376,5 +439,6 @@ module.exports = {
     withdrawCallbackController,
     depositCallbackController,
     rollbackCallbackController,
-    handleCallback
+    handleCallback,
+    healthCheck,
 };

@@ -199,7 +199,7 @@ router.get('/:gameType/:duration/history', async (req, res) => {
 
 // Middleware for all routes below
 router.use(auth);
-router.use(requirePhoneVerification);
+//router.use(requirePhoneVerification);
 
 // Get current active periods for all games
 router.get('/active-periods', async (req, res) => {
@@ -390,28 +390,31 @@ router.post('/:gameType/:duration/bet',
 router.get('/:gameType/:duration/my-bets', async (req, res) => {
   try {
     const { gameType, duration } = req.params;
-    const { page = 1, limit = 10, periodId } = req.query;
+    const { page = 1, limit = 10, periodId, status } = req.query;
     const userId = req.user.user_id;
 
     const gameTypeLower = gameType.toLowerCase();
     const mappedGameType = gameTypeLower === '5d' ? 'fiveD' : gameTypeLower;
     
-    // Get user's bets (implement based on your database structure)
-    const userBets = await getUserBets(userId, mappedGameType, parseInt(duration), {
+    // Get user's bets using the proper implementation
+    const result = await gameLogicService.getUserBetHistory(userId, mappedGameType, parseInt(duration), {
       page: parseInt(page),
       limit: parseInt(limit),
-      periodId
+      periodId,
+      status
     });
 
-    res.json({
-      success: true,
-      data: userBets
-    });
+    if (!result.success) {
+      return res.status(500).json(result);
+    }
+
+    res.json(result);
   } catch (error) {
     console.error('Error getting user bets:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to get user bets'
+      message: 'Failed to get user bets',
+      error: error.message
     });
   }
 });
