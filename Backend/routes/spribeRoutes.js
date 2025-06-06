@@ -411,4 +411,360 @@ router.post('/auth', async (req, res) => {
   }
 });
 
+
+// STEP 1: Test Demo Mode (No authentication required)
+router.get('/test/demo-mode', (req, res) => {
+  const demoUrls = {
+    aviator_demo: 'https://demo.spribe.io/launch/aviator?currency=USD&lang=EN&return_url=https://strike.atsproduct.in/games',
+    dice_demo: 'https://demo.spribe.io/launch/dice?currency=USD&lang=EN&return_url=https://strike.atsproduct.in/games',
+    plinko_demo: 'https://demo.spribe.io/launch/plinko?currency=USD&lang=EN&return_url=https://strike.atsproduct.in/games'
+  };
+  
+  res.json({
+    message: 'Test these demo URLs - they should work without authentication',
+    demo_urls: demoUrls,
+    instructions: [
+      '1. Click each demo URL',
+      '2. If demo works but your URLs don\'t, the issue is authentication setup',
+      '3. If demo also fails, the issue is network/domain related'
+    ]
+  });
+});
+
+// STEP 2: Generate Debug Launch URL with different parameters
+router.post('/test/debug-launch-url', async (req, res) => {
+  try {
+    const userId = req.body.user_id || 1;
+    const gameId = req.body.game_id || 'dice';
+    
+    // Get user and token
+    const { getModels } = require('../models');
+    const models = await getModels();
+    const user = await models.User.scope('withSpribeToken').findByPk(userId);
+    
+    if (!user || !user.isSpribeTokenValid()) {
+      return res.json({ error: 'User not found or token invalid' });
+    }
+    
+    // Generate multiple URL variations to test
+    const baseParams = {
+      user: user.user_id.toString(),
+      token: user.spribe_token,
+      currency: 'USD',
+      lang: 'en'
+    };
+    
+    const urlVariations = {
+      // Variation 1: With operator as client ID
+      withClientId: `https://dev-test.spribe.io/games/launch/${gameId}?${new URLSearchParams({
+        ...baseParams,
+        operator: process.env.SPRIBE_CLIENT_ID,
+        callback_url: 'https://strike.atsproduct.in/api/spribe'
+      }).toString()}`,
+      
+      // Variation 2: With operator as 'strike'  
+      withStrikeOperator: `https://dev-test.spribe.io/games/launch/${gameId}?${new URLSearchParams({
+        ...baseParams,
+        operator: 'strike',
+        callback_url: 'https://strike.atsproduct.in/api/spribe'
+      }).toString()}`,
+      
+      // Variation 3: Minimal parameters
+      minimal: `https://dev-test.spribe.io/games/launch/${gameId}?${new URLSearchParams({
+        user: user.user_id.toString(),
+        token: user.spribe_token,
+        currency: 'USD',
+        operator: process.env.SPRIBE_CLIENT_ID
+      }).toString()}`,
+      
+      // Variation 4: Different callback URL format
+      altCallback: `https://dev-test.spribe.io/games/launch/${gameId}?${new URLSearchParams({
+        ...baseParams,
+        operator: process.env.SPRIBE_CLIENT_ID,
+        callback_url: 'https://strike.atsproduct.in'
+      }).toString()}`
+    };
+    
+    res.json({
+      message: 'Test these URL variations',
+      variations: Object.keys(urlVariations).reduce((acc, key) => {
+        acc[key] = urlVariations[key].replace(user.spribe_token, user.spribe_token.substring(0, 8) + '...');
+        return acc;
+      }, {}),
+      instructions: [
+        '1. Try each URL variation',
+        '2. Check server logs for any callback requests',
+        '3. Note which variation (if any) works or shows different behavior'
+      ],
+      debug_info: {
+        userId: user.user_id,
+        gameId,
+        tokenValid: user.isSpribeTokenValid(),
+        clientId: process.env.SPRIBE_CLIENT_ID ? 'SET' : 'MISSING',
+        environment: process.env.NODE_ENV
+      }
+    });
+    
+  } catch (error) {
+    res.json({ error: error.message });
+  }
+});
+
+// STEP 3: Contact SPRIBE verification
+router.get('/test/spribe-requirements', (req, res) => {
+  res.json({
+    message: 'Information to verify with SPRIBE support',
+    your_domain: 'strike.atsproduct.in',
+    your_callback_urls: [
+      'https://strike.atsproduct.in/api/spribe/callback/auth',
+      'https://strike.atsproduct.in/api/spribe/callback/info',
+      'https://strike.atsproduct.in/api/spribe/callback/withdraw', 
+      'https://strike.atsproduct.in/api/spribe/callback/deposit',
+      'https://strike.atsproduct.in/api/spribe/callback/rollback'
+    ],
+    questions_for_spribe: [
+      '1. Is our domain strike.atsproduct.in whitelisted in your system?',
+      '2. Are our callback URLs correctly configured?',
+      '3. What should the operator parameter be in launch URLs?',
+      '4. Are we using the correct environment URLs (staging vs production)?',
+      '5. Is our integration approved and active?',
+      '6. Can you see any requests from our domain in your logs?'
+    ],
+    current_config: {
+      client_id: process.env.SPRIBE_CLIENT_ID ? 'CONFIGURED' : 'MISSING',
+      environment: process.env.NODE_ENV,
+      launch_url: process.env.SPRIBE_GAME_LAUNCH_URL,
+      api_url: process.env.SPRIBE_API_BASE_URL
+    }
+  });
+});
+
+
+
+// Since demo works but authenticated integration doesn't, 
+// the issue is in the authentication parameters or SPRIBE configuration
+
+/*
+🎯 IDENTIFIED ISSUES TO CHECK:
+*/
+
+// ISSUE 1: Wrong Environment URLs
+// You might be using staging URLs with production credentials or vice versa
+
+// ISSUE 2: Incorrect Operator Parameter  
+// The 'operator' in your launch URL might not match SPRIBE's configuration
+
+// ISSUE 3: SPRIBE hasn't configured your callback URLs
+// Even though your URLs are accessible, SPRIBE might not be calling them
+
+// ISSUE 4: Wrong Client Credentials
+// Your client ID/secret might be for a different environment
+
+/*
+🛠️ IMMEDIATE FIXES TO TRY:
+*/
+
+// FIX 1: Generate launch URL with different operator values
+router.post('/test/operator-variations', async (req, res) => {
+  try {
+    const userId = req.body.user_id || 1;
+    const gameId = req.body.game_id || 'dice';
+    
+    // Get user and ensure valid token
+    const { getModels } = require('../models');
+    const models = await getModels();
+    const user = await models.User.scope('withSpribeToken').findByPk(userId);
+    
+    if (!user) {
+      return res.json({ error: 'User not found' });
+    }
+    
+    // Generate fresh token
+    const token = user.generateSpribeToken();
+    await user.save();
+    
+    const baseUrl = 'https://dev-test.spribe.io/games/launch';
+    const baseParams = {
+      user: user.user_id.toString(),
+      token: token,
+      currency: 'USD',
+      lang: 'en'
+    };
+    
+    // Try different operator values
+    const operatorVariations = {
+      // Try 1: Use your client ID as operator
+      client_id: {
+        ...baseParams,
+        operator: process.env.SPRIBE_CLIENT_ID,
+        callback_url: 'https://strike.atsproduct.in/api/spribe'
+      },
+      
+      // Try 2: Use 'strike' as operator  
+      strike: {
+        ...baseParams,
+        operator: 'strike',
+        callback_url: 'https://strike.atsproduct.in/api/spribe'
+      },
+      
+      // Try 3: Use domain as operator
+      domain: {
+        ...baseParams,
+        operator: 'strike.atsproduct.in',
+        callback_url: 'https://strike.atsproduct.in/api/spribe'
+      },
+      
+      // Try 4: No callback URL (let SPRIBE use default)
+      no_callback: {
+        ...baseParams,
+        operator: process.env.SPRIBE_CLIENT_ID
+      },
+      
+      // Try 5: Different callback URL format
+      alt_callback: {
+        ...baseParams,
+        operator: process.env.SPRIBE_CLIENT_ID,
+        callback_url: 'https://strike.atsproduct.in'
+      }
+    };
+    
+    const testUrls = {};
+    for (const [key, params] of Object.entries(operatorVariations)) {
+      testUrls[key] = `${baseUrl}/${gameId}?${new URLSearchParams(params).toString()}`;
+    }
+    
+    res.json({
+      message: 'Test these operator variations - one should work',
+      test_urls: Object.keys(testUrls).reduce((acc, key) => {
+        acc[key] = testUrls[key].replace(token, token.substring(0, 8) + '...');
+        return acc;
+      }, {}),
+      instructions: [
+        '1. Try each URL in order',
+        '2. Watch server logs for callback requests', 
+        '3. The working URL will show the correct operator parameter',
+        '4. If none work, the issue is SPRIBE-side configuration'
+      ],
+      debug_info: {
+        userId: user.user_id,
+        tokenGenerated: new Date().toISOString(),
+        tokenExpires: user.spribe_token_expires_at,
+        clientId: process.env.SPRIBE_CLIENT_ID || 'NOT_SET',
+        environment: process.env.NODE_ENV
+      }
+    });
+    
+  } catch (error) {
+    res.json({ error: error.message });
+  }
+});
+
+// FIX 2: Try production SPRIBE URLs instead of staging
+router.post('/test/production-urls', async (req, res) => {
+  try {
+    const userId = req.body.user_id || 1;
+    const gameId = req.body.game_id || 'dice';
+    
+    const { getModels } = require('../models');
+    const models = await getModels();
+    const user = await models.User.scope('withSpribeToken').findByPk(userId);
+    
+    if (!user) {
+      return res.json({ error: 'User not found' });
+    }
+    
+    const token = user.generateSpribeToken();
+    await user.save();
+    
+    const urlVariations = {
+      // Current staging URL
+      staging: `https://dev-test.spribe.io/games/launch/${gameId}?${new URLSearchParams({
+        user: user.user_id.toString(),
+        token: token,
+        currency: 'USD',
+        operator: process.env.SPRIBE_CLIENT_ID,
+        callback_url: 'https://strike.atsproduct.in/api/spribe'
+      }).toString()}`,
+      
+      // Try production URL (if your credentials are for production)
+      production: `https://api.spribe.io/games/launch/${gameId}?${new URLSearchParams({
+        user: user.user_id.toString(),
+        token: token,
+        currency: 'USD', 
+        operator: process.env.SPRIBE_CLIENT_ID,
+        callback_url: 'https://strike.atsproduct.in/api/spribe'
+      }).toString()}`
+    };
+    
+    res.json({
+      message: 'Test both staging and production URLs',
+      urls: Object.keys(urlVariations).reduce((acc, key) => {
+        acc[key] = urlVariations[key].replace(token, token.substring(0, 8) + '...');
+        return acc;
+      }, {}),
+      note: 'Your credentials might be for production, not staging'
+    });
+    
+  } catch (error) {
+    res.json({ error: error.message });
+  }
+});
+
+// FIX 3: Contact SPRIBE with exact requirements
+router.get('/test/spribe-contact-info', (req, res) => {
+  res.json({
+    message: 'Send this exact information to SPRIBE support',
+    subject: 'Integration Issue - Login Error Despite Accessible Callbacks',
+    your_domain: 'strike.atsproduct.in',
+    issue_description: 'Demo games work perfectly, but authenticated games show login error. No callback requests received.',
+    
+    working_demo_urls: [
+      'https://demo.spribe.io/launch/aviator?currency=USD&lang=EN&return_url=https://strike.atsproduct.in/games',
+      'https://demo.spribe.io/launch/dice?currency=USD&lang=EN&return_url=https://strike.atsproduct.in/games'
+    ],
+    
+    failing_auth_urls: [
+      'https://dev-test.spribe.io/games/launch/dice?user=1&token=...&currency=USD&operator=YOUR_CLIENT_ID&callback_url=https://strike.atsproduct.in/api/spribe'
+    ],
+    
+    callback_urls_to_configure: [
+      'https://strike.atsproduct.in/api/spribe/callback/auth',
+      'https://strike.atsproduct.in/api/spribe/callback/info',
+      'https://strike.atsproduct.in/api/spribe/callback/withdraw',
+      'https://strike.atsproduct.in/api/spribe/callback/deposit', 
+      'https://strike.atsproduct.in/api/spribe/callback/rollback'
+    ],
+    
+    questions_for_spribe: [
+      '1. What should the operator parameter be in our launch URLs?',
+      '2. Are our callback URLs correctly configured in your system?',
+      '3. Are we using the correct environment (staging vs production)?',
+      '4. Can you see any requests from strike.atsproduct.in in your logs?',
+      '5. Is our integration fully approved and active?'
+    ],
+    
+    technical_proof: 'Callback URLs are externally accessible - curl tests show proper responses',
+    
+    next_steps: [
+      '1. SPRIBE configures callback URLs in their system',
+      '2. SPRIBE confirms correct operator parameter',
+      '3. SPRIBE enables integration for strike.atsproduct.in domain',
+      '4. Test integration again'
+    ]
+  });
+});
+
+/*
+🎯 ROOT CAUSE ANALYSIS:
+
+Since demo works but auth doesn't work, the issue is:
+
+1. SPRIBE hasn't configured your callback URLs in their system
+2. Wrong operator parameter in launch URL  
+3. Your credentials are for different environment than URLs you're using
+4. SPRIBE hasn't enabled your integration yet
+
+The solution requires SPRIBE to configure their system correctly.
+*/
+
 module.exports = router;

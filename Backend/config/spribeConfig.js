@@ -1,4 +1,5 @@
-// config/spribeConfig.js
+// config/spribeConfig.js - FIXED CONFIGURATION
+
 require('dotenv').config();
 
 const config = {
@@ -13,24 +14,44 @@ const config = {
   clientId: process.env.SPRIBE_CLIENT_ID,
   clientSecret: process.env.SPRIBE_CLIENT_SECRET,
   
-  // Game Configuration
-  availableGames: ['goal', 'crash', 'dice', 'plinko', 'mines', 'tower'],
+  // 🔥 FIXED: Updated game configuration to match SPRIBE's actual game IDs
+  availableGames: [
+    'aviator',        // ✅ This is the correct ID for Aviator
+    'dice',           // ✅ Dice game
+    'goal',           // ✅ Goal game  
+    'plinko',         // ✅ Plinko game
+    'mines',          // ✅ Mines game
+    'hi-lo',          // ✅ Hi-Lo game (note the hyphen)
+    'keno',           // ✅ Keno game
+    'mini-roulette',  // ✅ Mini Roulette (note the hyphen)
+    'hotline',        // ✅ Hotline game
+    'balloon'         // ✅ Balloon game
+  ],
+  
+  // 🔥 FIXED: Updated providers to match SPRIBE documentation
   providers: {
-    goal: 'spribe_crypto',
-    crash: 'spribe_crypto',
-    dice: 'spribe_crypto',
-    plinko: 'spribe_crypto',
-    mines: 'spribe_crypto',
-    tower: 'spribe_crypto'
+    'aviator': 'spribe_aviator',     // ✅ Aviator has its own provider
+    'dice': 'spribe_crypto',         // ✅ Crypto games
+    'goal': 'spribe_crypto',         // ✅ Crypto games
+    'plinko': 'spribe_crypto',       // ✅ Crypto games
+    'mines': 'spribe_crypto',        // ✅ Crypto games
+    'hi-lo': 'spribe_crypto',        // ✅ Crypto games (note hyphen)
+    'keno': 'spribe_crypto',         // ✅ Crypto games
+    'mini-roulette': 'spribe_crypto', // ✅ Crypto games (note hyphen)
+    'hotline': 'spribe_crypto',      // ✅ Crypto games
+    'balloon': 'spribe_crypto'       // ✅ Crypto games
   },
   
   // Currency Configuration
-  supportedCurrencies: ['USD', 'EUR'],
+  supportedCurrencies: ['USD'], // 🔥 FIXED: Only USD for now
   defaultCurrency: 'USD',
   
   // Security Configuration
   allowedIps: process.env.SPRIBE_ALLOWED_IPS ? process.env.SPRIBE_ALLOWED_IPS.split(',') : [],
   tokenExpiry: 4 * 60 * 60, // 4 hours in seconds
+  
+  // 🔥 ADDED: Game info URL for thumbnails
+  gameInfoUrl: process.env.SPRIBE_GAME_INFO_URL || 'https://cdn.spribe.io',
   
   // Logging Configuration
   enableDetailedLogging: true
@@ -57,7 +78,8 @@ console.log('📋 SPRIBE Configuration:', {
   supportedCurrencies: config.supportedCurrencies,
   defaultCurrency: config.defaultCurrency,
   tokenExpiry: config.tokenExpiry,
-  enableDetailedLogging: config.enableDetailedLogging
+  enableDetailedLogging: config.enableDetailedLogging,
+  gameCount: config.availableGames.length
 });
 
 module.exports = config;

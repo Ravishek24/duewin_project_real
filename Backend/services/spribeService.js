@@ -801,16 +801,24 @@ const handleAuth = async (req, res) => {
     headers: req.headers,
     body: req.body,
     query: req.query,
-    params: req.params
+    params: req.params,
+    ip: req.ip
   });
 
   try {
     const { user_id, token, currency = 'USD' } = req.body;
-    console.log('🔍 Auth parameters:', { user_id, token: token ? token.substring(0, 8) + '...' : null, currency });
+    console.log('🔍 Auth parameters:', { 
+      user_id, 
+      token: token ? token.substring(0, 8) + '...' : null, 
+      currency 
+    });
 
     // Validate required fields
     if (!user_id || !token) {
-      console.error('❌ Missing required fields:', { user_id: !!user_id, token: !!token });
+      console.error('❌ Missing required fields:', { 
+        user_id: !!user_id, 
+        token: !!token 
+      });
       return res.status(400).json({
         success: false,
         error: 'Missing required fields'
