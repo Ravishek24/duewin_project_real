@@ -404,14 +404,42 @@ const broadcastGameResult = (gameType, duration, periodId, result, winners = [])
         // Enhanced result formatting based on game type
         let enhancedResult = { ...result };
         
-        // Add odd/even for wingo and trx_wix
-        if (gameType === 'wingo' || gameType === 'trx_wix') {
-            enhancedResult.parity = result.number % 2 === 0 ? 'even' : 'odd';
-            
-            // Add verification for trx_wix
-            if (gameType === 'trx_wix' && result.verification) {
-                enhancedResult.verification = result.verification;
-            }
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                enhancedResult.parity = result.number % 2 === 0 ? 'even' : 'odd';
+                if (gameType === 'trx_wix' && result.verification) {
+                    enhancedResult.verification = result.verification;
+                }
+                break;
+                
+            case 'k3':
+                // Ensure K3 result has all required fields
+                enhancedResult = {
+                    dice_1: result.dice_1,
+                    dice_2: result.dice_2,
+                    dice_3: result.dice_3,
+                    sum: result.sum,
+                    has_pair: result.has_pair,
+                    has_triple: result.has_triple,
+                    is_straight: result.is_straight,
+                    sum_size: result.sum_size,
+                    sum_parity: result.sum_parity
+                };
+                break;
+                
+            case 'fived':
+            case '5d':
+                // Ensure 5D result has all required fields
+                enhancedResult = {
+                    A: result.A,
+                    B: result.B,
+                    C: result.C,
+                    D: result.D,
+                    E: result.E,
+                    sum: result.sum
+                };
+                break;
         }
         
         const broadcastData = {

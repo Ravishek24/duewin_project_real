@@ -4,6 +4,8 @@ const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http');
+const { startDiagnostic, performManualCheck } = require('./utils/websocketDiagnostic');
+
 
 // Load environment variables first
 dotenv.config();
@@ -222,6 +224,13 @@ const initializeWebSocketServices = async () => {
         return false;
     }
 };
+
+
+// Start monitoring after WebSocket is initialized
+startDiagnostic();
+
+// Check manually anytime
+performManualCheck();
 
 // Additional services setup
 const setupAdditionalServices = async () => {

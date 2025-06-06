@@ -40,16 +40,36 @@ const redisHelper = {
      * Set a key-value pair in Redis with optional expiration
      * @param {string} key - Redis key
      * @param {string|number|object} value - Value to store
+     * @param {string} [option] - Redis option (e.g., 'EX', 'NX')
      * @param {number} [ttl] - Time to live in seconds
-     * @returns {Promise<void>}
+     * @param {string} [nx] - NX option for SET
+     * @returns {Promise<boolean>} - Whether the operation was successful
      */
-    async set(key, value, ttl = CACHE.TTL) {
+    async set(key, value, option = null, ttl = null, nx = null) {
         try {
             const stringValue = typeof value === 'object' ? JSON.stringify(value) : value;
-            if (ttl) {
-                await redisClient.setex(key, ttl, stringValue);
+            
+            if (option === 'EX' && nx === 'NX') {
+                // Ensure ttl is a valid integer
+                const ttlSeconds = Math.floor(Number(ttl));
+                if (isNaN(ttlSeconds) || ttlSeconds <= 0) {
+                    throw new Error('Invalid TTL value. Must be a positive number.');
+                }
+                // Use SET with EX and NX options
+                const result = await redisClient.set(key, stringValue, 'EX', ttlSeconds, 'NX');
+                return result === 'OK';
+            } else if (ttl) {
+                // Simple SETEX
+                const ttlSeconds = Math.floor(Number(ttl));
+                if (isNaN(ttlSeconds) || ttlSeconds <= 0) {
+                    throw new Error('Invalid TTL value. Must be a positive number.');
+                }
+                await redisClient.setex(key, ttlSeconds, stringValue);
+                return true;
             } else {
+                // Simple SET
                 await redisClient.set(key, stringValue);
+                return true;
             }
         } catch (error) {
             console.error('Redis set error:', error);

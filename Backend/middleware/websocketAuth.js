@@ -1,7 +1,10 @@
 // Backend/middleware/websocketAuth.js - Enhanced WebSocket Authentication
 
 const jwt = require('jsonwebtoken');
-const { AUTH: { JWT_SECRET } } = require('../config/constants');
+const dotenv = require('dotenv');
+
+// Load environment variables
+dotenv.config();
 
 /**
  * Enhanced WebSocket authentication middleware
@@ -111,10 +114,10 @@ const authenticateWebSocket = async (socket, next) => {
         console.log('🔍 Token length:', token.length);
         console.log('🔍 Token prefix:', token.substring(0, 20) + '...');
 
-        // Verify token
+        // Verify token using environment variable JWT_SECRET
         let decoded;
         try {
-            decoded = jwt.verify(token, JWT_SECRET);
+            decoded = jwt.verify(token, process.env.JWT_SECRET);
         } catch (jwtError) {
             console.error('❌ JWT Verification Error:', jwtError.message);
             console.error('🔍 JWT Error name:', jwtError.name);
@@ -191,7 +194,7 @@ const createTestToken = (userId, email = 'test@example.com') => {
             exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours
         };
         
-        const token = jwt.sign(payload, JWT_SECRET);
+        const token = jwt.sign(payload, process.env.JWT_SECRET);
         console.log('🔧 Test token created for user:', userId);
         return token;
     } catch (error) {
@@ -225,7 +228,7 @@ const validateTokenDebug = (token) => {
         }
         
         // Verify with secret
-        const verified = jwt.verify(token, JWT_SECRET);
+        const verified = jwt.verify(token, process.env.JWT_SECRET);
         
         return {
             valid: true,

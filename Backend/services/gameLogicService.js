@@ -5527,7 +5527,14 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
             const redisLockValue = `${Date.now()}_${process.pid}`;
             
             console.log(`🔍 LAYER 3: Acquiring Redis lock...`);
-            const redisLockAcquired = await redisClient.set(redisLockKey, redisLockValue, 'EX', 30, 'NX');
+            // Fix: Use the updated Redis helper with proper options
+            const redisLockAcquired = await redisClient.set(
+                redisLockKey,
+                redisLockValue,
+                'EX',
+                30,
+                'NX'
+            );
             
             if (!redisLockAcquired) {
                 console.log(`🔒 LAYER 3: Redis lock failed, another instance is processing ${periodId}`);
