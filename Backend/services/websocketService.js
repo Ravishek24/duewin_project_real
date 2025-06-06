@@ -1,4 +1,4 @@
-// Backend/services/websocketService.js - FIXED REAL-TIME VERSION
+// Backend/services/websocketService.js - ZERO DELAY VERSION
 
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
@@ -36,8 +36,10 @@ let io;
 const gameIntervals = new Map();
 let gameTicksStarted = false;
 
-// Period cache to track current periods
+// ENHANCED: Period cache with pre-loaded next periods
 const currentPeriods = new Map();
+const nextPeriods = new Map(); // PRE-LOADED next periods
+const resultProcessingLocks = new Set(); // Track which periods are being processed
 
 // Constants
 const GAME_CONFIGS = {
@@ -48,7 +50,7 @@ const GAME_CONFIGS = {
 };
 
 /**
- * Calculate real-time period information
+ * Calculate real-time period information with pre-calculation
  */
 const calculateRealTimePeriod = (gameType, duration, now = new Date()) => {
     try {
@@ -68,39 +70,46 @@ const calculateRealTimePeriod = (gameType, duration, now = new Date()) => {
         // Calculate current period number (0-based)
         const currentPeriodNumber = Math.floor(totalSeconds / duration);
         
-        // Calculate when current period started
+        // Calculate when current period started and ends
         const currentPeriodStart = startOfPeriods.clone().add(currentPeriodNumber * duration, 'seconds');
-        
-        // Calculate when current period ends
         const currentPeriodEnd = currentPeriodStart.clone().add(duration, 'seconds');
         
-        // Calculate time remaining in current period
-        const timeRemaining = Math.max(0, currentPeriodEnd.diff(istMoment, 'seconds'));
+        // ENHANCED: More precise time remaining calculation
+        const timeRemaining = Math.max(0, Math.ceil(currentPeriodEnd.diff(istMoment) / 1000));
         
         // Generate period ID
         const dateStr = startOfPeriods.format('YYYYMMDD');
         const periodId = `${dateStr}${currentPeriodNumber.toString().padStart(9, '0')}`;
         
-        console.log(`Real-time calculation for ${gameType} ${duration}s:`, {
-            currentTime: istMoment.format(),
-            startOfPeriods: startOfPeriods.format(),
-            totalSeconds,
-            currentPeriodNumber,
-            periodId,
-            timeRemaining,
-            currentPeriodStart: currentPeriodStart.format(),
-            currentPeriodEnd: currentPeriodEnd.format()
-        });
+        // PRE-CALCULATE next period info
+        const nextPeriodNumber = currentPeriodNumber + 1;
+        const nextPeriodId = `${dateStr}${nextPeriodNumber.toString().padStart(9, '0')}`;
+        const nextPeriodStart = currentPeriodEnd.clone();
+        const nextPeriodEnd = nextPeriodStart.clone().add(duration, 'seconds');
         
         return {
-            periodId,
-            gameType,
-            duration,
-            startTime: currentPeriodStart.toDate(),
-            endTime: currentPeriodEnd.toDate(),
-            timeRemaining,
-            active: timeRemaining > 0,
-            bettingOpen: timeRemaining > 5
+            current: {
+                periodId,
+                gameType,
+                duration,
+                startTime: currentPeriodStart.toDate(),
+                endTime: currentPeriodEnd.toDate(),
+                timeRemaining,
+                active: timeRemaining > 0,
+                bettingOpen: timeRemaining > 5,
+                currentPeriodNumber
+            },
+            next: {
+                periodId: nextPeriodId,
+                gameType,
+                duration,
+                startTime: nextPeriodStart.toDate(),
+                endTime: nextPeriodEnd.toDate(),
+                timeRemaining: timeRemaining + duration,
+                active: false, // Will be active when current ends
+                bettingOpen: false,
+                currentPeriodNumber: nextPeriodNumber
+            }
         };
     } catch (error) {
         console.error('Error calculating real-time period:', error);
@@ -237,7 +246,7 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
                     betType: data.type,
                     betValue: data.selection,
                     betAmount: data.amount,
-                    timeline: 'default'  // Explicitly set timeline to default
+                    timeline: 'default'
                 };
                 
                 const result = await gameLogicService.processBet(mappedData);
@@ -280,11 +289,11 @@ const initializeWebSocket = (server, autoStartTicks = true) => {
 };
 
 /**
- * Start the game tick system for all games
+ * ENHANCED: Start the game tick system with pre-loaded periods
  */
 const startGameTickSystem = async () => {
     try {
-        console.log('🕐 Starting game tick system...');
+        console.log('🕐 Starting game tick system with pre-loading...');
         
         // Load services
         const servicesReady = loadServices();
@@ -294,18 +303,31 @@ const startGameTickSystem = async () => {
             return;
         }
         
-        // Initialize current periods for all games
+        // ENHANCED: Initialize current AND next periods for all games
         Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
             durations.forEach(duration => {
                 const key = `${gameType}_${duration}`;
-                // Calculate and store current period
-                const currentPeriod = calculateRealTimePeriod(gameType, duration);
-                currentPeriods.set(key, currentPeriod);
                 
-                // Initialize period in database if needed
+                // Calculate current and next periods
+                const periods = calculateRealTimePeriod(gameType, duration);
+                
+                // Store both current and next periods
+                currentPeriods.set(key, periods.current);
+                nextPeriods.set(key, periods.next);
+                
+                console.log(`📅 Pre-loaded ${key}:`);
+                console.log(`   Current: ${periods.current.periodId} (${periods.current.timeRemaining}s)`);
+                console.log(`   Next: ${periods.next.periodId} (ready)`);
+                
+                // Initialize BOTH periods in database asynchronously
                 if (periodService && periodService.initializePeriod) {
-                    periodService.initializePeriod(gameType, duration, currentPeriod.periodId)
-                        .catch(err => console.warn(`Failed to initialize period ${currentPeriod.periodId}:`, err.message));
+                    // Initialize current period
+                    periodService.initializePeriod(gameType, duration, periods.current.periodId)
+                        .catch(err => console.warn(`Failed to initialize current period ${periods.current.periodId}:`, err.message));
+                    
+                    // PRE-INITIALIZE next period
+                    periodService.initializePeriod(gameType, duration, periods.next.periodId)
+                        .catch(err => console.warn(`Failed to pre-initialize next period ${periods.next.periodId}:`, err.message));
                 }
             });
         });
@@ -318,7 +340,7 @@ const startGameTickSystem = async () => {
         });
         
         gameTicksStarted = true;
-        console.log('✅ Game tick system started for all games');
+        console.log('✅ Game tick system started with pre-loaded periods');
         
         // Broadcast to all connected clients
         if (io) {
@@ -356,7 +378,7 @@ const startGameTicks = (gameType, duration) => {
 };
 
 /**
- * FIXED: Main game tick function with real-time calculation
+ * ENHANCED: Game tick with ZERO DELAY period transitions
  */
 const gameTick = async (gameType, duration) => {
     try {
@@ -368,44 +390,79 @@ const gameTick = async (gameType, duration) => {
         const now = new Date();
         const key = `${gameType}_${duration}`;
         
-        // Calculate current real-time period
-        const currentPeriod = calculateRealTimePeriod(gameType, duration, now);
-        const cachedPeriod = currentPeriods.get(key);
+        // Get current cached periods
+        const cachedCurrent = currentPeriods.get(key);
+        const cachedNext = nextPeriods.get(key);
         
-        // Check if we need to start a new period
-        if (!cachedPeriod || cachedPeriod.periodId !== currentPeriod.periodId) {
-            console.log(`🔄 Period change detected for ${gameType} ${duration}s: ${cachedPeriod?.periodId} -> ${currentPeriod.periodId}`);
+        // Calculate real-time periods
+        const realTimePeriods = calculateRealTimePeriod(gameType, duration, now);
+        
+        // CHECK: If current period has changed, we need to transition INSTANTLY
+        if (!cachedCurrent || cachedCurrent.periodId !== realTimePeriods.current.periodId) {
+            console.log(`⚡ INSTANT TRANSITION: ${gameType} ${duration}s: ${cachedCurrent?.periodId} -> ${realTimePeriods.current.periodId}`);
             
-            // If there was a previous period, process its results
-            if (cachedPeriod && cachedPeriod.periodId !== currentPeriod.periodId) {
-                await handlePeriodEnd(gameType, duration, cachedPeriod.periodId, `${gameType}_${duration}`);
+            // Process previous period results in background (NON-BLOCKING)
+            if (cachedCurrent && cachedCurrent.periodId !== realTimePeriods.current.periodId) {
+                // Process results without awaiting to avoid blocking
+                setImmediate(() => {
+                    handlePeriodEnd(gameType, duration, cachedCurrent.periodId, `${gameType}_${duration}`);
+                });
             }
             
-            // Update cached period
-            currentPeriods.set(key, currentPeriod);
+            // INSTANT UPDATE: Use pre-loaded next period as current
+            if (cachedNext && cachedNext.periodId === realTimePeriods.current.periodId) {
+                console.log(`🚀 Using PRE-LOADED period: ${cachedNext.periodId}`);
+                
+                // Move next period to current (ZERO DELAY)
+                currentPeriods.set(key, {
+                    ...cachedNext,
+                    active: true,
+                    bettingOpen: true,
+                    timeRemaining: realTimePeriods.current.timeRemaining
+                });
+            } else {
+                // Fallback: Calculate current period
+                currentPeriods.set(key, realTimePeriods.current);
+                console.warn(`⚠️ Using calculated period: ${realTimePeriods.current.periodId}`);
+            }
             
-            // Initialize new period in database
+            // PRE-LOAD next-next period
+            nextPeriods.set(key, realTimePeriods.next);
+            
+            // Pre-initialize the new next period in database (background)
             if (loadServices() && periodService.initializePeriod) {
-                try {
-                    await periodService.initializePeriod(gameType, duration, currentPeriod.periodId);
-                } catch (initError) {
-                    console.warn(`Failed to initialize period ${currentPeriod.periodId}:`, initError.message);
-                }
+                setImmediate(() => {
+                    periodService.initializePeriod(gameType, duration, realTimePeriods.next.periodId)
+                        .catch(err => console.warn(`Failed to pre-initialize period ${realTimePeriods.next.periodId}:`, err.message));
+                });
             }
             
-            // Broadcast new period start
+            // INSTANT BROADCAST: New period started
             const roomId = `${gameType}_${duration}`;
+            const currentPeriod = currentPeriods.get(key);
+            
             io.to(roomId).emit('periodStart', {
                 gameType,
                 duration,
                 periodId: currentPeriod.periodId,
                 timeRemaining: Math.floor(currentPeriod.timeRemaining),
                 endTime: currentPeriod.endTime.toISOString(),
-                message: 'New period started - betting is open!'
+                message: 'New period started - betting is open!',
+                transition: 'instant',
+                preLoaded: cachedNext && cachedNext.periodId === realTimePeriods.current.periodId
             });
+            
+            console.log(`⚡ ZERO-DELAY broadcast: Period ${currentPeriod.periodId} for ${gameType} ${duration}s`);
         }
         
-        const { periodId, timeRemaining, endTime, bettingOpen } = currentPeriod;
+        // Update time remaining for current period
+        const currentPeriod = currentPeriods.get(key);
+        if (currentPeriod) {
+            currentPeriod.timeRemaining = realTimePeriods.current.timeRemaining;
+            currentPeriod.bettingOpen = realTimePeriods.current.bettingOpen;
+        }
+        
+        const { periodId, timeRemaining, endTime, bettingOpen } = currentPeriod || realTimePeriods.current;
         const roomId = `${gameType}_${duration}`;
         
         // Broadcast time update every second
@@ -430,10 +487,16 @@ const gameTick = async (gameType, duration) => {
             });
         }
 
-        // Debug logging every 15 seconds for first minute, then every 30 seconds
-        const logInterval = timeRemaining > 60 ? 30 : 15;
+        // Pre-load warning at 10 seconds
+        if (timeRemaining === 10) {
+            console.log(`🔄 Pre-loading next period for ${gameType} ${duration}s in 10 seconds...`);
+        }
+
+        // Reduced logging frequency
+        const logInterval = timeRemaining > 60 ? 30 : 10;
         if (Math.floor(timeRemaining) % logInterval === 0 && timeRemaining > 0) {
-            console.log(`Game tick: ${gameType}, ${duration}s, Period: ${periodId}, Time: ${Math.floor(timeRemaining)}s`);
+            const nextPeriod = nextPeriods.get(key);
+            console.log(`Game tick: ${gameType}, ${duration}s, Current: ${periodId}, Time: ${Math.floor(timeRemaining)}s, Next ready: ${nextPeriod?.periodId}`);
         }
 
     } catch (error) {
@@ -450,58 +513,131 @@ const gameTick = async (gameType, duration) => {
 };
 
 /**
- * FIXED: Handle period end with immediate result processing
+ * ENHANCED: Handle period end with STRICT duplicate prevention
  */
 const handlePeriodEnd = async (gameType, duration, periodId, roomId) => {
+    const globalLockKey = `global_result_${gameType}_${duration}_${periodId}`;
+    const processKey = `${gameType}_${duration}_${periodId}`;
+    
     try {
-        console.log(`🏁 Period ended: ${gameType} ${duration}s - ${periodId}`);
-        
-        if (!loadServices()) {
-            console.error('❌ Services not ready for period end processing');
+        // FIRST CHECK: Local memory lock to prevent multiple calls
+        if (resultProcessingLocks.has(processKey)) {
+            console.log(`🔒 Period ${periodId} already being processed locally, skipping...`);
             return;
         }
         
-        // Process the game results immediately
+        // Add to local processing locks immediately
+        resultProcessingLocks.add(processKey);
+        
+        console.log(`🏁 Period end processing: ${gameType} ${duration}s - ${periodId}`);
+        
+        // SECOND CHECK: Global Redis lock to prevent cross-process duplicates
+        const lockValue = `${Date.now()}_${process.pid}_websocket`;
+        const lockAcquired = await redis.set(globalLockKey, lockValue, 'EX', 60, 'NX');
+        
+        if (!lockAcquired) {
+            console.log(`⚠️ Period ${periodId} already being processed globally, waiting for result...`);
+            
+            // Wait for result and broadcast when available
+            let attempts = 0;
+            while (attempts < 15) { // Wait up to 15 seconds
+                const existingResult = await checkExistingResult(gameType, duration, periodId);
+                if (existingResult) {
+                    console.log(`✅ Found existing result for ${periodId}, broadcasting...`);
+                    
+                    const resultData = {
+                        gameType,
+                        duration,
+                        periodId,
+                        result: existingResult.result,
+                        winners: existingResult.winners || 0,
+                        timestamp: new Date().toISOString(),
+                        source: 'existing'
+                    };
+                    
+                    io.to(roomId).emit('periodResult', resultData);
+                    io.to('games').emit('gameResult', resultData);
+                    return;
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                attempts++;
+            }
+            
+            console.warn(`⚠️ No result found after waiting for ${periodId}`);
+            return;
+        }
+        
+        console.log(`🔒 Acquired GLOBAL result lock for ${periodId}`);
+        
+        if (!loadServices()) {
+            console.error('❌ Services not ready for period end processing');
+            await redis.del(globalLockKey);
+            return;
+        }
+        
+        // THIRD CHECK: Database existence check
         try {
-            console.log(`🎲 Processing results for ${periodId}...`);
-            const gameResult = await gameLogicService.processGameResults(gameType, duration, periodId);
+            const existingResult = await checkExistingResult(gameType, duration, periodId);
+            if (existingResult) {
+                console.log(`✅ Result already exists in DB for ${periodId}, broadcasting existing result`);
+                
+                const resultData = {
+                    gameType,
+                    duration,
+                    periodId,
+                    result: existingResult.result,
+                    winners: existingResult.winners || 0,
+                    timestamp: new Date().toISOString(),
+                    source: 'existing'
+                };
+                
+                io.to(roomId).emit('periodResult', resultData);
+                io.to('games').emit('gameResult', resultData);
+                
+                await redis.del(globalLockKey);
+                return;
+            }
+        } catch (checkError) {
+            console.warn(`⚠️ Error checking existing result for ${periodId}:`, checkError.message);
+        }
+        
+        // Process new game results ONLY if no existing result
+        try {
+            console.log(`🎲 Processing NEW results for ${periodId}...`);
+            
+            const gameResult = await gameLogicService.processGameResults(
+                gameType, 
+                duration, 
+                periodId, 
+                'default' // timeline
+            );
             
             if (gameResult.success) {
-                // Broadcast result immediately to all users in the room
                 const resultData = {
                     gameType,
                     duration,
                     periodId,
                     result: gameResult.gameResult,
                     winners: gameResult.winners?.length || 0,
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
+                    source: 'new',
+                    processor: 'websocket'
                 };
                 
                 io.to(roomId).emit('periodResult', resultData);
-                
-                // Also broadcast to general games room
                 io.to('games').emit('gameResult', resultData);
                 
-                console.log(`📢 Broadcasted result for ${gameType} ${duration}s - ${periodId}`);
+                console.log(`📢 Broadcasted NEW result for ${gameType} ${duration}s - ${periodId}`);
                 console.log(`🏆 Result: ${JSON.stringify(gameResult.gameResult)}, Winners: ${gameResult.winners?.length || 0}`);
                 
             } else {
-                console.error(`❌ Failed to process game results for ${periodId}:`, gameResult.message || 'Unknown error');
-                
-                // Broadcast error to room
-                io.to(roomId).emit('periodError', {
-                    gameType,
-                    duration,
-                    periodId,
-                    message: 'Failed to process results',
-                    //timestamp: new Date().toISOString()
-                });
+                throw new Error(gameResult.message || 'Failed to process results');
             }
+            
         } catch (processError) {
             console.error(`❌ Error processing game results for ${periodId}:`, processError.message);
-            console.error('Stack trace:', processError.stack);
             
-            // Broadcast error to room
             io.to(roomId).emit('periodError', {
                 gameType,
                 duration,
@@ -509,22 +645,184 @@ const handlePeriodEnd = async (gameType, duration, periodId, roomId) => {
                 message: 'Error processing results',
                 timestamp: new Date().toISOString()
             });
+        } finally {
+            // Always release the global lock
+            try {
+                const currentLock = await redis.get(globalLockKey);
+                if (currentLock === lockValue) {
+                    await redis.del(globalLockKey);
+                    console.log(`🔓 Released global result lock for ${periodId}`);
+                }
+            } catch (lockError) {
+                console.error('❌ Error releasing global lock:', lockError);
+            }
         }
 
     } catch (error) {
         console.error(`❌ Error handling period end for ${gameType} ${duration}s:`, error);
+        
+        // Cleanup on error
+        try {
+            await redis.del(globalLockKey);
+        } catch (cleanupError) {
+            console.error('❌ Error cleaning up lock:', cleanupError);
+        }
+    } finally {
+        // ALWAYS remove from local processing locks
+        resultProcessingLocks.delete(processKey);
+        
+        // Clean up old locks periodically
+        if (resultProcessingLocks.size > 100) {
+            console.log(`🧹 Cleaning up ${resultProcessingLocks.size} processing locks`);
+            resultProcessingLocks.clear();
+        }
     }
 };
 
 /**
- * FIXED: Send current game state with real-time calculation
+ * Check if result already exists for a period
+ */
+const checkExistingResult = async (gameType, duration, periodId) => {
+    try {
+        if (!loadServices()) {
+            return null;
+        }
+        
+        const models = await gameLogicService.ensureModelsInitialized();
+        
+        let existingResult = null;
+        
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+                existingResult = await models.BetResultWingo.findOne({
+                    where: { 
+                        bet_number: periodId,
+                        duration: duration,
+                        timeline: 'default'
+                    },
+                    order: [['created_at', 'DESC']]
+                });
+                
+                if (existingResult) {
+                    return {
+                        result: {
+                            number: existingResult.result_of_number,
+                            color: existingResult.result_of_color,
+                            size: existingResult.result_of_size
+                        },
+                        winners: 0
+                    };
+                }
+                break;
+                
+            case 'trx_wix':
+                existingResult = await models.BetResultTrxWix.findOne({
+                    where: { 
+                        period: periodId,
+                        duration: duration,
+                        timeline: 'default'
+                    },
+                    order: [['created_at', 'DESC']]
+                });
+                
+                if (existingResult) {
+                    let resultData;
+                    try {
+                        resultData = typeof existingResult.result === 'string' ? 
+                            JSON.parse(existingResult.result) : existingResult.result;
+                    } catch (parseError) {
+                        console.warn('Error parsing existing result:', parseError);
+                        return null;
+                    }
+                    
+                    return {
+                        result: resultData,
+                        winners: 0
+                    };
+                }
+                break;
+                
+            // Add other game types as needed
+            case 'fived':
+            case '5d':
+                existingResult = await models.BetResult5D.findOne({
+                    where: { 
+                        bet_number: periodId,
+                        duration: duration,
+                        timeline: 'default'
+                    },
+                    order: [['created_at', 'DESC']]
+                });
+                
+                if (existingResult) {
+                    return {
+                        result: {
+                            A: existingResult.result_a,
+                            B: existingResult.result_b,
+                            C: existingResult.result_c,
+                            D: existingResult.result_d,
+                            E: existingResult.result_e,
+                            sum: existingResult.total_sum
+                        },
+                        winners: 0
+                    };
+                }
+                break;
+                
+            case 'k3':
+                existingResult = await models.BetResultK3.findOne({
+                    where: { 
+                        bet_number: periodId,
+                        duration: duration,
+                        timeline: 'default'
+                    },
+                    order: [['created_at', 'DESC']]
+                });
+                
+                if (existingResult) {
+                    return {
+                        result: {
+                            dice_1: existingResult.dice_1,
+                            dice_2: existingResult.dice_2,
+                            dice_3: existingResult.dice_3,
+                            sum: existingResult.sum,
+                            has_pair: existingResult.has_pair,
+                            has_triple: existingResult.has_triple,
+                            is_straight: existingResult.is_straight,
+                            sum_size: existingResult.sum_size,
+                            sum_parity: existingResult.sum_parity
+                        },
+                        winners: 0
+                    };
+                }
+                break;
+        }
+        
+        return null;
+        
+    } catch (error) {
+        console.error('Error checking existing result:', error);
+        return null;
+    }
+};
+
+/**
+ * ENHANCED: Send current game state with pre-loaded info
  */
 const sendCurrentGameState = async (socket, gameType, duration) => {
     try {
-        // Calculate current real-time period
-        const currentPeriod = calculateRealTimePeriod(gameType, duration);
+        const key = `${gameType}_${duration}`;
         
-        // Send current period info
+        // Get current period from cache (faster than calculation)
+        let currentPeriod = currentPeriods.get(key);
+        
+        if (!currentPeriod) {
+            // Fallback: Calculate real-time period
+            const periods = calculateRealTimePeriod(gameType, duration);
+            currentPeriod = periods.current;
+        }
+        
+        // Send current period info immediately
         socket.emit('periodInfo', {
             gameType,
             duration,
@@ -532,7 +830,9 @@ const sendCurrentGameState = async (socket, gameType, duration) => {
             timeRemaining: Math.floor(currentPeriod.timeRemaining),
             endTime: currentPeriod.endTime.toISOString(),
             bettingOpen: currentPeriod.bettingOpen,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            immediate: true,
+            preLoaded: true
         });
 
         // Send recent results if services are available
@@ -560,7 +860,7 @@ const sendCurrentGameState = async (socket, gameType, duration) => {
             });
         }
 
-        console.log(`📤 Sent current game state to user for ${gameType} ${duration}s - Period: ${currentPeriod.periodId}, Time: ${Math.floor(currentPeriod.timeRemaining)}s`);
+        console.log(`📤 Sent INSTANT game state to user for ${gameType} ${duration}s - Period: ${currentPeriod.periodId}, Time: ${Math.floor(currentPeriod.timeRemaining)}s`);
 
     } catch (error) {
         console.error('❌ Error sending current game state:', error);
@@ -628,7 +928,8 @@ const getCurrentPeriodInfo = (gameType, duration) => {
     }
     
     // Calculate if not cached
-    return calculateRealTimePeriod(gameType, duration);
+    const periods = calculateRealTimePeriod(gameType, duration);
+    return periods.current;
 };
 
 /**
@@ -645,14 +946,17 @@ const verifyGameTicks = () => {
     console.log(`   - Expected intervals: ${expectedIntervals}`);
     console.log(`   - System started: ${gameTicksStarted}`);
     console.log(`   - Cached periods: ${currentPeriods.size}`);
+    console.log(`   - Pre-loaded periods: ${nextPeriods.size}`);
+    console.log(`   - Processing locks: ${resultProcessingLocks.size}`);
     
     // Show current periods
     currentPeriods.forEach((period, key) => {
-        console.log(`   - ${key}: ${period.periodId} (${Math.floor(period.timeRemaining)}s remaining)`);
+        const nextPeriod = nextPeriods.get(key);
+        console.log(`   - ${key}: Current ${period.periodId} (${Math.floor(period.timeRemaining)}s), Next ${nextPeriod?.periodId} (ready)`);
     });
     
     if (activeIntervals === expectedIntervals && gameTicksStarted) {
-        console.log('✅ Game tick system is working correctly');
+        console.log('✅ Game tick system is working correctly with pre-loading');
     } else {
         console.warn('⚠️ Game tick system may have issues');
     }
@@ -662,6 +966,8 @@ const verifyGameTicks = () => {
         expected: expectedIntervals,
         started: gameTicksStarted,
         cachedPeriods: currentPeriods.size,
+        preLoadedPeriods: nextPeriods.size,
+        processingLocks: resultProcessingLocks.size,
         working: activeIntervals === expectedIntervals && gameTicksStarted
     };
 };
@@ -681,6 +987,8 @@ const stopGameTicks = () => {
     });
     gameIntervals.clear();
     currentPeriods.clear();
+    nextPeriods.clear();
+    resultProcessingLocks.clear();
     gameTicksStarted = false;
 };
 
