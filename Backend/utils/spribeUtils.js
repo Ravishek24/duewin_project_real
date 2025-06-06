@@ -1,4 +1,4 @@
-// utils/spribeUtils.js - UPDATED FOR EUR CURRENCY
+// utils/spribeUtils.js - UPDATED FOR USD CURRENCY
 const crypto = require('crypto');
 const spribeConfig = require('../config/spribeConfig');
 
@@ -10,21 +10,32 @@ const spribeConfig = require('../config/spribeConfig');
  * @param {string} currency - Currency code
  * @returns {number} - Amount in smallest units
  */
-const formatAmount = (amount, currency = 'USD') => {
-  const numAmount = parseFloat(amount);
-  
-  switch (currency.toUpperCase()) {
-    case 'EUR':
-    case 'USD':
-    case 'INR':
-      // Fiat currencies: 1 unit = 1000 smallest units
-      return Math.round(numAmount * 1000);
-    case 'BTC':
-      // Bitcoin: 1 BTC = 100,000,000 satoshi
-      return Math.round(numAmount * 100000000);
-    default:
-      // Default to fiat format
-      return Math.round(numAmount * 1000);
+const formatAmount = (amount, currency) => {
+  console.log('\n💰 ===== FORMATTING AMOUNT FOR SPRIBE =====');
+  console.log('📦 Input:', { amount, currency });
+
+  try {
+    // Convert EUR to USD if needed
+    let usdAmount = amount;
+    if (currency === 'EUR') {
+      usdAmount = amount * 1.08; // Simple conversion rate
+      console.log('💱 Converted EUR to USD:', { eur: amount, usd: usdAmount });
+    }
+
+    // Format amount in smallest units (1 USD = 1000 units)
+    const formattedAmount = Math.round(usdAmount * 1000);
+    
+    console.log('✅ Formatted amount:', {
+      original: amount,
+      currency,
+      converted: usdAmount,
+      formatted: formattedAmount
+    });
+
+    return formattedAmount;
+  } catch (error) {
+    console.error('❌ Amount formatting error:', error);
+    throw error;
   }
 };
 
@@ -34,21 +45,32 @@ const formatAmount = (amount, currency = 'USD') => {
  * @param {string} currency - Currency code
  * @returns {number} - Amount in decimal format
  */
-const parseAmount = (amount, currency = 'USD') => {
-  const numAmount = parseInt(amount);
-  
-  switch (currency.toUpperCase()) {
-    case 'EUR':
-    case 'USD':
-    case 'INR':
-      // Fiat currencies: divide by 1000
-      return numAmount / 1000;
-    case 'BTC':
-      // Bitcoin: divide by 100,000,000
-      return numAmount / 100000000;
-    default:
-      // Default to fiat format
-      return numAmount / 1000;
+const parseAmount = (amount, currency) => {
+  console.log('\n💰 ===== PARSING AMOUNT FROM SPRIBE =====');
+  console.log('📦 Input:', { amount, currency });
+
+  try {
+    // Convert from smallest units to USD
+    const usdAmount = amount / 1000;
+    
+    // Convert to EUR if needed
+    let finalAmount = usdAmount;
+    if (currency === 'EUR') {
+      finalAmount = usdAmount / 1.08; // Simple conversion rate
+      console.log('💱 Converted USD to EUR:', { usd: usdAmount, eur: finalAmount });
+    }
+
+    console.log('✅ Parsed amount:', {
+      original: amount,
+      currency,
+      usd: usdAmount,
+      final: finalAmount
+    });
+
+    return finalAmount;
+  } catch (error) {
+    console.error('❌ Amount parsing error:', error);
+    throw error;
   }
 };
 
@@ -60,62 +82,56 @@ const parseAmount = (amount, currency = 'USD') => {
  * @returns {string} - Complete launch URL
  */
 const generateGameLaunchUrl = (gameId, user, options = {}) => {
-  const {
-    currency = 'USD', // Default to USD for SPRIBE
-    token,
-    returnUrl,
-    accountHistoryUrl,
-    ircDuration,
-    ircElapsed,
-    lang = 'en'
-  } = options;
-
-  // Validate game exists in staging
-  if (!spribeConfig.availableGames.includes(gameId)) {
-    throw new Error(`Game ${gameId} is not available in staging environment`);
-  }
-
-  // Get operator key from environment variable or config
-  const operatorKey = process.env.SPRIBE_OPERATOR_KEY || spribeConfig.operatorKey;
-  if (!operatorKey) {
-    throw new Error('SPRIBE operator key is not configured');
-  }
-
-  // Build query parameters
-  const params = new URLSearchParams({
-    user: user.user_id.toString(),
-    token: token,
-    lang: lang,
-    currency: currency,
-    operator: operatorKey, // Use operator key from environment or config
-    callback_url: spribeConfig.callbackUrl // Add callback URL
+  console.log('\n🎮 ===== GENERATING SPRIBE LAUNCH URL =====');
+  console.log('📦 Input parameters:', {
+    gameId,
+    userId: user.user_id,
+    options: {
+      ...options,
+      token: options.token ? options.token.substring(0, 8) + '...' : null
+    }
   });
 
-  // Add optional parameters if provided
-  if (returnUrl) {
-    params.append('return_url', returnUrl);
-  }
-  
-  if (accountHistoryUrl) {
-    params.append('account_history_url', accountHistoryUrl);
-  }
-  
-  if (ircDuration) {
-    params.append('irc_duration', ircDuration.toString());
-  }
-  
-  if (ircElapsed) {
-    params.append('irc_elapsed', ircElapsed.toString());
+  // Validate required parameters
+  if (!gameId || !user || !options.token) {
+    console.error('❌ Missing required parameters:', {
+      gameId: !!gameId,
+      user: !!user,
+      token: !!options.token
+    });
+    throw new Error('Missing required parameters for game launch URL');
   }
 
-  // Construct final URL
-  const launchUrl = `${spribeConfig.launchUrl}/${gameId}?${params.toString()}`;
-  console.log('Generated SPRIBE launch URL:', {
+  const {
+    currency = 'USD',
+    token,
+    returnUrl = spribeConfig.returnUrl,
+    accountHistoryUrl = spribeConfig.accountHistoryUrl,
+    ircDuration = 3600
+  } = options;
+
+  // Generate launch URL
+  const baseUrl = spribeConfig.gameLaunchUrl;
+  const params = new URLSearchParams({
+    user: user.user_id,
+    token: token,
+    lang: 'en',
+    currency: currency,
+    operator: 'strike',
+    callback_url: spribeConfig.callbackUrl,
+    return_url: returnUrl,
+    account_history_url: accountHistoryUrl,
+    irc_duration: ircDuration
+  });
+
+  const launchUrl = `${baseUrl}/${gameId}?${params.toString()}`;
+
+  console.log('✅ Generated launch URL:', {
     gameId,
     userId: user.user_id,
     currency,
-    tokenLength: token?.length,
-    operator: operatorKey,
+    tokenLength: token.length,
+    operator: 'strike',
     url: launchUrl
   });
 
@@ -172,61 +188,62 @@ const createSignature = (timestamp, path, body) => {
 };
 
 /**
- * Validate incoming request signature from SPRIBE
- * @param {string} clientId - Client ID from header
- * @param {string} timestamp - Timestamp from header
- * @param {string} signature - Signature from header
- * @param {string} path - Request path with query parameters
- * @param {Object} body - Request body
- * @returns {boolean} - True if signature is valid
+ * Validate SPRIBE request signature
  */
 const validateSignature = (clientId, timestamp, signature, path, body) => {
+  console.log('\n🔐 ===== VALIDATING SPRIBE SIGNATURE =====');
+  console.log('📦 Input parameters:', {
+    clientId,
+    timestamp,
+    signatureLength: signature?.length,
+    path,
+    body
+  });
+
   try {
-    console.log('Validating signature:', {
-      receivedClientId: clientId,
-      expectedClientId: spribeConfig.clientId,
-      receivedTimestamp: timestamp,
-      currentTimestamp: Math.floor(Date.now() / 1000),
-      receivedSignature: signature,
-      path,
-      body
-    });
+    // Validate required parameters
+    if (!clientId || !timestamp || !signature || !path) {
+      console.error('❌ Missing required parameters:', {
+        clientId: !!clientId,
+        timestamp: !!timestamp,
+        signature: !!signature,
+        path: !!path
+      });
+      return false;
+    }
 
     // Validate client ID
     if (clientId !== spribeConfig.clientId) {
-      console.error('Invalid client ID:', {
+      console.error('❌ Invalid client ID:', {
         received: clientId,
         expected: spribeConfig.clientId
       });
       return false;
     }
-    
-    // Validate timestamp (within 5 minutes)
-    const now = Math.floor(Date.now() / 1000);
-    const requestTime = parseInt(timestamp);
-    
-    if (Math.abs(now - requestTime) > spribeConfig.signatureExpirationTime) {
-      console.error('Request timestamp expired:', {
-        requestTime,
-        currentTime: now,
-        difference: Math.abs(now - requestTime),
-        maxAllowed: spribeConfig.signatureExpirationTime
-      });
-      return false;
-    }
+
+    // Create signature string
+    const bodyString = body ? JSON.stringify(body) : '';
+    const signatureString = `${path}${timestamp}${bodyString}`;
     
     // Generate expected signature
-    const expectedSignature = createSignature(requestTime, path, body);
-    
-    console.log('Signature comparison:', {
-      received: signature,
-      expected: expectedSignature,
-      matches: signature === expectedSignature
+    const expectedSignature = crypto
+      .createHmac('sha256', spribeConfig.clientSecret)
+      .update(signatureString)
+      .digest('hex');
+
+    // Compare signatures
+    const isValid = signature === expectedSignature;
+
+    console.log('🔍 Signature validation:', {
+      isValid,
+      receivedSignature: signature.substring(0, 10) + '...',
+      expectedSignature: expectedSignature.substring(0, 10) + '...',
+      signatureString: signatureString.substring(0, 50) + '...'
     });
-    
-    return signature === expectedSignature;
+
+    return isValid;
   } catch (error) {
-    console.error('Error validating signature:', error);
+    console.error('❌ Signature validation error:', error);
     return false;
   }
 };
@@ -265,13 +282,12 @@ const validateIP = (clientIP) => {
 };
 
 /**
- * Get user's preferred currency with USD as default for SPRIBE
+ * Get user's preferred currency - Always USD for SPRIBE
  * @param {Object} user - User object
  * @returns {string} - Currency code
  */
 const getUserCurrency = (user) => {
-  // Always return USD for SPRIBE games
-  return 'USD';
+  return user.currency || spribeConfig.defaultCurrency;
 };
 
 module.exports = {

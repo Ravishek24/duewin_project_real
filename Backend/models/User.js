@@ -1,6 +1,7 @@
-// Backend/models/User.js
+// Backend/models/User.js - FIXED VERSION WITHOUT DUPLICATE ASSOCIATIONS
 const { Model, DataTypes } = require('sequelize');
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 class User extends Model {
     static init(sequelize) {
@@ -127,6 +128,22 @@ class User extends Model {
                 type: DataTypes.BOOLEAN,
                 defaultValue: false
             },
+            // 🔥 SPRIBE TOKEN FIELDS
+            spribe_token: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Current SPRIBE authentication token'
+            },
+            spribe_token_created_at: {
+                type: DataTypes.DATE,
+                allowNull: true,
+                comment: 'When the SPRIBE token was created'
+            },
+            spribe_token_expires_at: {
+                type: DataTypes.DATE,
+                allowNull: true,
+                comment: 'When the SPRIBE token expires'
+            },
             created_at: {
                 type: DataTypes.DATE,
                 defaultValue: DataTypes.NOW
@@ -145,12 +162,17 @@ class User extends Model {
             scopes: {
                 defaultScope: {
                     attributes: {
-                        exclude: ['password', 'reset_token', 'reset_token_expiry', 'phone_otp_session_id']
+                        exclude: ['password', 'reset_token', 'reset_token_expiry', 'phone_otp_session_id', 'spribe_token']
                     }
                 },
                 withPassword: {
                     attributes: {
                         include: ['password']
+                    }
+                },
+                withSpribeToken: {
+                    attributes: {
+                        include: ['spribe_token', 'spribe_token_created_at', 'spribe_token_expires_at']
                     }
                 }
             },
@@ -172,7 +194,9 @@ class User extends Model {
     }
 
     static associate(models) {
-        // User associations will be set up here if needed
+        // 🔥 FIXED: Only set up non-SPRIBE associations here
+        // SPRIBE associations will be handled separately to avoid conflicts
+        
         if (models.AttendanceRecord) {
             this.hasMany(models.AttendanceRecord, {
                 foreignKey: 'user_id',
@@ -188,11 +212,87 @@ class User extends Model {
                 as: 'thirdPartyWallet'
             });
         }
+
+        // 🚫 REMOVED: SPRIBE associations to prevent duplicates
+        // These are now handled in models/index.js separately
     }
 
     // Instance method to check password
     async checkPassword(password) {
         return bcrypt.compare(password, this.password);
+    }
+
+    // 🔥 SPRIBE TOKEN METHODS
+    /**
+     * Generate a new SPRIBE token for this user
+     * @returns {string} - Generated token
+     */
+    generateSpribeToken() {
+        const now = Math.floor(Date.now() / 1000);
+        const expiresIn = 4 * 60 * 60; // 4 hours in seconds
+        
+        const token = jwt.sign(
+            {
+                userId: this.user_id,
+                role: this.role,
+                email: this.email
+            },
+            process.env.JWT_SECRET,
+            {
+                expiresIn: expiresIn
+            }
+        );
+        
+        // Update token metadata
+        this.spribe_token = token;
+        this.spribe_token_created_at = new Date(now * 1000);
+        this.spribe_token_expires_at = new Date((now + expiresIn) * 1000);
+        
+        console.log('Generated SPRIBE token:', {
+            userId: this.user_id,
+            createdAt: this.spribe_token_created_at,
+            expiresAt: this.spribe_token_expires_at,
+            currentTime: new Date()
+        });
+        
+        return token;
+    }
+
+    /**
+     * Check if SPRIBE token is valid
+     * @returns {boolean}
+     */
+    isSpribeTokenValid() {
+        if (!this.spribe_token || !this.spribe_token_expires_at) {
+            console.log('❌ SPRIBE token validation failed:', {
+                hasToken: !!this.spribe_token,
+                hasExpiry: !!this.spribe_token_expires_at
+            });
+            return false;
+        }
+        
+        const now = new Date();
+        const expiresAt = new Date(this.spribe_token_expires_at);
+        const isValid = now < expiresAt;
+        
+        console.log('🔍 SPRIBE token validation:', {
+            userId: this.user_id,
+            tokenCreatedAt: this.spribe_token_created_at,
+            tokenExpiresAt: this.spribe_token_expires_at,
+            currentTime: now,
+            isValid
+        });
+        
+        return isValid;
+    }
+
+    /**
+     * Clear SPRIBE token
+     */
+    clearSpribeToken() {
+        this.spribe_token = null;
+        this.spribe_token_created_at = null;
+        this.spribe_token_expires_at = null;
     }
 }
 

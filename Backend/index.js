@@ -17,13 +17,53 @@ const PORT = process.env.SERVER_PORT || 8000;
 // Create HTTP server
 const server = http.createServer(app);
 
-// Basic middleware setup
-app.use(cors({
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+// 🔥 FIXED: Enhanced CORS configuration for SPRIBE
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or Postman)
+        if (!origin) return callback(null, true);
+        
+        // SPRIBE IPs that need access
+        const spribeIPs = [
+            '194.36.47.153', '194.36.47.152', '194.36.47.150',
+            '3.255.67.141', '52.30.236.39', '54.78.240.177'
+        ];
+        
+        // Your allowed origins
+        const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(',') || [
+            'https://diuwin-final.vercel.app',
+            'http://localhost:3000',
+            'http://localhost:3001'
+        ]);
+        
+        // Check if origin is allowed or if it's from SPRIBE
+        if (allowedOrigins.includes(origin) || spribeIPs.some(ip => origin?.includes(ip))) {
+            return callback(null, true);
+        }
+        
+        // For development, allow all origins
+        if (process.env.NODE_ENV !== 'production') {
+            return callback(null, true);
+        }
+        
+        callback(new Error('Not allowed by CORS'));
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
-}));
+    allowedHeaders: [
+        'Content-Type', 
+        'Authorization',
+        // 🔥 CRITICAL: Add SPRIBE headers
+        'X-Spribe-Client-ID',
+        'X-Spribe-Client-TS', 
+        'X-Spribe-Client-Signature'
+    ],
+    credentials: true,
+    optionsSuccessStatus: 200 // For legacy browser support
+};
+
+app.use(cors(corsOptions));
+
+
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -50,6 +90,7 @@ app.get('/', (req, res) => {
 // Variables to hold initialized components
 let sequelize = null;
 let models = null;
+
 
 // Complete database and model initialization
 const initializeDatabaseAndModels = async () => {

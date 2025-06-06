@@ -1,11 +1,8 @@
-// Backend/models/index.js - Fixed Version
+// Backend/models/index.js - FIXED VERSION WITHOUT DUPLICATE ASSOCIATIONS
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
-
-// DON'T import sequelize at the top level - it will be imported when needed
-// const { sequelize, waitForDatabase } = require('../config/db'); // REMOVED
 
 // Helper function to verify model methods
 const verifyModelMethods = (model, modelName) => {
@@ -166,7 +163,10 @@ const initializeModels = async () => {
                 }
             }
 
-            // Set up model associations
+            // 🔥 FIXED: Set up model associations properly without duplicates
+            console.log('🔧 Setting up model associations...');
+            
+            // First, set up individual model associations
             Object.values(models).forEach(model => {
                 if (model.associate) {
                     try {
@@ -177,67 +177,87 @@ const initializeModels = async () => {
                 }
             });
 
-            // ======================= SPRIBE MODEL ASSOCIATIONS =======================
-
-            // Set up SPRIBE-specific associations
+            // 🔥 FIXED: Set up SPRIBE-specific associations separately with unique aliases
             console.log('🎮 Setting up SPRIBE model associations...');
 
             try {
                 // SpribeGameSession associations
                 if (models.SpribeGameSession && models.User) {
-                    models.SpribeGameSession.belongsTo(models.User, {
-                        foreignKey: 'user_id',
-                        as: 'spribeUser'
-                    });
-                    console.log('✅ SpribeGameSession -> User association created');
+                    // Check if association already exists
+                    if (!models.SpribeGameSession.associations.user) {
+                        models.SpribeGameSession.belongsTo(models.User, {
+                            foreignKey: 'user_id',
+                            as: 'user' // Use 'user' instead of 'spribeUser'
+                        });
+                        console.log('✅ SpribeGameSession -> User association created');
+                    }
                 }
 
                 if (models.SpribeGameSession && models.SpribeTransaction) {
-                    models.SpribeGameSession.hasMany(models.SpribeTransaction, {
-                        foreignKey: 'session_id',
-                        as: 'spribeTransactions'
-                    });
-                    console.log('✅ SpribeGameSession -> SpribeTransaction association created');
+                    // Check if association already exists
+                    if (!models.SpribeGameSession.associations.transactions) {
+                        models.SpribeGameSession.hasMany(models.SpribeTransaction, {
+                            foreignKey: 'session_id',
+                            as: 'transactions' // Use 'transactions' instead of 'spribeTransactions'
+                        });
+                        console.log('✅ SpribeGameSession -> SpribeTransaction association created');
+                    }
                 }
 
                 // SpribeTransaction associations  
                 if (models.SpribeTransaction && models.User) {
-                    models.SpribeTransaction.belongsTo(models.User, {
-                        foreignKey: 'user_id',
-                        as: 'spribeTransactionUser'
-                    });
-                    console.log('✅ SpribeTransaction -> User association created');
+                    // Check if association already exists
+                    if (!models.SpribeTransaction.associations.user) {
+                        models.SpribeTransaction.belongsTo(models.User, {
+                            foreignKey: 'user_id',
+                            as: 'user' // Use 'user' instead of 'spribeTransactionUser'
+                        });
+                        console.log('✅ SpribeTransaction -> User association created');
+                    }
                 }
 
                 if (models.SpribeTransaction && models.SpribeGameSession) {
-                    models.SpribeTransaction.belongsTo(models.SpribeGameSession, {
-                        foreignKey: 'session_id',
-                        as: 'spribeGameSession'
-                    });
-                    console.log('✅ SpribeTransaction -> SpribeGameSession association created');
+                    // Check if association already exists
+                    if (!models.SpribeTransaction.associations.session) {
+                        models.SpribeTransaction.belongsTo(models.SpribeGameSession, {
+                            foreignKey: 'session_id',
+                            as: 'session' // Use 'session' instead of 'spribeGameSession'
+                        });
+                        console.log('✅ SpribeTransaction -> SpribeGameSession association created');
+                    }
                 }
 
-                // User associations with SPRIBE models
+                // 🔥 FIXED: User associations with SPRIBE models - DO NOT CREATE DUPLICATES
+                // These should be handled in the User model's associate method, not here
+                // Commenting out to prevent duplicates:
+                
+                /*
                 if (models.User && models.SpribeGameSession) {
-                    models.User.hasMany(models.SpribeGameSession, {
-                        foreignKey: 'user_id',
-                        as: 'spribeGameSessions'
-                    });
-                    console.log('✅ User -> SpribeGameSession association created');
+                    if (!models.User.associations.spribeGameSessions) {
+                        models.User.hasMany(models.SpribeGameSession, {
+                            foreignKey: 'user_id',
+                            as: 'spribeGameSessions'
+                        });
+                        console.log('✅ User -> SpribeGameSession association created');
+                    }
                 }
 
                 if (models.User && models.SpribeTransaction) {
-                    models.User.hasMany(models.SpribeTransaction, {
-                        foreignKey: 'user_id', 
-                        as: 'spribeTransactions'
-                    });
-                    console.log('✅ User -> SpribeTransaction association created');
+                    if (!models.User.associations.spribeTransactions) {
+                        models.User.hasMany(models.SpribeTransaction, {
+                            foreignKey: 'user_id', 
+                            as: 'spribeTransactions'
+                        });
+                        console.log('✅ User -> SpribeTransaction association created');
+                    }
                 }
+                */
 
                 console.log('✅ All SPRIBE model associations set up successfully');
 
             } catch (error) {
                 console.error('❌ Error setting up SPRIBE associations:', error);
+                // Don't throw - continue with initialization
             }
 
             isInitialized = true;
@@ -312,20 +332,20 @@ const verifySpribeModels = () => {
         issues.push('User model not loaded');
     }
     
-    // Check associations
-    if (models.SpribeGameSession && !models.SpribeGameSession.associations.spribeUser) {
+    // Check associations - use simplified aliases
+    if (models.SpribeGameSession && !models.SpribeGameSession.associations.user) {
         issues.push('SpribeGameSession -> User association missing');
     }
     
-    if (models.SpribeGameSession && !models.SpribeGameSession.associations.spribeTransactions) {
+    if (models.SpribeGameSession && !models.SpribeGameSession.associations.transactions) {
         issues.push('SpribeGameSession -> SpribeTransaction association missing');
     }
     
-    if (models.SpribeTransaction && !models.SpribeTransaction.associations.spribeTransactionUser) {
+    if (models.SpribeTransaction && !models.SpribeTransaction.associations.user) {
         issues.push('SpribeTransaction -> User association missing');
     }
     
-    if (models.SpribeTransaction && !models.SpribeTransaction.associations.spribeGameSession) {
+    if (models.SpribeTransaction && !models.SpribeTransaction.associations.session) {
         issues.push('SpribeTransaction -> SpribeGameSession association missing');
     }
     
@@ -336,135 +356,6 @@ const verifySpribeModels = () => {
     };
 };
 
-/**
- * Get SPRIBE transaction statistics
- * @param {Object} filters - Filter options
- * @returns {Promise<Object>} Statistics
- */
-const getSpribeStatistics = async (filters = {}) => {
-    try {
-        if (!isInitialized) {
-            throw new Error('Models not initialized');
-        }
-        
-        const { sequelize } = require('../config/db');
-        const { Op } = require('sequelize');
-        
-        const {
-            userId,
-            gameId,
-            dateFrom,
-            dateTo,
-            currency = 'EUR'
-        } = filters;
-        
-        let whereClause = {};
-        
-        if (userId) {
-            whereClause.user_id = userId;
-        }
-        
-        if (gameId) {
-            whereClause.game_id = gameId;
-        }
-        
-        if (currency) {
-            whereClause.currency = currency;
-        }
-        
-        if (dateFrom || dateTo) {
-            whereClause.created_at = {};
-            if (dateFrom) {
-                whereClause.created_at[Op.gte] = new Date(dateFrom);
-            }
-            if (dateTo) {
-                whereClause.created_at[Op.lte] = new Date(dateTo);
-            }
-        }
-        
-        // Get transaction statistics
-        const stats = await models.SpribeTransaction.findAll({
-            where: whereClause,
-            attributes: [
-                [sequelize.fn('COUNT', sequelize.col('id')), 'total_transactions'],
-                [sequelize.fn('COUNT', sequelize.literal("CASE WHEN type = 'bet' THEN 1 END")), 'total_bets'],
-                [sequelize.fn('COUNT', sequelize.literal("CASE WHEN type = 'win' THEN 1 END")), 'total_wins'],
-                [sequelize.fn('COUNT', sequelize.literal("CASE WHEN type = 'rollback' THEN 1 END")), 'total_rollbacks'],
-                [sequelize.fn('SUM', sequelize.literal("CASE WHEN type = 'bet' THEN amount ELSE 0 END")), 'total_bet_amount'],
-                [sequelize.fn('SUM', sequelize.literal("CASE WHEN type = 'win' THEN amount ELSE 0 END")), 'total_win_amount'],
-                [sequelize.fn('AVG', sequelize.literal("CASE WHEN type = 'bet' THEN amount END")), 'avg_bet_amount'],
-                [sequelize.fn('MAX', sequelize.literal("CASE WHEN type = 'bet' THEN amount END")), 'max_bet_amount'],
-                [sequelize.fn('MAX', sequelize.literal("CASE WHEN type = 'win' THEN amount END")), 'max_win_amount']
-            ],
-            raw: true
-        });
-        
-        // Get session statistics
-        let sessionStats = {};
-        if (userId) {
-            const sessions = await models.SpribeGameSession.findAll({
-                where: userId ? { user_id: userId } : {},
-                attributes: [
-                    [sequelize.fn('COUNT', sequelize.col('id')), 'total_sessions'],
-                    [sequelize.fn('COUNT', sequelize.literal("CASE WHEN status = 'active' THEN 1 END")), 'active_sessions'],
-                    [sequelize.fn('COUNT', sequelize.literal("CASE WHEN status = 'ended' THEN 1 END")), 'completed_sessions'],
-                    [sequelize.fn('AVG', sequelize.literal("CASE WHEN ended_at IS NOT NULL THEN TIMESTAMPDIFF(SECOND, started_at, ended_at) END")), 'avg_session_duration']
-                ],
-                raw: true
-            });
-            
-            sessionStats = sessions[0] || {};
-        }
-        
-        const transactionStats = stats[0] || {};
-        
-        // Calculate derived statistics
-        const totalBetAmount = parseInt(transactionStats.total_bet_amount) || 0;
-        const totalWinAmount = parseInt(transactionStats.total_win_amount) || 0;
-        const netResult = totalWinAmount - totalBetAmount;
-        const rtp = totalBetAmount > 0 ? (totalWinAmount / totalBetAmount * 100) : 0;
-        
-        return {
-            success: true,
-            currency: currency,
-            transactions: {
-                total: parseInt(transactionStats.total_transactions) || 0,
-                bets: parseInt(transactionStats.total_bets) || 0,
-                wins: parseInt(transactionStats.total_wins) || 0,
-                rollbacks: parseInt(transactionStats.total_rollbacks) || 0
-            },
-            amounts: {
-                total_bet: (totalBetAmount / 100).toFixed(2),
-                total_win: (totalWinAmount / 100).toFixed(2),
-                net_result: (netResult / 100).toFixed(2),
-                avg_bet: ((parseInt(transactionStats.avg_bet_amount) || 0) / 100).toFixed(2),
-                max_bet: ((parseInt(transactionStats.max_bet_amount) || 0) / 100).toFixed(2),
-                max_win: ((parseInt(transactionStats.max_win_amount) || 0) / 100).toFixed(2)
-            },
-            metrics: {
-                rtp_percentage: rtp.toFixed(2),
-                win_rate: transactionStats.total_bets > 0 ? 
-                    ((parseInt(transactionStats.total_wins) || 0) / (parseInt(transactionStats.total_bets) || 1) * 100).toFixed(2) : '0.00'
-            },
-            sessions: {
-                total: parseInt(sessionStats.total_sessions) || 0,
-                active: parseInt(sessionStats.active_sessions) || 0,
-                completed: parseInt(sessionStats.completed_sessions) || 0,
-                avg_duration_minutes: sessionStats.avg_session_duration ? 
-                    (parseFloat(sessionStats.avg_session_duration) / 60).toFixed(2) : '0.00'
-            }
-        };
-        
-    } catch (error) {
-        console.error('❌ Error getting SPRIBE statistics:', error);
-        return {
-            success: false,
-            message: 'Failed to get statistics',
-            error: error.message
-        };
-    }
-};
-
 // Export models and functions
 module.exports = {
     initializeModels,
@@ -472,7 +363,6 @@ module.exports = {
     getModelsSync,
     getSpribeModels,
     verifySpribeModels,
-    getSpribeStatistics,
     // Add this getter only if you need backward compatibility
     get models() {
         if (!isInitialized) {

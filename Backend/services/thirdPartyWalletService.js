@@ -34,7 +34,7 @@ const createWallet = async (userId) => {
     const wallet = await ThirdPartyWallet.create({
       user_id: userId,
       balance: 0.00,
-      currency: 'EUR', // Match seamless config
+      currency: 'USD', // Changed from EUR to USD
       is_active: true,
       last_updated: new Date()
     }, { transaction: t });
@@ -87,7 +87,7 @@ const getOrCreateWallet = async (userId, existingTransaction = null) => {
       wallet = await ThirdPartyWallet.create({
         user_id: userId,
         balance: 0.00,
-        currency: 'EUR', // Match seamless config
+        currency: 'USD', // Changed from EUR to USD
         is_active: true,
         last_updated: new Date()
       }, { transaction: t });
@@ -351,7 +351,7 @@ const transferToMainWallet = async (userId) => {
  * @param {string} currency - Currency code (USD or EUR)
  * @returns {Promise<Object>} Balance info
  */
-const getBalance = async (userId, currency = 'EUR') => {
+const getBalance = async (userId, currency = 'USD') => {
   try {
     console.log(`Getting balance for user ${userId} in ${currency}`);
     
@@ -381,9 +381,12 @@ const getBalance = async (userId, currency = 'EUR') => {
       };
     }
     
-    // If wallet is in EUR but request is for USD, convert
+    // Convert between EUR and USD
+    const conversionRate = 1.08; // 1 EUR = 1.08 USD
+    
     if (wallet.currency === 'EUR' && currency === 'USD') {
-      const usdBalance = balance * 1.08; // Approximate EUR to USD conversion
+      const usdBalance = balance * conversionRate;
+      console.log(`Converted balance from EUR to USD: ${balance} EUR = ${usdBalance} USD`);
       return {
         success: true,
         balance: usdBalance,
@@ -391,9 +394,9 @@ const getBalance = async (userId, currency = 'EUR') => {
       };
     }
     
-    // If wallet is in USD but request is for EUR, convert
     if (wallet.currency === 'USD' && currency === 'EUR') {
-      const eurBalance = balance / 1.08; // Approximate USD to EUR conversion
+      const eurBalance = balance / conversionRate;
+      console.log(`Converted balance from USD to EUR: ${balance} USD = ${eurBalance} EUR`);
       return {
         success: true,
         balance: eurBalance,
@@ -401,10 +404,11 @@ const getBalance = async (userId, currency = 'EUR') => {
       };
     }
     
+    // If currencies don't match and can't be converted, return error
     return {
-      success: true,
-      balance: balance,
-      currency: wallet.currency
+      success: false,
+      message: `Cannot convert from ${wallet.currency} to ${currency}`,
+      balance: 0
     };
   } catch (error) {
     console.error('Error getting third-party wallet balance:', error);
@@ -533,14 +537,14 @@ const walletExists = async (userId) => {
     return {
       exists: !!wallet,
       balance: wallet ? parseFloat(wallet.balance) : 0,
-      currency: wallet ? wallet.currency : 'EUR'
+      currency: wallet ? wallet.currency : 'USD'
     };
   } catch (error) {
     console.error('Error checking wallet existence:', error);
     return {
       exists: false,
       balance: 0,
-      currency: 'EUR'
+      currency: 'USD'
     };
   }
 };

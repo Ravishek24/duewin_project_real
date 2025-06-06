@@ -1,4 +1,4 @@
-// services/spribeService.js - COMPLETE SERVICE WITH BOTH MODELS
+// services/spribeService.js - FIXED VERSION TO HANDLE DUPLICATE TOKENS
 const axios = require('axios');
 const { generateSpribeHeaders } = require('../utils/spribeSignatureUtils');
 const spribeConfig = require('../config/spribeConfig');
@@ -12,6 +12,7 @@ const {
 const { sequelize } = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
+const jwt = require('jsonwebtoken');
 
 // Import models - these will be loaded after models are initialized
 let User, SpribeGameSession, SpribeTransaction, Transaction;
@@ -31,9 +32,6 @@ const initializeModels = async () => {
       if (!User || !SpribeGameSession || !SpribeTransaction) {
         throw new Error('Required SPRIBE models not loaded');
       }
-      
-      // Verify database tables
-      await verifyDatabaseTables();
       
       console.log('✅ SPRIBE service models initialized');
     } catch (error) {
@@ -83,56 +81,52 @@ const verifyDatabaseTables = async () => {
   }
 };
 
-// ======================= GAME SESSION MANAGEMENT =======================
+// Generate unique session token
+const generateUniqueSessionToken = () => {
+  const crypto = require('crypto');
+  const timestamp = Date.now().toString();
+  const random = crypto.randomBytes(16).toString('hex');
+  return crypto.createHash('sha256').update(timestamp + random).digest('hex');
+};
 
+
+// ======================= GAME SESSION MANAGEMENT =======================
 /**
- * Create a new game session in SpribeGameSession model
+ * 🔥 FIXED: Create a new game session with proper token handling
  */
-const createGameSession = async (userId, gameId, provider, launchToken, currency, ipAddress) => {
+const createGameSession = async (userId, gameId, provider, launchToken, userToken, currency, ipAddress) => {
   try {
     console.log('🎮 Creating SPRIBE session with params:', {
       userId,
       gameId,
       provider,
-      tokenLength: launchToken?.length,
+      launchTokenLength: launchToken?.length,
+      userTokenLength: userToken?.length,
       currency,
       ipAddress
     });
 
     await initializeModels();
-    console.log('✅ Models initialized for session creation');
 
     // Validate required parameters
-    if (!userId) {
-      throw new Error('User ID is required');
-    }
-    if (!gameId) {
-      throw new Error('Game ID is required');
-    }
-    if (!provider) {
-      throw new Error('Provider is required');
-    }
-    if (!launchToken) {
-      throw new Error('Launch token is required');
-    }
-    if (!currency) {
-      throw new Error('Currency is required');
+    if (!userId || !gameId || !provider || !launchToken || !userToken || !currency) {
+      throw new Error('Missing required parameters for session creation');
     }
 
     const t = await sequelize.transaction();
-    console.log('✅ Transaction started');
     
     try {
       console.log(`🎮 Creating SPRIBE session: User ${userId}, Game ${gameId}`);
       
-      // Create new SPRIBE game session
+      // 🔥 FIXED: Create new SPRIBE game session with both tokens
       const session = await SpribeGameSession.create({
         user_id: userId,
         game_id: gameId,
         provider: provider,
-        launch_token: launchToken,
+        launch_token: launchToken,    // Unique token for this session
+        session_token: null,          // Will be set by SPRIBE during auth
         currency: currency,
-        platform: 'desktop', // Will be updated in auth
+        platform: 'desktop',         // Will be updated in auth
         ip_address: ipAddress,
         status: 'active',
         started_at: new Date()
@@ -148,43 +142,12 @@ const createGameSession = async (userId, gameId, provider, launchToken, currency
     } catch (error) {
       await t.rollback();
       console.error('❌ Error creating SPRIBE game session:', error);
-      console.error('Error details:', {
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-        code: error.code,
-        errno: error.errno,
-        sqlState: error.sqlState,
-        sqlMessage: error.sqlMessage
-      });
       
-      // Check for specific database errors
-      if (error.name === 'SequelizeValidationError') {
-        const validationErrors = error.errors.map(err => ({
-          field: err.path,
-          message: err.message,
-          value: err.value
-        }));
-        console.error('Validation errors:', validationErrors);
-        return {
-          success: false,
-          message: `Validation error: ${validationErrors.map(e => `${e.field}: ${e.message}`).join(', ')}`
-        };
-      }
-      
+      // Handle specific error types
       if (error.name === 'SequelizeUniqueConstraintError') {
-        console.error('Unique constraint violation:', error.errors);
         return {
           success: false,
-          message: 'A session with this token already exists'
-        };
-      }
-      
-      if (error.name === 'SequelizeForeignKeyConstraintError') {
-        console.error('Foreign key constraint violation:', error);
-        return {
-          success: false,
-          message: 'Invalid user ID or game ID'
+          message: 'Session with this token already exists. Please try again.'
         };
       }
       
@@ -195,11 +158,6 @@ const createGameSession = async (userId, gameId, provider, launchToken, currency
     }
   } catch (error) {
     console.error('❌ Critical error in createGameSession:', error);
-    console.error('Error details:', {
-      name: error.name,
-      message: error.message,
-      stack: error.stack
-    });
     return {
       success: false,
       message: `Failed to create game session: ${error.message}`
@@ -215,7 +173,7 @@ const updateGameSession = async (launchToken, sessionToken, platform) => {
   const t = await sequelize.transaction();
   
   try {
-    console.log(`🔄 Updating SPRIBE session: Token ${launchToken.substring(0, 8)}...`);
+    console.log(`🔄 Updating SPRIBE session: Token ${launchToken?.substring(0, 8)}...`);
     
     // Find session by launch token
     const session = await SpribeGameSession.findOne({
@@ -610,7 +568,7 @@ const processRollbackTransaction = async (transactionData) => {
 // ======================= MAIN SPRIBE API HANDLERS =======================
 
 /**
- * Get game launch URL - RECORDS IN SpribeGameSession
+ * 🔥 FIXED: Get game launch URL with correct token usage
  */
 const getGameLaunchUrl = async (gameId, userId, req) => {
   try {
@@ -618,6 +576,21 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
     
     await initializeModels();
     console.log('✅ Models initialized');
+    
+    // Get user ID from JWT token if available
+    let actualUserId = userId;
+    if (req && req.headers && req.headers.authorization) {
+      try {
+        const token = req.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded && decoded.userId) {
+          actualUserId = decoded.userId;
+          console.log('✅ Using user ID from JWT token:', actualUserId);
+        }
+      } catch (error) {
+        console.warn('⚠️ Failed to decode JWT token:', error.message);
+      }
+    }
     
     // Validate game ID against staging games
     if (!spribeConfig.availableGames.includes(gameId)) {
@@ -631,10 +604,10 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
       };
     }
     
-    // Get user information
-    const user = await User.findByPk(userId);
+    // Get user with SPRIBE token scope
+    const user = await User.scope('withSpribeToken').findByPk(actualUserId);
     if (!user) {
-      console.error('❌ User not found:', { userId });
+      console.error('❌ User not found:', { actualUserId });
       return {
         success: false,
         message: 'User not found'
@@ -642,14 +615,106 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
     }
     console.log('✅ User found:', { userId: user.user_id });
     
-    // Get user's currency (USD for SPRIBE)
-    const currency = 'USD';
-    console.log('✅ Using currency:', { currency });
+    // Check for existing active session first
+    console.log('🔄 Checking for existing active sessions...');
+    const existingSession = await SpribeGameSession.findOne({
+      where: {
+        user_id: actualUserId,
+        game_id: gameId,
+        status: 'active'
+      },
+      order: [['created_at', 'DESC']]
+    });
     
-    // Check third-party wallet balance in EUR first
+    if (existingSession) {
+      console.log('✅ Found existing active session:', { sessionId: existingSession.id });
+      
+      // Check if the existing session is still valid (less than 4 hours old)
+      const sessionAge = Date.now() - new Date(existingSession.started_at).getTime();
+      const maxAge = 4 * 60 * 60 * 1000; // 4 hours
+      
+      if (sessionAge < maxAge) {
+        // Check if user has valid token
+        if (!user.isSpribeTokenValid()) {
+          console.log('🔄 Generating new SPRIBE user token for existing session...');
+          const userToken = user.generateSpribeToken();
+          await user.save();
+          console.log('✅ New SPRIBE user token generated for existing session');
+        }
+        
+        // Use existing session
+        console.log('✅ Reusing existing valid session');
+        
+        // Get user's balance for frontend display
+        const thirdPartyWalletService = require('./thirdPartyWalletService');
+        const walletResult = await thirdPartyWalletService.getBalance(actualUserId, 'USD');
+        
+        if (!walletResult.success) {
+          console.error('❌ Failed to get wallet balance:', walletResult.message);
+          return {
+            success: false,
+            message: 'Failed to get wallet balance'
+          };
+        }
+        
+        // Generate launch URL with user token (not launch token!)
+        const returnUrl = `${process.env.FRONTEND_URL}/games`;
+        const accountHistoryUrl = `${process.env.FRONTEND_URL}/account/history`;
+        
+        const launchUrl = generateGameLaunchUrl(gameId, user, {
+          currency: 'USD',
+          token: user.spribe_token, // 🔥 FIX: Use user token, not launch token
+          returnUrl,
+          accountHistoryUrl,
+          ircDuration: 3600,
+        });
+        
+        return {
+          success: true,
+          url: launchUrl,
+          sessionId: existingSession.id,
+          warningMessage: walletResult.balance <= 0 ? 'You have no funds available to play. Please deposit first.' : null
+        };
+      } else {
+        // Mark old session as expired
+        console.log('🔄 Marking old session as expired...');
+        await existingSession.update({
+          status: 'expired',
+          ended_at: new Date()
+        });
+      }
+    }
+    
+    // 🔥 FIXED: Generate or refresh SPRIBE user token
+    let userToken;
+    if (!user.isSpribeTokenValid()) {
+      console.log('🔄 Generating new SPRIBE user token...');
+      userToken = user.generateSpribeToken();
+      await user.save();
+      console.log('✅ New SPRIBE user token generated:', {
+        userId: user.user_id,
+        token: userToken.substring(0, 8) + '...',
+        createdAt: user.spribe_token_created_at,
+        expiresAt: user.spribe_token_expires_at
+      });
+    } else {
+      userToken = user.spribe_token;
+      console.log('✅ Using existing valid SPRIBE user token:', {
+        userId: user.user_id,
+        token: userToken.substring(0, 8) + '...',
+        createdAt: user.spribe_token_created_at,
+        expiresAt: user.spribe_token_expires_at
+      });
+    }
+    
+    // 🔥 FIXED: Generate unique launch token (for internal session tracking)
+    const launchToken = generateUniqueSessionToken();
+    console.log('✅ Generated unique launch token:', { token: launchToken.substring(0, 8) + '...' });
+    
+    // Check wallet balance
     const thirdPartyWalletService = require('./thirdPartyWalletService');
-    console.log('🔄 Checking third-party wallet balance in EUR...');
-    const walletResult = await thirdPartyWalletService.getBalance(userId, 'EUR');
+    console.log('🔄 Checking third-party wallet balance...');
+    const walletResult = await thirdPartyWalletService.getBalance(actualUserId, 'USD');
     
     if (!walletResult.success) {
       console.error('❌ Failed to get third-party wallet balance:', walletResult.message);
@@ -659,32 +724,23 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
       };
     }
     
-    // Convert EUR balance to USD (approximate rate 1 EUR = 1.08 USD)
-    const eurBalance = walletResult.balance;
-    const usdBalance = eurBalance * 1.08;
+    const usdBalance = walletResult.balance;
+    console.log('✅ Third-party wallet balance:', { usd: usdBalance });
     
-    console.log('✅ Third-party wallet balance:', {
-      eur: eurBalance,
-      usd: usdBalance
-    });
-    
-    // Generate frontend return URL
+    // Generate frontend return URLs
     const returnUrl = `${process.env.FRONTEND_URL}/games`;
     const accountHistoryUrl = `${process.env.FRONTEND_URL}/account/history`;
     console.log('✅ Generated URLs:', { returnUrl, accountHistoryUrl });
     
-    // Generate one-time token
-    const token = generateOneTimeToken();
-    console.log('✅ Generated token:', { token: token.substring(0, 8) + '...' });
-    
-    // Create game session
-    console.log('🔄 Creating game session...');
+    // 🔥 FIXED: Create game session with unique launch token
+    console.log('🔄 Creating new game session...');
     const sessionResult = await createGameSession(
-      userId, 
+      actualUserId, 
       gameId, 
       spribeConfig.providers[gameId], 
-      token, 
-      currency,
+      launchToken, // Store launch token in session for tracking
+      userToken,   // Store user token separately
+      'USD',
       req.headers['x-forwarded-for'] || req.connection.remoteAddress
     );
     
@@ -697,43 +753,33 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
     }
     console.log('✅ Game session created:', { sessionId: sessionResult.session.id });
     
-    // Generate launch URL
+    // 🔥 CRITICAL FIX: Generate launch URL with USER TOKEN (not launch token)
     console.log('🔄 Generating launch URL...');
     const launchUrl = generateGameLaunchUrl(gameId, user, {
-      currency,
-      token,
+      currency: 'USD',
+      token: userToken, // 🔥 USE USER TOKEN FOR LAUNCH URL
       returnUrl,
       accountHistoryUrl,
-      ircDuration: 3600, // 1 hour reality check
+      ircDuration: 3600,
     });
     console.log('✅ Launch URL generated');
     
     // Log session creation
     console.log(`✅ SPRIBE Session Created:`, {
       sessionId: sessionResult.session.id,
-      userId,
+      userId: actualUserId,
       gameId,
-      token: token.substring(0, 8) + '...',
-      currency,
-      balance: {
-        eur: eurBalance,
-        usd: usdBalance
-      }
+      launchToken: launchToken.substring(0, 8) + '...',
+      userToken: userToken.substring(0, 8) + '...',
+      currency: 'USD',
+      balance: usdBalance
     });
-    
-    if (usdBalance <= 0) {
-      return {
-        success: true,
-        url: launchUrl,
-        sessionId: sessionResult.session.id,
-        warningMessage: 'You have no funds available to play. Please deposit first.'
-      };
-    }
     
     return {
       success: true,
       url: launchUrl,
-      sessionId: sessionResult.session.id
+      sessionId: sessionResult.session.id,
+      warningMessage: usdBalance <= 0 ? 'You have no funds available to play. Please deposit first.' : null
     };
   } catch (error) {
     console.error('❌ Error generating game launch URL:', error);
@@ -746,101 +792,144 @@ const getGameLaunchUrl = async (gameId, userId, req) => {
 };
 
 /**
- * Handle authentication request from SPRIBE
- * @param {Object} data - Authentication request data
- * @returns {Object} - Authentication response
+ * 🔥 FIXED: Handle authentication request from SPRIBE
  */
-const handleAuth = async (data) => {
-  await initializeModels();
-  
+const handleAuth = async (req, res) => {
+  console.log('\n🔐 ===== SPRIBE AUTHENTICATION REQUEST =====');
+  console.log('📦 Request details:', {
+    timestamp: new Date().toISOString(),
+    headers: req.headers,
+    body: req.body,
+    query: req.query,
+    params: req.params
+  });
+
   try {
-    console.log('🔐 Processing SPRIBE auth request:', {
-      user_token: data.user_token,
-      session_token: data.session_token,
-      platform: data.platform,
-      currency: data.currency
-    });
-    
+    const { user_id, token, currency = 'USD' } = req.body;
+    console.log('🔍 Auth parameters:', { user_id, token: token ? token.substring(0, 8) + '...' : null, currency });
+
     // Validate required fields
-    if (!data.user_token || !data.session_token || !data.platform || !data.currency) {
-      console.error('❌ Missing required fields in auth request');
-      return {
-        code: 400,
-        message: 'Missing required fields'
-      };
+    if (!user_id || !token) {
+      console.error('❌ Missing required fields:', { user_id: !!user_id, token: !!token });
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields'
+      });
     }
-    
-    // Find user by token
+
+    // Find user by SPRIBE token
     const user = await User.findOne({
-      where: { spribe_token: data.user_token }
+      where: { spribe_token: token }
     });
-    
+
+    console.log('👤 User lookup result:', {
+      found: !!user,
+      userId: user?.user_id,
+      token: token ? token.substring(0, 8) + '...' : null
+    });
+
     if (!user) {
-      console.error('❌ User not found for token:', data.user_token);
-      return {
-        code: 401,
-        message: 'User token is invalid'
-      };
+      console.error('❌ User not found for token');
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
     }
-    
-    // Check if token is expired
-    const tokenAge = Date.now() - new Date(user.spribe_token_created_at).getTime();
-    if (tokenAge > spribeConfig.tokenExpirationTime) {
-      console.error('❌ Token expired for user:', user.id);
-      return {
-        code: 403,
-        message: 'User token is expired'
-      };
+
+    // Check if token is valid
+    try {
+      const tokenData = jwt.verify(token, process.env.JWT_SECRET);
+      console.log('🔑 Token validation:', {
+        userId: tokenData.userId,
+        tokenCreatedAt: new Date(tokenData.iat * 1000).toISOString(),
+        tokenExpiresAt: new Date(tokenData.exp * 1000).toISOString(),
+        currentTime: new Date().toISOString()
+      });
+
+      // Validate token expiration
+      const currentTime = Math.floor(Date.now() / 1000);
+      if (tokenData.exp < currentTime) {
+        console.error('❌ Token expired:', {
+          tokenExpiresAt: new Date(tokenData.exp * 1000).toISOString(),
+          currentTime: new Date(currentTime * 1000).toISOString()
+        });
+        return res.status(401).json({
+          success: false,
+          error: 'Token expired'
+        });
+      }
+    } catch (error) {
+      console.error('❌ Token validation error:', error.message);
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid token'
+      });
     }
-    
-    // Get user's balance in EUR first
+
+    // Update user's active session
+    const session = await SpribeGameSession.findOne({
+      where: { user_id: user.user_id, status: 'active' }
+    });
+
+    if (session) {
+      console.log('🔄 Updating existing session:', {
+        sessionId: session.id,
+        userId: user.user_id
+      });
+      await session.update({
+        spribe_session_token: token,
+        last_activity: new Date()
+      });
+    }
+
+    // Get user's balance
+    console.log('💰 Getting balance for user', user.user_id, 'in', currency);
     const thirdPartyWalletService = require('./thirdPartyWalletService');
-    console.log('🔄 Getting third-party wallet balance in EUR...');
-    const walletResult = await thirdPartyWalletService.getBalance(user.id, 'EUR');
-    
+    const walletResult = await thirdPartyWalletService.getBalance(user.user_id, currency);
+    console.log('💵 Balance result:', walletResult);
+
     if (!walletResult.success) {
-      console.error('❌ Failed to get third-party wallet balance:', walletResult.message);
-      return {
-        code: 500,
-        message: 'Failed to get wallet balance'
-      };
+      console.error('❌ Failed to get balance:', walletResult.error);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to get balance'
+      });
     }
-    
-    // Convert EUR balance to USD (approximate rate 1 EUR = 1.08 USD)
-    const eurBalance = walletResult.balance;
-    const usdBalance = eurBalance * 1.08;
-    
-    console.log('✅ Third-party wallet balance:', {
-      eur: eurBalance,
-      usd: usdBalance
+
+    // Format balance for SPRIBE
+    const formattedBalance = spribeUtils.formatAmount(walletResult.balance, currency);
+    console.log('💱 Formatted balance:', {
+      original: walletResult.balance,
+      formatted: formattedBalance,
+      currency
     });
-    
-    // Format balance according to SPRIBE requirements (1 USD = 1000 units)
-    // Round to nearest integer to avoid floating point issues
-    const spribeBalance = Math.round(usdBalance * 1000);
-    
-    console.log('✅ SPRIBE formatted balance:', {
-      original: usdBalance,
-      spribe_units: spribeBalance
-    });
-    
-    // Return success response with data object
-    return {
-      code: 200,
-      message: 'Success',
+
+    // Return success response
+    const response = {
+      success: true,
       data: {
-        user_id: user.id.toString(),
-        username: user.username,
-        balance: spribeBalance, // Balance in SPRIBE units (1 USD = 1000 units)
-        currency: 'USD' // Always USD for SPRIBE
+        user: {
+          id: user.user_id,
+          username: user.username,
+          balance: formattedBalance,
+          currency: 'USD'  // Always return USD
+        }
       }
     };
+
+    console.log('✅ Sending auth response:', {
+      userId: user.user_id,
+      balance: formattedBalance,
+      currency: 'USD'
+    });
+
+    return res.json(response);
   } catch (error) {
-    console.error('❌ Error handling auth request:', error);
-    return {
-      code: 500,
-      message: 'Internal server error'
-    };
+    console.error('❌ Auth error:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 };
 
@@ -888,8 +977,8 @@ const handlePlayerInfo = async (infoData) => {
       data: {
         user_id: user.user_id.toString(),
         username: user.user_name,
-        balance: formatAmount(walletResult.balance, 'USD'),
-        currency: 'USD'
+        balance: walletResult.balance,
+        currency: 'USD'  // Always return USD
       }
     };
   } catch (error) {

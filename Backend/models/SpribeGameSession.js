@@ -1,4 +1,4 @@
-// models/SpribeGameSession.js - UPDATED FOR USD AND ASSOCIATIONS
+// models/SpribeGameSession.js - FIXED VERSION WITH PROPER ASSOCIATIONS
 const { Model, DataTypes } = require('sequelize');
 
 class SpribeGameSession extends Model {
@@ -31,7 +31,7 @@ class SpribeGameSession extends Model {
                 type: DataTypes.STRING,
                 allowNull: false,
                 unique: true,
-                comment: 'One-time token for game launch'
+                comment: 'Unique token for this game session launch'
             },
             session_token: {
                 type: DataTypes.STRING,
@@ -111,24 +111,24 @@ class SpribeGameSession extends Model {
     }
 
     static associate(models) {
-        // User association
+        // 🔥 FIXED: Use simple, non-conflicting aliases
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
-                as: 'user'
+                as: 'user'  // Simple alias - no conflict
             });
         }
 
-        // ADDED: Transactions association
+        // 🔥 FIXED: Association with SpribeTransaction
         if (models.SpribeTransaction) {
             this.hasMany(models.SpribeTransaction, {
                 foreignKey: 'session_id',
-                as: 'transactions'
+                as: 'transactions'  // Simple alias - no conflict
             });
         }
     }
 
-    // ADDED: Instance methods for session management
+    // Instance methods for session management
     
     // Check if session is still valid
     isValid() {
@@ -139,11 +139,27 @@ class SpribeGameSession extends Model {
         return this.status === 'active' && sessionAge < maxAge;
     }
 
-    // ADDED: Get session duration in seconds
+    // Get session duration in seconds
     getDuration() {
         const endTime = this.ended_at || new Date();
         const startTime = new Date(this.started_at);
         return Math.floor((endTime - startTime) / 1000);
+    }
+
+    // Mark session as expired
+    async markAsExpired() {
+        await this.update({
+            status: 'expired',
+            ended_at: new Date()
+        });
+    }
+
+    // Mark session as ended
+    async markAsEnded() {
+        await this.update({
+            status: 'ended',
+            ended_at: new Date()
+        });
     }
 }
 
