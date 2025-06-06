@@ -1,5 +1,6 @@
 // services/spribeService.js - COMPLETE SERVICE WITH BOTH MODELS
 const axios = require('axios');
+const { generateSpribeHeaders } = require('../utils/spribeSignatureUtils');
 const spribeConfig = require('../config/spribeConfig');
 const { 
   generateGameLaunchUrl, 
@@ -1564,6 +1565,43 @@ const cleanupExpiredSessions = async () => {
 // Helper to generate one-time token
 const generateOneTimeToken = () => {
   return require('crypto').randomBytes(32).toString('hex');
+};
+
+const makeSpribeRequest = async (method, path, data = null) => {
+  try {
+    const url = `${spribeConfig.apiBaseUrl}${path}`;
+    const headers = generateSpribeHeaders(
+      path,
+      data,
+      spribeConfig.clientId,
+      spribeConfig.clientSecret
+    );
+
+    console.log('Making SPRIBE request:', {
+      method,
+      url,
+      headers: {
+        ...headers,
+        'X-Spribe-Client-Signature': headers['X-Spribe-Client-Signature'].substring(0, 10) + '...'
+      },
+      data
+    });
+
+    const response = await axios({
+      method,
+      url,
+      headers,
+      data
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('SPRIBE request failed:', {
+      error: error.message,
+      response: error.response?.data
+    });
+    throw error;
+  }
 };
 
 // ======================= EXPORTS =======================

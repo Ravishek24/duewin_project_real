@@ -8,7 +8,8 @@ const {
     handleRollback,
     listGames
 } = require('../services/spribeService');
-const { validateSignature, validateIP } = require('../utils/spribeUtils');
+const { validateIP } = require('../utils/spribeUtils');
+const { validateSpribeSignature } = require('../utils/spribeSignatureUtils');
 const spribeService = require('../services/spribeService');
 const spribeConfig = require('../config/spribeConfig');
 
@@ -96,16 +97,16 @@ const validateSpribeRequest = (req) => {
         };
     }
     
-    // 3. Validate signature
+    // 3. Validate signature using SPRIBE's exact specification
     const fullPath = req.originalUrl;
-    const isValidSignature = validateSignature(clientId, timestamp, signature, fullPath, req.body);
-    
-    console.log('Signature validation result:', {
-        isValidSignature,
+    const isValidSignature = validateSpribeSignature(
+        clientId,
+        timestamp,
+        signature,
         fullPath,
-        body: req.body,
-        environment: process.env.NODE_ENV || 'development'
-    });
+        req.body,
+        spribeConfig.clientSecret
+    );
     
     if (!isValidSignature) {
         return {
