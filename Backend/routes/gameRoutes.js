@@ -355,8 +355,49 @@ router.post('/:gameType/:duration/bet',
         return res.status(400).json(result);
       }
 
-      // Store bet in database as well (implement based on your models)
+      // Store bet in database
       await storeBetInDatabase(betData);
+
+      // Broadcast bet placement through WebSocket
+      const io = require('../config/socketConfig').getIo();
+      if (io) {
+        const roomName = `${mappedGameType}_${durationNum}`;
+        const adminRoomName = `admin_${mappedGameType}_${durationNum}`;
+
+        // Broadcast to game room
+        io.to(roomName).emit('newBet', {
+          gameType: mappedGameType,
+          duration: durationNum,
+          periodId,
+          betAmount: betAmountNum,
+          betType,
+          betValue,
+          timestamp: new Date().toISOString()
+        });
+
+        // Broadcast to admin room
+        io.to(adminRoomName).emit('newBet', {
+          gameType: mappedGameType,
+          duration: durationNum,
+          periodId,
+          betAmount: betAmountNum,
+          betType,
+          betValue,
+          userId,
+          timestamp: new Date().toISOString()
+        });
+
+        // Update live bet distribution for admins
+        const gameLogicService = require('../services/gameLogicService');
+        const distribution = await gameLogicService.getBetDistribution(mappedGameType, durationNum, periodId);
+        io.to(adminRoomName).emit('liveBetDistribution', {
+          gameType: mappedGameType,
+          duration: durationNum,
+          periodId,
+          distribution,
+          timestamp: new Date().toISOString()
+        });
+      }
 
       res.json({
         success: true,

@@ -522,8 +522,40 @@ const getCurrentPeriod = async (gameType, duration) => {
         const dateStr = startOfPeriods.format('YYYYMMDD');
         const periodId = `${dateStr}${currentPeriodNumber.toString().padStart(9, '0')}`;
         
+        // Check if we need to move to the next period
         if (timeRemaining <= 0) {
-            console.log(`Period ${periodId} has expired, time remaining: ${timeRemaining}`);
+            console.log(`Period ${periodId} has expired, getting next period`);
+            const nextPeriodNumber = currentPeriodNumber + 1;
+            const nextPeriodId = `${dateStr}${nextPeriodNumber.toString().padStart(9, '0')}`;
+            
+            // Calculate next period times
+            const nextPeriodStart = startOfPeriods.clone().add(nextPeriodNumber * duration, 'seconds');
+            const nextPeriodEnd = nextPeriodStart.clone().add(duration, 'seconds');
+            const nextTimeRemaining = Math.max(0, nextPeriodEnd.diff(istMoment, 'seconds'));
+            
+            // Only return next period if it's valid
+            if (nextTimeRemaining > 0) {
+                const nextPeriodInfo = {
+                    periodId: nextPeriodId,
+                    gameType,
+                    duration,
+                    startTime: nextPeriodStart.toDate(),
+                    endTime: nextPeriodEnd.toDate(),
+                    timeRemaining: nextTimeRemaining,
+                    active: true,
+                    bettingOpen: nextTimeRemaining > 5
+                };
+                
+                console.log(`Next period for ${gameType} ${duration}s:`, {
+                    periodId: nextPeriodId,
+                    timeRemaining: Math.floor(nextTimeRemaining),
+                    bettingOpen: nextPeriodInfo.bettingOpen,
+                    currentTime: istMoment.format(),
+                    endTime: nextPeriodEnd.format()
+                });
+                
+                return nextPeriodInfo;
+            }
             return null;
         }
         
@@ -535,7 +567,7 @@ const getCurrentPeriod = async (gameType, duration) => {
             endTime: currentPeriodEnd.toDate(),
             timeRemaining,
             active: true,
-            bettingOpen: timeRemaining > 5 // Betting closes 5 seconds before end
+            bettingOpen: timeRemaining > 5
         };
         
         console.log(`Current period for ${gameType} ${duration}s:`, {

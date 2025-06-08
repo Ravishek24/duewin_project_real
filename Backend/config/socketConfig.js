@@ -213,6 +213,101 @@ const setupGameEventHandlers = () => {
             }
         });
 
+        // Handle bet placement
+        socket.on('placeBet', async (data) => {
+            try {
+                const { gameType, duration, periodId, betType, betValue, betAmount } = data;
+                const userId = socket.userId;
+
+                if (!userId) {
+                    socket.emit('betError', { message: 'User not authenticated' });
+                    return;
+                }
+
+                if (!gameType || !duration || !periodId || !betType || !betValue || !betAmount) {
+                    socket.emit('betError', { message: 'Missing required bet information' });
+                    return;
+                }
+
+                // Process the bet using gameLogicService
+                const gameLogicService = require('../services/gameLogicService');
+                const betData = {
+                    userId,
+                    gameType,
+                    duration: parseInt(duration),
+                    periodId,
+                    betType,
+                    betValue,
+                    betAmount: parseFloat(betAmount),
+                    odds: gameLogicService.calculateOdds(gameType, betType, betValue)
+                };
+
+                const result = await gameLogicService.processBet(betData);
+
+                if (!result.success) {
+                    socket.emit('betError', {
+                        message: result.message,
+                        code: result.code
+                    });
+                    return;
+                }
+
+                // Broadcast successful bet placement
+                const roomName = `${gameType}_${duration}`;
+                const adminRoomName = `admin_${gameType}_${duration}`;
+
+                // Broadcast to game room
+                io.to(roomName).emit('newBet', {
+                    gameType,
+                    duration,
+                    periodId,
+                    betAmount: betAmount,
+                    betType,
+                    betValue,
+                    timestamp: new Date().toISOString()
+                });
+
+                // Broadcast to admin room
+                io.to(adminRoomName).emit('newBet', {
+                    gameType,
+                    duration,
+                    periodId,
+                    betAmount: betAmount,
+                    betType,
+                    betValue,
+                    userId,
+                    timestamp: new Date().toISOString()
+                });
+
+                // Update live bet distribution for admins
+                await broadcastLiveBetDistribution(gameType, duration, periodId);
+
+                // Send success response to the user
+                socket.emit('betPlaced', {
+                    success: true,
+                    data: {
+                        betId: result.data.betId,
+                        gameType,
+                        duration,
+                        periodId,
+                        betType,
+                        betValue,
+                        betAmount: parseFloat(betAmount),
+                        odds: result.data.odds,
+                        expectedWin: result.data.expectedWin,
+                        walletBalanceAfter: result.data.walletBalanceAfter
+                    }
+                });
+
+            } catch (error) {
+                console.error('Error processing bet:', error);
+                socket.emit('betError', {
+                    message: 'Failed to process bet',
+                    code: 'PROCESSING_ERROR'
+                });
+            }
+        });
+
         // Handle period status requests
         socket.on('getPeriodStatus', async (data) => {
             try {

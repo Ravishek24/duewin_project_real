@@ -636,6 +636,33 @@ const getPaymentGatewayStats = async () => {
   }
 };
 
+/**
+ * Setup payment gateways
+ */
+const setupPaymentGateways = async () => {
+    try {
+        console.log('💳 Setting up payment gateways...');
+        
+        // Initialize models first
+        await initializeModels();
+        
+        // Get all payment gateways
+        const { success, gateways } = await getActivePaymentGateways();
+        
+        if (!success || !gateways || gateways.length === 0) {
+            console.log('⚠️ No active payment gateways found, initializing defaults...');
+            await initializeDefaultGateways();
+        } else {
+            console.log(`✅ Found ${gateways.length} active payment gateways`);
+        }
+        
+        return true;
+    } catch (error) {
+        console.error('❌ Failed to setup payment gateways:', error);
+        return false;
+    }
+};
+
 module.exports = {
   getActivePaymentGateways,
   getPaymentGatewayByCode,
@@ -649,5 +676,6 @@ module.exports = {
   toggleDepositStatus,
   toggleWithdrawalStatus,
   updateDepositLimits,
-  getPaymentGatewayStats
+  getPaymentGatewayStats,
+  setupPaymentGateways
 };

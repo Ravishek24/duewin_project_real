@@ -5331,6 +5331,27 @@ const validateBetWithTimeline = async (betData) => {
             };
         }
 
+        // Check user's main wallet balance
+        const models = await ensureModelsInitialized();
+        const user = await models.User.findByPk(userId);
+        
+        if (!user) {
+            return {
+                valid: false,
+                message: 'User not found',
+                code: 'USER_NOT_FOUND'
+            };
+        }
+
+        const userBalance = parseFloat(user.wallet_balance || 0);
+        if (userBalance < betAmountFloat) {
+            return {
+                valid: false,
+                message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
+                code: 'INSUFFICIENT_BALANCE'
+            };
+        }
+
         // Check user's betting frequency (anti-spam)
         const userBetCount = await getUserBetCount(userId, gameType, periodId);
         if (userBetCount >= 50) {
@@ -5338,6 +5359,16 @@ const validateBetWithTimeline = async (betData) => {
                 valid: false,
                 message: 'Maximum bets per period reached',
                 code: 'MAX_BETS_REACHED'
+            };
+        }
+
+        // Check if period is still active
+        const periodStatus = await getPeriodStatusWithTimeline(gameType, duration, timeline, periodId);
+        if (!periodStatus.active || periodStatus.timeRemaining <= 5) {
+            return {
+                valid: false,
+                message: 'Betting period has ended',
+                code: 'BETTING_CLOSED'
             };
         }
 
@@ -6075,10 +6106,7 @@ const processBet = async (betData) => {
             odds
         } = betData;
 
-        // CRITICAL: Ensure models are initialized
-        const models = await ensureModelsInitialized();
-
-        console.log('💰 Processing bet with timeline support:', {
+        console.log('🔍 [BET_PROCESS] Starting bet processing:', {
             userId,
             gameType,
             duration,
@@ -6086,72 +6114,79 @@ const processBet = async (betData) => {
             periodId,
             betType,
             betValue,
-            betAmount
+            betAmount,
+            odds
         });
 
-        // ENHANCED: Validate bet data
-        const validation = await validateBetWithTimeline(betData);
-        if (!validation.valid) {
-            console.log(`❌ Bet validation failed for user ${userId}: ${validation.message}`);
-            return {
-                success: false,
-                message: validation.message,
-                code: validation.code
-            };
-        }
+        // CRITICAL: Ensure models are initialized
+        const models = await ensureModelsInitialized();
+        console.log('✅ [BET_PROCESS] Models initialized successfully');
 
-        // ENHANCED: Check user balance with proper error handling
-        const user = await models.User.findByPk(userId);
-        if (!user) {
-            console.log(`❌ User not found: ${userId}`);
-            return {
-                success: false,
-                message: 'User not found',
-                code: 'USER_NOT_FOUND'
-            };
-        }
-
-        const userBalance = parseFloat(user.wallet_balance || 0);
-        const betAmountFloat = parseFloat(betAmount);
-
-        if (userBalance < betAmountFloat) {
-            console.log(`❌ Insufficient balance for user ${userId}: Balance=${userBalance}, Bet=${betAmountFloat}`);
-            return {
-                success: false,
-                message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
-                code: 'INSUFFICIENT_BALANCE'
-            };
-        }
-
-        // Check if period is still active for this timeline
-        const periodStatus = await getPeriodStatusWithTimeline(gameType, duration, timeline, periodId);
-        if (!periodStatus.active || periodStatus.timeRemaining <= 5) {
-            console.log(`❌ Betting closed for period ${periodId} in ${timeline}: ${periodStatus.timeRemaining}s remaining`);
-            return {
-                success: false,
-                message: 'Betting period has ended',
-                code: 'BETTING_CLOSED'
-            };
-        }
-
-        // Start transaction
+        // Start transaction FIRST
+        console.log('🔄 [BET_PROCESS] Starting database transaction');
         const t = await sequelize.transaction();
 
         try {
+            // Get user with locking
+            const user = await models.User.findByPk(userId, {
+                lock: true,
+                transaction: t
+            });
+
+            if (!user) {
+                await t.rollback();
+                console.log(`❌ [BET_PROCESS] User not found: ${userId}`);
+                return {
+                    success: false,
+                    message: 'User not found',
+                    code: 'USER_NOT_FOUND'
+                };
+            }
+
+            const userBalance = parseFloat(user.wallet_balance || 0);
+            const betAmountFloat = parseFloat(betAmount);
+
+            // Check balance within transaction
+            if (userBalance < betAmountFloat) {
+                await t.rollback();
+                console.log(`❌ [BET_PROCESS] Insufficient balance for user ${userId}:`, {
+                    balance: userBalance,
+                    betAmount: betAmountFloat
+                });
+                return {
+                    success: false,
+                    message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
+                    code: 'INSUFFICIENT_BALANCE'
+                };
+            }
+
+            // Check if period is still active
+            const periodStatus = await getPeriodStatusWithTimeline(gameType, duration, timeline, periodId);
+            if (!periodStatus.active || periodStatus.timeRemaining <= 5) {
+                await t.rollback();
+                console.log(`❌ [BET_PROCESS] Betting period has ended for ${gameType} ${duration}s ${periodId}`);
+                return {
+                    success: false,
+                    message: 'Betting period has ended',
+                    code: 'BETTING_CLOSED'
+                };
+            }
+
             // Deduct amount from user balance
+            console.log('💰 [BET_PROCESS] Deducting amount from user balance:', {
+                userId,
+                amount: betAmountFloat,
+                currentBalance: userBalance
+            });
+            
             await models.User.decrement('wallet_balance', {
                 by: betAmountFloat,
                 where: { user_id: userId },
                 transaction: t
             });
 
-            // Store bet in Redis for real-time optimization (with timeline)
-            const redisStored = await storeBetInRedisWithTimeline(betData);
-            if (!redisStored) {
-                throw new Error('Failed to store bet in Redis');
-            }
-
             // Store bet in appropriate database table with timeline
+            console.log('💾 [BET_PROCESS] Storing bet in database');
             let betRecord;
             const betTypeFormatted = `${betType}:${betValue}`;
             const currentWalletBalance = parseFloat(user.wallet_balance);
@@ -6225,10 +6260,31 @@ const processBet = async (betData) => {
                     throw new Error(`Unsupported game type: ${gameType}`);
             }
 
+            console.log('✅ [BET_PROCESS] Bet record created:', {
+                betId: betRecord.bet_id || betRecord.id,
+                gameType,
+                betType: betTypeFormatted
+            });
+
+            // Store bet in Redis for real-time optimization (with timeline)
+            console.log('🔍 [BET_PROCESS] Storing bet in Redis');
+            const redisStored = await storeBetInRedisWithTimeline(betData);
+            console.log('🔍 [BET_PROCESS] Redis storage result:', { success: redisStored });
+            
+            if (!redisStored) {
+                // If Redis storage fails, rollback the transaction
+                await t.rollback();
+                console.error('❌ [BET_PROCESS] Failed to store bet in Redis, rolling back transaction');
+                return {
+                    success: false,
+                    message: 'Failed to process bet',
+                    code: 'REDIS_STORAGE_FAILED'
+                };
+            }
+
             // Commit transaction
             await t.commit();
-
-            console.log(`✅ Bet processed successfully for user ${userId} in ${gameType} ${duration}s ${timeline}`);
+            console.log('✅ [BET_PROCESS] Transaction committed successfully');
 
             return {
                 success: true,
@@ -6237,35 +6293,27 @@ const processBet = async (betData) => {
                     betId: betRecord.bet_id || betRecord.id,
                     gameType,
                     duration,
-                    timeline,
                     periodId,
                     betType,
                     betValue,
                     betAmount: betAmountFloat,
                     odds,
                     expectedWin: betAmountFloat * odds,
-                    timeRemaining: periodStatus.timeRemaining,
-                    userBalance: currentWalletBalance - betAmountFloat,
-                    walletBalanceBefore: currentWalletBalance,
                     walletBalanceAfter: currentWalletBalance - betAmountFloat
                 }
             };
 
         } catch (error) {
             await t.rollback();
+            console.error('❌ [BET_PROCESS] Error processing bet:', error);
             throw error;
         }
 
     } catch (error) {
-        console.error('❌ Error processing bet:', {
-            error: error.message,
-            stack: error.stack,
-            betData
-        });
-
+        console.error('❌ [BET_PROCESS] Error in processBet:', error);
         return {
             success: false,
-            message: 'Failed to process bet: ' + error.message,
+            message: 'Failed to process bet',
             code: 'PROCESSING_ERROR'
         };
     }

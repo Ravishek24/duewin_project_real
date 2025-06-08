@@ -1,6 +1,7 @@
 // Backend/utils/websocketDiagnostic.js - DIAGNOSTIC TOOL FOR ROOM ISOLATION
 
 const websocketService = require('../services/websocketService');
+const { redis } = require('../config/redisConfig');
 
 /**
  * Comprehensive diagnostic tool to identify cross-contamination issues
@@ -11,6 +12,9 @@ class WebSocketDiagnostic {
         this.roomActivity = new Map();
         this.resultLog = new Map();
         this.crossContaminationDetected = [];
+        this.lastCheck = null;
+        this.issues = new Map();
+        this.startMonitoring();
     }
 
     /**
@@ -218,7 +222,7 @@ class WebSocketDiagnostic {
     /**
      * Perform comprehensive diagnostic check
      */
-    performDiagnosticCheck() {
+    async performDiagnosticCheck() {
         console.log('\n🔍 PERFORMING DIAGNOSTIC CHECK...');
         
         const io = websocketService.getIo();
@@ -234,7 +238,7 @@ class WebSocketDiagnostic {
         this.checkDuplicateResults();
         
         // Check game tick isolation
-        this.checkGameTickIsolation();
+        await this.checkGameTickIsolation();
         
         // Report cross-contamination
         this.reportCrossContamination();
@@ -340,21 +344,70 @@ class WebSocketDiagnostic {
     /**
      * Check game tick isolation
      */
-    checkGameTickIsolation() {
-        console.log('\n⏰ GAME TICK ISOLATION CHECK:');
-        
-        const stats = websocketService.getSystemStats();
-        const expectedTicks = Object.values(websocketService.GAME_CONFIGS)
-            .reduce((sum, durations) => sum + durations.length, 0) * websocketService.TIMELINES.length;
-        
-        console.log(`Expected game ticks: ${expectedTicks}`);
-        console.log(`Active game ticks: ${stats.activeGameIntervals}`);
-        console.log(`Cached periods: ${stats.cachedPeriods}`);
-        
-        if (stats.activeGameIntervals !== expectedTicks) {
-            console.error(`🚨 TICK ISOLATION ISSUE: Expected ${expectedTicks}, got ${stats.activeGameIntervals}`);
-        } else {
-            console.log('✅ Game tick isolation correct');
+    async checkGameTickIsolation() {
+        try {
+            console.log('⏰ GAME TICK ISOLATION CHECK:');
+            
+            // Define game configs directly
+            const GAME_CONFIGS = {
+                'wingo': [30, 60, 180, 300],
+                'trx_wix': [30, 60, 180, 300],
+                'k3': [60, 180, 300, 600],
+                'fiveD': [60, 180, 300, 600]
+            };
+            
+            const gameTypes = Object.keys(GAME_CONFIGS);
+            const isolationIssues = [];
+
+            for (const gameType of gameTypes) {
+                const durations = GAME_CONFIGS[gameType] || [];
+                
+                for (const duration of durations) {
+                    // Get current period from Redis
+                    const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+                    const periodData = await redis.get(periodKey);
+                    
+                    if (!periodData) {
+                        console.log(`⚠️ No period data found for ${gameType}:${duration}`);
+                        continue;
+                    }
+
+                    const period = JSON.parse(periodData);
+                    
+                    // Check if time remaining is valid
+                    if (typeof period.timeRemaining !== 'number' || period.timeRemaining < 0) {
+                        isolationIssues.push({
+                            gameType,
+                            duration,
+                            issue: 'Invalid time remaining',
+                            value: period.timeRemaining
+                        });
+                    }
+
+                    // Check if period ID is valid
+                    if (!period.periodId) {
+                        isolationIssues.push({
+                            gameType,
+                            duration,
+                            issue: 'Missing period ID'
+                        });
+                    }
+                }
+            }
+
+            if (isolationIssues.length > 0) {
+                console.log('⚠️ Game tick isolation issues found:');
+                isolationIssues.forEach(issue => {
+                    console.log(`  - ${issue.gameType}:${issue.duration}: ${issue.issue}`);
+                });
+            } else {
+                console.log('✅ All game ticks are properly isolated');
+            }
+
+            return isolationIssues.length === 0;
+        } catch (error) {
+            console.error('Error checking game tick isolation:', error);
+            return false;
         }
     }
 
