@@ -8,6 +8,9 @@ const path = require('path');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 const { recordVipExperience } = require('../services/autoVipService');
+// CONSTANTS - Add to top of file
+const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
+const ENHANCED_USER_THRESHOLD = 100; // New minimum user threshold
 
 const globalProcessingLocks = new Map();
 
@@ -2606,6 +2609,250 @@ const checkMinimumUserRequirement = async (gameType, duration, periodId) => {
     }
 };
 
+
+
+/**
+ * NEW: Enhanced user threshold validation with outcome coverage analysis
+ */
+const checkEnhancedUserRequirement = async (gameType, duration, periodId, timeline = 'default') => {
+    try {
+        const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId, timeline);
+        const outcomeAnalysis = await analyzeOutcomeCoverage(gameType, duration, periodId, timeline);
+        
+        return {
+            sufficientUsers: uniqueUserCount >= ENHANCED_USER_THRESHOLD,
+            uniqueUserCount,
+            outcomeAnalysis,
+            shouldUseProtectedResult: uniqueUserCount < ENHANCED_USER_THRESHOLD || 
+                                    outcomeAnalysis.maxUserCoveragePercent > 0.70,
+            protectionReason: uniqueUserCount < ENHANCED_USER_THRESHOLD ? 
+                            'INSUFFICIENT_USERS' : 'SINGLE_USER_GAMING_DETECTED'
+        };
+    } catch (error) {
+        logger.error('Error checking enhanced user requirement', {
+            error: error.message,
+            gameType,
+            periodId
+        });
+        return {
+            sufficientUsers: false,
+            shouldUseProtectedResult: true,
+            protectionReason: 'ERROR_OCCURRED'
+        };
+    }
+};
+
+/**
+ * NEW: Analyze outcome coverage to detect gaming attempts
+ */
+const analyzeOutcomeCoverage = async (gameType, duration, periodId, timeline = 'default') => {
+    try {
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        // Get all possible results for the game
+        const allPossibleResults = await generateAllPossibleResults(gameType);
+        
+        const analysis = {
+            totalOutcomes: allPossibleResults.length,
+            coveredOutcomes: 0,
+            uncoveredOutcomes: [],
+            outcomeBetAmounts: [],
+            userCoverageMap: new Map(),
+            maxUserCoveragePercent: 0,
+            zeroBetOutcomes: [],
+            lowestBetOutcomes: []
+        };
+
+        // Analyze each possible outcome
+        for (const result of allPossibleResults) {
+            const betsOnOutcome = await getBetsOnSpecificOutcome(gameType, duration, periodId, timeline, result);
+            const totalBetAmount = betsOnOutcome.reduce((sum, bet) => sum + parseFloat(bet.netBetAmount || bet.betAmount), 0);
+            
+            const outcomeData = {
+                result,
+                totalBetAmount,
+                betCount: betsOnOutcome.length,
+                users: new Set(betsOnOutcome.map(bet => bet.userId))
+            };
+
+            analysis.outcomeBetAmounts.push(outcomeData);
+
+            if (betsOnOutcome.length === 0) {
+                analysis.uncoveredOutcomes.push(result);
+                analysis.zeroBetOutcomes.push(outcomeData);
+            } else {
+                analysis.coveredOutcomes++;
+                
+                // Track user coverage for gaming detection
+                outcomeData.users.forEach(userId => {
+                    const currentCoverage = analysis.userCoverageMap.get(userId) || 0;
+                    analysis.userCoverageMap.set(userId, currentCoverage + 1);
+                });
+            }
+        }
+
+        // Calculate maximum user coverage percentage
+        analysis.userCoverageMap.forEach(coverage => {
+            const coveragePercent = coverage / analysis.totalOutcomes;
+            analysis.maxUserCoveragePercent = Math.max(analysis.maxUserCoveragePercent, coveragePercent);
+        });
+
+        // Sort outcomes by bet amount (lowest first)
+        analysis.outcomeBetAmounts.sort((a, b) => a.totalBetAmount - b.totalBetAmount);
+        analysis.lowestBetOutcomes = analysis.outcomeBetAmounts.slice(0, 10);
+
+        logger.info('Outcome coverage analysis completed', {
+            gameType,
+            periodId,
+            totalOutcomes: analysis.totalOutcomes,
+            coveredOutcomes: analysis.coveredOutcomes,
+            uncoveredOutcomes: analysis.uncoveredOutcomes.length,
+            maxUserCoveragePercent: analysis.maxUserCoveragePercent
+        });
+
+        return analysis;
+
+    } catch (error) {
+        logger.error('Error analyzing outcome coverage', {
+            error: error.message,
+            gameType,
+            periodId
+        });
+        return {
+            totalOutcomes: 0,
+            coveredOutcomes: 0,
+            uncoveredOutcomes: [],
+            outcomeBetAmounts: [],
+            zeroBetOutcomes: [],
+            lowestBetOutcomes: []
+        };
+    }
+};
+
+/**
+ * NEW: Get bets on a specific outcome
+ */
+const getBetsOnSpecificOutcome = async (gameType, duration, periodId, timeline, result) => {
+    try {
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        // Get all bet keys for this period
+        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${timeline}:${periodId}:*`);
+        const betsOnOutcome = [];
+
+        for (const key of betKeys) {
+            try {
+                const betData = await redisClient.get(key);
+                if (!betData) continue;
+
+                const bet = JSON.parse(betData);
+                
+                // Check if this bet would win with the given result
+                if (checkBetWin(bet, result, gameType)) {
+                    betsOnOutcome.push(bet);
+                }
+            } catch (parseError) {
+                continue;
+            }
+        }
+
+        return betsOnOutcome;
+    } catch (error) {
+        logger.error('Error getting bets on specific outcome', {
+            error: error.message,
+            gameType,
+            periodId
+        });
+        return [];
+    }
+};
+
+/**
+ * NEW: Select protected result (zero-bet or lowest-bet)
+ */
+const selectProtectedResult = async (gameType, duration, periodId, timeline, outcomeAnalysis) => {
+    try {
+        console.log('🛡️ Enhanced protection mode activated', {
+            gameType,
+            periodId,
+            timeline,
+            zeroBetOutcomes: outcomeAnalysis.zeroBetOutcomes.length,
+            lowestBetAmount: outcomeAnalysis.lowestBetOutcomes[0]?.totalBetAmount || 0
+        });
+
+        // PRIORITY 1: Zero bet outcomes (house wins everything)
+        if (outcomeAnalysis.zeroBetOutcomes.length > 0) {
+            const randomZeroBetResult = outcomeAnalysis.zeroBetOutcomes[
+                Math.floor(Math.random() * outcomeAnalysis.zeroBetOutcomes.length)
+            ];
+
+            console.log('🎯 Selected zero-bet outcome', { 
+                result: randomZeroBetResult.result,
+                reason: 'ZERO_BET_OUTCOME'
+            });
+
+            return {
+                result: randomZeroBetResult.result,
+                reason: 'ZERO_BET_OUTCOME',
+                protectionMode: true,
+                expectedPayout: 0,
+                houseEdge: 100
+            };
+        }
+
+        // PRIORITY 2: Lowest bet outcomes
+        if (outcomeAnalysis.lowestBetOutcomes.length > 0) {
+            const lowestBetOutcome = outcomeAnalysis.lowestBetOutcomes[0];
+
+            console.log('🎯 Selected lowest-bet outcome', {
+                result: lowestBetOutcome.result,
+                betAmount: lowestBetOutcome.totalBetAmount,
+                reason: 'LOWEST_BET_OUTCOME'
+            });
+
+            return {
+                result: lowestBetOutcome.result,
+                reason: 'LOWEST_BET_OUTCOME',
+                protectionMode: true,
+                expectedPayout: lowestBetOutcome.totalBetAmount,
+                betCount: lowestBetOutcome.betCount
+            };
+        }
+
+        // FALLBACK: Random result if analysis fails
+        console.warn('⚠️ No protected results found, using random fallback');
+        const fallbackResult = await generateRandomResult(gameType);
+        
+        return {
+            result: fallbackResult,
+            reason: 'RANDOM_FALLBACK',
+            protectionMode: true,
+            expectedPayout: null
+        };
+
+    } catch (error) {
+        logger.error('Error selecting protected result', {
+            error: error.message,
+            gameType,
+            periodId
+        });
+        
+        // Ultimate fallback
+        const fallbackResult = await generateRandomResult(gameType);
+        return {
+            result: fallbackResult,
+            reason: 'ERROR_FALLBACK',
+            protectionMode: true
+        };
+    }
+};
+
 /**
  * Calculate result with verification
  * @param {string} gameType - Game type
@@ -2613,105 +2860,72 @@ const checkMinimumUserRequirement = async (gameType, duration, periodId) => {
  * @param {string} periodId - Period ID
  * @returns {Promise<Object>} - Result with verification
  */
-const calculateResultWithVerification = async (gameType, duration, periodId) => {
+/**
+ * UPDATED: Enhanced result calculation with protection
+ * REPLACE existing calculateResultWithVerification function
+ */
+const calculateResultWithVerification = async (gameType, duration, periodId, timeline = 'default') => {
     try {
-        // Check minimum user requirement
-        const hasMinimumUsers = await checkMinimumUserRequirement(gameType, duration, periodId);
+        // Check enhanced user requirements and outcome coverage
+        const enhancedValidation = await checkEnhancedUserRequirement(gameType, duration, periodId, timeline);
 
-        if (!hasMinimumUsers) {
-            // Get all bet combinations for this period
-            const durationKey = duration === 30 ? '30s' :
-                duration === 60 ? '1m' :
-                    duration === 180 ? '3m' :
-                        duration === 300 ? '5m' : '10m';
+        console.log('🔍 Enhanced user validation result:', {
+            gameType,
+            periodId,
+            timeline,
+            sufficientUsers: enhancedValidation.sufficientUsers,
+            uniqueUserCount: enhancedValidation.uniqueUserCount,
+            shouldUseProtectedResult: enhancedValidation.shouldUseProtectedResult,
+            protectionReason: enhancedValidation.protectionReason
+        });
 
-            // Get all possible results
-            const possibleResults = await generateAllPossibleResults(gameType);
+        if (enhancedValidation.shouldUseProtectedResult) {
+            // Use protected result selection
+            const protectedResult = await selectProtectedResult(
+                gameType, 
+                duration, 
+                periodId, 
+                timeline, 
+                enhancedValidation.outcomeAnalysis
+            );
 
-            // Get all bet combinations from Redis
-            const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
-            const betCombinations = new Set();
+            const verification = await tronHashService.getResultWithVerification(protectedResult.result);
 
-            for (const key of betKeys) {
-                const betData = await redisClient.get(key);
-                if (betData) {
-                    const bet = JSON.parse(betData);
-                    betCombinations.add(JSON.stringify(bet.betType + ':' + bet.betValue));
-                }
-            }
-
-            // Filter out results that would match any bet combinations
-            const safeResults = possibleResults.filter(result => {
-                // For each result, check if it would match any bet combination
-                for (const betCombo of betCombinations) {
-                    const [betType, betValue] = betCombo.split(':');
-                    if (checkBetWin({ bet_type: betType + ':' + betValue }, result, gameType)) {
-                        return false; // This result would match a bet, so exclude it
-                    }
-                }
-                return true; // This result doesn't match any bets
-            });
-
-            // If we have safe results, randomly select one
-            if (safeResults.length > 0) {
-                const randomIndex = Math.floor(Math.random() * safeResults.length);
-                const safeResult = safeResults[randomIndex];
-
-                logger.info('Selected safe result for insufficient users', {
-                    gameType,
-                    periodId,
-                    safeResult,
-                    betCombinations: Array.from(betCombinations)
-                });
-
-                return {
-                    success: true,
-                    result: safeResult,
-                    allUsersLose: true,
-                    verification: {
-                        hash: Math.random().toString(36).substring(2, 15), // Generate random hash
-                        link: 'https://tronscan.org/' // Default verification link
-                    }
-                };
-            } else {
-                // If somehow no safe results (shouldn't happen), use fallback
-                const fallbackResult = generateRandomResult(gameType);
-                logger.warn('No safe results found, using fallback', {
-                    gameType,
-                    periodId,
-                    fallbackResult
-                });
-
-                return {
-                    success: true,
-                    result: fallbackResult,
-                    allUsersLose: true,
-                    verification: {
-                        hash: Math.random().toString(36).substring(2, 15),
-                        link: 'https://tronscan.org/'
-                    }
-                };
-            }
+            return {
+                success: true,
+                result: protectedResult.result,
+                verification: {
+                    hash: verification.hash,
+                    link: verification.link
+                },
+                protectionMode: true,
+                protectionReason: protectedResult.reason,
+                expectedPayout: protectedResult.expectedPayout,
+                timeline: timeline
+            };
         }
 
-        // Normal result calculation if minimum users requirement is met
-        const result = await calculateOptimizedResult(gameType, duration, periodId);
-        const verification = await tronHashService.getResultWithVerification(result.optimalResult);
+        // Normal operation - use optimized result
+        const optimizedResult = await calculateOptimizedResult(gameType, duration, periodId);
+        const verification = await tronHashService.getResultWithVerification(optimizedResult.optimalResult.result);
 
         return {
             success: true,
-            result: result.optimalResult.result,
+            result: optimizedResult.optimalResult.result,
             verification: {
                 hash: verification.hash,
                 link: verification.link
             },
-            allUsersLose: false
+            protectionMode: false,
+            timeline: timeline
         };
+
     } catch (error) {
-        logger.error('Error calculating result with verification', {
+        logger.error('Error calculating result with enhanced verification', {
             error: error.message,
             gameType,
-            periodId
+            periodId,
+            timeline
         });
         throw error;
     }
@@ -2859,15 +3073,19 @@ const markAllBetsAsLost = async (gameType, periodId) => {
  * @param {string} periodId - Period ID
  * @returns {Promise<number>} - Number of unique users
  */
-const getUniqueUserCount = async (gameType, duration, periodId) => {
+/**
+ * UPDATED: Enhanced unique user count with timeline support
+ * REPLACE existing getUniqueUserCount function
+ */
+const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'default') => {
     try {
         const durationKey = duration === 30 ? '30s' :
             duration === 60 ? '1m' :
                 duration === 180 ? '3m' :
                     duration === 300 ? '5m' : '10m';
 
-        // Get all bet keys for this period
-        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
+        // Get all bet keys for this period and timeline
+        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${timeline}:${periodId}:*`);
         const uniqueUsers = new Set();
 
         for (const key of betKeys) {
@@ -2880,25 +3098,26 @@ const getUniqueUserCount = async (gameType, duration, periodId) => {
                     }
                 }
             } catch (parseError) {
-                logger.warn('Error parsing bet data', { key, parseError: parseError.message });
                 continue;
             }
         }
 
-        logger.info('Unique user count calculated', {
+        console.log('📊 Enhanced unique user count:', {
             gameType,
             periodId,
+            timeline,
             uniqueUserCount: uniqueUsers.size,
-            totalBetKeys: betKeys.length
+            totalBetKeys: betKeys.length,
+            threshold: ENHANCED_USER_THRESHOLD
         });
 
         return uniqueUsers.size;
     } catch (error) {
-        logger.error('Error getting unique user count', {
+        logger.error('Error getting enhanced unique user count', {
             error: error.message,
-            stack: error.stack,
             gameType,
-            periodId
+            periodId,
+            timeline
         });
         return 0;
     }
@@ -5247,6 +5466,10 @@ const storeBetInRedis = async (betData) => {
  * @param {Object} betData - Bet data
  * @returns {Object} - Validation result
  */
+/**
+ * UPDATED: Enhanced bet validation with platform fee
+ * REPLACE existing validateBetWithTimeline function
+ */
 const validateBetWithTimeline = async (betData) => {
     const {
         userId,
@@ -5269,6 +5492,35 @@ const validateBetWithTimeline = async (betData) => {
             };
         }
 
+        const grossBetAmount = parseFloat(betAmount);
+        
+        // Calculate platform fee (2%)
+        const platformFee = grossBetAmount * PLATFORM_FEE_RATE;
+        const netBetAmount = grossBetAmount - platformFee;
+
+        // Validate minimum bet on NET amount
+        if (netBetAmount < 1) {
+            return {
+                valid: false,
+                message: 'Net bet amount after platform fee must be at least ₹1',
+                code: 'MINIMUM_NET_BET',
+                breakdown: {
+                    grossAmount: grossBetAmount,
+                    platformFee: platformFee,
+                    netAmount: netBetAmount
+                }
+            };
+        }
+
+        // Validate maximum bet on GROSS amount
+        if (grossBetAmount > 100000) {
+            return {
+                valid: false,
+                message: 'Maximum bet amount is ₹1,00,000',
+                code: 'MAXIMUM_BET'
+            };
+        }
+
         // Validate game type and duration
         const validGameTypes = ['wingo', 'trx_wix', 'k3', 'fiveD'];
         if (!validGameTypes.includes(gameType)) {
@@ -5279,7 +5531,6 @@ const validateBetWithTimeline = async (betData) => {
             };
         }
 
-        // Validate duration for game type
         const validDurations = {
             'wingo': [30, 60, 180, 300],
             'trx_wix': [30, 60, 180, 300],
@@ -5305,33 +5556,7 @@ const validateBetWithTimeline = async (betData) => {
             };
         }
 
-        // Validate bet amount
-        const betAmountFloat = parseFloat(betAmount);
-        if (isNaN(betAmountFloat) || betAmountFloat <= 0) {
-            return {
-                valid: false,
-                message: 'Invalid bet amount',
-                code: 'INVALID_AMOUNT'
-            };
-        }
-
-        if (betAmountFloat < 1) {
-            return {
-                valid: false,
-                message: 'Minimum bet amount is ₹1',
-                code: 'MINIMUM_BET'
-            };
-        }
-
-        if (betAmountFloat > 100000) {
-            return {
-                valid: false,
-                message: 'Maximum bet amount is ₹1,00,000',
-                code: 'MAXIMUM_BET'
-            };
-        }
-
-        // Check user's main wallet balance
+        // Check user balance against GROSS amount
         const models = await ensureModelsInitialized();
         const user = await models.User.findByPk(userId);
         
@@ -5344,15 +5569,21 @@ const validateBetWithTimeline = async (betData) => {
         }
 
         const userBalance = parseFloat(user.wallet_balance || 0);
-        if (userBalance < betAmountFloat) {
+        if (userBalance < grossBetAmount) {
             return {
                 valid: false,
-                message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
-                code: 'INSUFFICIENT_BALANCE'
+                message: `Insufficient balance. Required: ₹${grossBetAmount.toFixed(2)} (including ₹${platformFee.toFixed(2)} platform fee)`,
+                code: 'INSUFFICIENT_BALANCE',
+                breakdown: {
+                    grossAmount: grossBetAmount,
+                    platformFee: platformFee,
+                    netAmount: netBetAmount,
+                    userBalance: userBalance
+                }
             };
         }
 
-        // Check user's betting frequency (anti-spam)
+        // Check user's betting frequency
         const userBetCount = await getUserBetCount(userId, gameType, periodId);
         if (userBetCount >= 50) {
             return {
@@ -5374,7 +5605,12 @@ const validateBetWithTimeline = async (betData) => {
 
         return {
             valid: true,
-            message: 'Bet validated successfully'
+            message: 'Bet validated successfully',
+            amounts: {
+                grossBetAmount,
+                platformFee,
+                netBetAmount
+            }
         };
 
     } catch (error) {
@@ -5393,18 +5629,16 @@ const validateBetWithTimeline = async (betData) => {
  * @param {Object} betData - Bet data to store
  * @returns {Promise<boolean>} - Whether storage was successful
  */
+/**
+ * UPDATED: Enhanced Redis storage with platform fee tracking
+ * REPLACE existing storeBetInRedisWithTimeline function
+ */
 const storeBetInRedisWithTimeline = async (betData) => {
     try {
         const {
-            userId,
-            gameType,
-            duration,
-            timeline,
-            periodId,
-            betType,
-            betValue,
-            betAmount,
-            odds
+            userId, gameType, duration, timeline, periodId,
+            betType, betValue, odds,
+            grossBetAmount, platformFee, netBetAmount
         } = betData;
 
         const durationKey = duration === 30 ? '30s' :
@@ -5415,7 +5649,7 @@ const storeBetInRedisWithTimeline = async (betData) => {
         // Create Redis key with timeline
         const betKey = `${gameType}:${durationKey}:${timeline}:${periodId}:${userId}:${betType}:${betValue}`;
 
-        // Store bet data
+        // Store bet data with fee breakdown
         await redisClient.set(betKey, JSON.stringify({
             userId,
             gameType,
@@ -5423,25 +5657,42 @@ const storeBetInRedisWithTimeline = async (betData) => {
             timeline,
             betType,
             betValue,
-            betAmount,
+            grossBetAmount,      // Original amount user entered
+            platformFee,         // Platform fee (2%)
+            netBetAmount,        // Amount used for game calculations
+            betAmount: netBetAmount,  // IMPORTANT: This is what game logic uses
             odds,
             timestamp: Date.now()
         }));
 
-        // Update total bet amount for this period and timeline
+        // Update total with NET amounts only (for game calculations)
         const totalKey = `${gameType}:${durationKey}:${timeline}:${periodId}:total`;
         const currentTotal = await redisClient.get(totalKey) || '0';
-        const newTotal = parseFloat(currentTotal) + parseFloat(betAmount);
+        const newTotal = parseFloat(currentTotal) + parseFloat(netBetAmount);
         await redisClient.set(totalKey, newTotal.toString());
 
-        // Set expiry for bet data (24 hours)
+        // Track platform fees separately
+        const feeKey = `${gameType}:${durationKey}:${timeline}:${periodId}:fees`;
+        const currentFees = await redisClient.get(feeKey) || '0';
+        const newFees = parseFloat(currentFees) + parseFloat(platformFee);
+        await redisClient.set(feeKey, newFees.toString());
+
+        // Track gross amounts separately (for reporting)
+        const grossKey = `${gameType}:${durationKey}:${timeline}:${periodId}:gross`;
+        const currentGross = await redisClient.get(grossKey) || '0';
+        const newGross = parseFloat(currentGross) + parseFloat(grossBetAmount);
+        await redisClient.set(grossKey, newGross.toString());
+
+        // Set expiry for all keys
         await redisClient.expire(betKey, 86400);
         await redisClient.expire(totalKey, 86400);
+        await redisClient.expire(feeKey, 86400);
+        await redisClient.expire(grossKey, 86400);
 
-        console.log(`✅ Bet stored in Redis for ${gameType} ${duration}s ${timeline}: ${betAmount}`);
+        console.log(`✅ Enhanced bet stored in Redis for ${gameType} ${duration}s ${timeline}: Gross ₹${grossBetAmount}, Fee ₹${platformFee}, Net ₹${netBetAmount}`);
         return true;
     } catch (error) {
-        console.error('❌ Error storing bet in Redis:', error);
+        console.error('❌ Error storing enhanced bet in Redis:', error);
         return false;
     }
 };
@@ -6098,8 +6349,18 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
  * @param {Object} betData - Bet data to process
  * @returns {Promise<Object>} - Processing result
  */
+/**
+ * UPDATED: Enhanced bet processing with platform fee
+ * REPLACE existing processBet function
+ */
 const processBet = async (betData) => {
     try {
+        const validation = await validateBetWithTimeline(betData);
+        if (!validation.valid) {
+            return validation;
+        }
+
+        const { grossBetAmount, platformFee, netBetAmount } = validation.amounts;
         const {
             userId,
             gameType,
@@ -6108,28 +6369,21 @@ const processBet = async (betData) => {
             periodId,
             betType,
             betValue,
-            betAmount,
             odds
         } = betData;
 
-        console.log('🔍 [BET_PROCESS] Starting bet processing:', {
+        console.log('🔍 [BET_PROCESS] Starting enhanced bet processing with platform fee:', {
             userId,
             gameType,
             duration,
             timeline,
             periodId,
-            betType,
-            betValue,
-            betAmount,
-            odds
+            grossBetAmount,
+            platformFee,
+            netBetAmount
         });
 
-        // CRITICAL: Ensure models are initialized
         const models = await ensureModelsInitialized();
-        console.log('✅ [BET_PROCESS] Models initialized successfully');
-
-        // Start transaction FIRST
-        console.log('🔄 [BET_PROCESS] Starting database transaction');
         const t = await sequelize.transaction();
 
         try {
@@ -6139,148 +6393,64 @@ const processBet = async (betData) => {
                 transaction: t
             });
 
-            if (!user) {
-                await t.rollback();
-                console.log(`❌ [BET_PROCESS] User not found: ${userId}`);
-                return {
-                    success: false,
-                    message: 'User not found',
-                    code: 'USER_NOT_FOUND'
-                };
-            }
-
-            const userBalance = parseFloat(user.wallet_balance || 0);
-            const betAmountFloat = parseFloat(betAmount);
-
-            // Check balance within transaction
-            if (userBalance < betAmountFloat) {
-                await t.rollback();
-                console.log(`❌ [BET_PROCESS] Insufficient balance for user ${userId}:`, {
-                    balance: userBalance,
-                    betAmount: betAmountFloat
-                });
-                return {
-                    success: false,
-                    message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
-                    code: 'INSUFFICIENT_BALANCE'
-                };
-            }
-
-            // Check if period is still active
-            const periodStatus = await getPeriodStatusWithTimeline(gameType, duration, timeline, periodId);
-            if (!periodStatus.active || periodStatus.timeRemaining <= 5) {
-                await t.rollback();
-                console.log(`❌ [BET_PROCESS] Betting period has ended for ${gameType} ${duration}s ${periodId}`);
-                return {
-                    success: false,
-                    message: 'Betting period has ended',
-                    code: 'BETTING_CLOSED'
-                };
-            }
-
-            // Deduct amount from user balance
-            console.log('💰 [BET_PROCESS] Deducting amount from user balance:', {
-                userId,
-                amount: betAmountFloat,
-                currentBalance: userBalance
-            });
-            
+            // Deduct GROSS amount from user balance
             await models.User.decrement('wallet_balance', {
-                by: betAmountFloat,
+                by: grossBetAmount,
                 where: { user_id: userId },
                 transaction: t
             });
 
-            // Store bet in appropriate database table with timeline
-            console.log('💾 [BET_PROCESS] Storing bet in database');
+            // Store bet in appropriate database table with fee structure
             let betRecord;
             const betTypeFormatted = `${betType}:${betValue}`;
             const currentWalletBalance = parseFloat(user.wallet_balance);
 
+            const betRecordData = {
+                user_id: userId,
+                bet_number: periodId,
+                bet_type: betTypeFormatted,
+                bet_amount: grossBetAmount,           // Original amount user entered
+                tax_amount: platformFee,              // Using existing field for platform fee
+                amount_after_tax: netBetAmount,       // Using existing field for net amount
+                odds: odds,
+                status: 'pending',
+                wallet_balance_before: currentWalletBalance,
+                wallet_balance_after: currentWalletBalance - grossBetAmount,
+                timeline: timeline,
+                duration: duration,
+                created_at: new Date()
+            };
+
             switch (gameType) {
                 case 'wingo':
-                    betRecord = await models.BetRecordWingo.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
+                    betRecord = await models.BetRecordWingo.create(betRecordData, { transaction: t });
                     break;
-
                 case 'trx_wix':
-                    betRecord = await models.BetRecordTrxWix.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
+                    betRecord = await models.BetRecordTrxWix.create(betRecordData, { transaction: t });
                     break;
-
                 case 'k3':
-                    betRecord = await models.BetRecordK3.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
+                    betRecord = await models.BetRecordK3.create(betRecordData, { transaction: t });
                     break;
-
                 case 'fiveD':
-                    betRecord = await models.BetRecord5D.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
+                    betRecord = await models.BetRecord5D.create(betRecordData, { transaction: t });
                     break;
-
                 default:
                     throw new Error(`Unsupported game type: ${gameType}`);
             }
 
-            console.log('✅ [BET_PROCESS] Bet record created:', {
-                betId: betRecord.bet_id || betRecord.id,
-                gameType,
-                betType: betTypeFormatted
-            });
+            console.log('✅ [BET_PROCESS] Enhanced bet record created with platform fee');
 
-            // Store bet in Redis for real-time optimization (with timeline)
-            console.log('🔍 [BET_PROCESS] Storing bet in Redis');
-            const redisStored = await storeBetInRedisWithTimeline(betData);
-            console.log('🔍 [BET_PROCESS] Redis storage result:', { success: redisStored });
+            // Store bet in Redis with NET amount for game calculations
+            const redisStored = await storeBetInRedisWithTimeline({
+                ...betData,
+                grossBetAmount,
+                platformFee,
+                netBetAmount,
+                betAmount: netBetAmount  // IMPORTANT: Game logic will use net amount
+            });
             
             if (!redisStored) {
-                // If Redis storage fails, rollback the transaction
                 await t.rollback();
-                console.error('❌ [BET_PROCESS] Failed to store bet in Redis, rolling back transaction');
                 return {
                     success: false,
                     message: 'Failed to process bet',
@@ -6288,9 +6458,7 @@ const processBet = async (betData) => {
                 };
             }
 
-            // Commit transaction
             await t.commit();
-            console.log('✅ [BET_PROCESS] Transaction committed successfully');
 
             return {
                 success: true,
@@ -6299,24 +6467,32 @@ const processBet = async (betData) => {
                     betId: betRecord.bet_id || betRecord.id,
                     gameType,
                     duration,
+                    timeline,
                     periodId,
+                    grossBetAmount,
+                    platformFee,
+                    netBetAmount,
                     betType,
                     betValue,
-                    betAmount: betAmountFloat,
                     odds,
-                    expectedWin: betAmountFloat * odds,
-                    walletBalanceAfter: currentWalletBalance - betAmountFloat
+                    expectedWin: netBetAmount * odds,
+                    walletBalanceAfter: currentWalletBalance - grossBetAmount,
+                    breakdown: {
+                        amountEntered: grossBetAmount,
+                        platformFee: platformFee,
+                        amountInGame: netBetAmount,
+                        maxWin: netBetAmount * odds
+                    }
                 }
             };
 
         } catch (error) {
             await t.rollback();
-            console.error('❌ [BET_PROCESS] Error processing bet:', error);
             throw error;
         }
 
     } catch (error) {
-        console.error('❌ [BET_PROCESS] Error in processBet:', error);
+        console.error('❌ [BET_PROCESS] Error in enhanced processBet:', error);
         return {
             success: false,
             message: 'Failed to process bet',
@@ -7014,6 +7190,16 @@ module.exports = {
     generateVerificationHash,
     generateVerificationLink,
     enhanceResultFormat,
+
+    //User threshold
+    checkEnhancedUserRequirement,
+    analyzeOutcomeCoverage,
+    getBetsOnSpecificOutcome,
+    selectProtectedResult,
+
+    //constants
+    PLATFORM_FEE_RATE,
+    ENHANCED_USER_THRESHOLD,
 
     // Model management
     ensureModelsInitialized,
