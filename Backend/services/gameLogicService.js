@@ -5462,10 +5462,16 @@ const getPeriodStatusWithTimeline = async (gameType, duration, timeline, periodI
         const { getCurrentPeriodInfo } = require('./websocketService');
         const currentPeriod = getCurrentPeriodInfo(gameType, duration);
         
+        // Use the same timing validation as WebSocket service
+        const now = new Date();
+        const actualEndTime = calculatePeriodEndTime(periodId, duration);
+        const timeRemaining = Math.max(0, Math.ceil((actualEndTime - now) / 1000));
+        const bettingOpen = timeRemaining > 5;
+        
         return {
             active: currentPeriod.active && currentPeriod.periodId === periodId,
-            timeRemaining: currentPeriod.timeRemaining,
-            bettingOpen: currentPeriod.bettingOpen && currentPeriod.periodId === periodId,
+            timeRemaining: timeRemaining,
+            bettingOpen: bettingOpen && currentPeriod.periodId === periodId,
             periodId: currentPeriod.periodId
         };
     } catch (error) {

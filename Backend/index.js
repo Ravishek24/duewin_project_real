@@ -6,6 +6,8 @@ const cors = require('cors');
 const http = require('http');
 const { startDiagnostic, performManualCheck } = require('./utils/websocketDiagnostic');
 const { redis, isConnected } = require('./config/redisConfig');
+const { initializeModels } = require('./models');
+const { getSequelizeInstance } = require('./config/db');
 
 
 // Load environment variables first
@@ -95,55 +97,17 @@ let sequelize = null;
 let models = null;
 
 
-// Complete database and model initialization
+// Initialize database and models
 const initializeDatabaseAndModels = async () => {
     try {
-        console.log('🔧 Starting database initialization...');
-        
-        // Step 1: Connect to database first
-        console.log('📡 Connecting to database...');
-        const { connectDB, getSequelizeInstance } = require('./config/db');
-        await connectDB();
-        
-        // Get sequelize instance
+        console.log('🔄 Initializing database and models...');
         const sequelize = await getSequelizeInstance();
-        if (!sequelize) {
-            throw new Error('Failed to get Sequelize instance');
-        }
-        console.log('✅ Database connected');
-        
-        // Step 2: Initialize database structure
-        console.log('🏗️ Initializing database structure...');
-        const { initializeDatabase } = require('./config/db');
-        const dbInitSuccess = await initializeDatabase();
-        if (!dbInitSuccess) {
-            throw new Error('Database initialization failed');
-        }
-        console.log('✅ Database structure initialized');
-        
-        // Step 3: Initialize models
-        console.log('🔧 Initializing models...');
-        const { initializeModels } = require('./models');
         const models = await initializeModels();
-        console.log('✅ Models initialized successfully');
-        console.log(`📊 Loaded ${Object.keys(models).length} models`);
-        
-        // Step 4: Install hack fixes
-        try {
-            const { installHackFix } = require('./config/hackFix');
-            const hackFixInstalled = await installHackFix(sequelize);
-            if (hackFixInstalled) {
-                console.log('✅ Hack fixes installed');
-            }
-        } catch (hackError) {
-            console.warn('⚠️ Hack fixes not installed:', hackError.message);
-        }
-        
-        return true;
+        console.log('✅ Database and models initialized successfully');
+        return { sequelize, models };
     } catch (error) {
-        console.error('❌ Database and models initialization failed:', error);
-        console.error('Stack trace:', error.stack);
-        return false;
+        console.error('❌ Failed to initialize database and models:', error);
+        throw error;
     }
 };
 
@@ -270,11 +234,8 @@ const startServer = async () => {
     try {
         console.log('🚀 Starting server initialization...');
 
-        // Step 1: Initialize database and models
-        const dbInitialized = await initializeDatabaseAndModels();
-        if (!dbInitialized) {
-            throw new Error('Database initialization failed');
-        }
+        // Initialize database and models first
+        await initializeDatabaseAndModels();
 
         // Step 2: Setup routes
         setupAppRoutes();

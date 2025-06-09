@@ -29,6 +29,17 @@ class BetRecord5D extends Model {
         allowNull: false,
         comment: 'Amount wagered'
       },
+      tax_amount: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        defaultValue: 0,
+        comment: 'Tax amount deducted from bet'
+      },
+      amount_after_tax: {
+        type: DataTypes.DECIMAL(20, 8),
+        allowNull: false,
+        comment: 'Bet amount after tax deduction'
+      },
       odds: {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
