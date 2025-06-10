@@ -8,6 +8,8 @@ const path = require('path');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 const { recordVipExperience } = require('../services/autoVipService');
+const { processSelfRebate } = require('../services/selfRebateService');
+const { processBetForActivityReward } = require('../services/activityRewardService');
 // CONSTANTS - Add to top of file
 const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
 const ENHANCED_USER_THRESHOLD = 100; // New minimum user threshold
@@ -2572,43 +2574,6 @@ const getAllMinimumCombinations = async (gameType) => {
     }
 };
 
-/**
- * Check if minimum user requirement is met
- * @param {string} gameType - Game type
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period ID
- * @returns {Promise<boolean>} - Whether minimum requirement is met
- */
-const checkMinimumUserRequirement = async (gameType, duration, periodId) => {
-    try {
-        const durationKey = duration === 30 ? '30s' :
-            duration === 60 ? '1m' :
-                duration === 180 ? '3m' :
-                    duration === 300 ? '5m' : '10m';
-
-        // Get unique users who placed bets in this period
-        const uniqueUsers = new Set();
-        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
-
-        for (const key of betKeys) {
-            const betData = await redisClient.get(key);
-            if (betData) {
-                const bet = JSON.parse(betData);
-                uniqueUsers.add(bet.userId);
-            }
-        }
-
-        return uniqueUsers.size >= 10;
-    } catch (error) {
-        logger.error('Error checking minimum user requirement', {
-            error: error.message,
-            gameType,
-            periodId
-        });
-        return false;
-    }
-};
-
 
 
 /**
@@ -4120,11 +4085,14 @@ const checkBetWin = (bet, result, gameType) => {
 const calculateWinnings = (bet, gameType) => {
     try {
         const odds = bet.odds || calculateOdds(gameType, bet.bet_type.split(':')[0], bet.bet_type.split(':')[1]);
-        const winnings = bet.bet_amount * odds;
+        // Use amount_after_tax instead of bet_amount for winnings calculation
+        const winnings = bet.amount_after_tax * odds;
 
         logger.info('Calculated winnings', {
             betId: bet.bet_id,
             betAmount: bet.bet_amount,
+            amountAfterTax: bet.amount_after_tax,
+            taxAmount: bet.tax_amount,
             odds,
             winnings,
             gameType
@@ -6460,6 +6428,30 @@ const processBet = async (betData) => {
 
             await t.commit();
 
+            // Record VIP experience for the bet
+            try {
+                await recordVipExperience(userId, grossBetAmount, gameType, betRecord.bet_id);
+            } catch (vipError) {
+                console.error('⚠️ Error recording VIP experience:', vipError);
+                // Don't fail the bet if VIP recording fails
+            }
+
+            // Process self rebate
+            try {
+                await processSelfRebate(userId, grossBetAmount, gameType, betRecord.bet_id);
+            } catch (rebateError) {
+                console.error('⚠️ Error processing self rebate:', rebateError);
+                // Don't fail the bet if rebate processing fails
+            }
+
+            // Process activity reward
+            try {
+                await processBetForActivityReward(userId, grossBetAmount, gameType);
+            } catch (activityError) {
+                console.error('⚠️ Error processing activity reward:', activityError);
+                // Don't fail the bet if activity reward processing fails
+            }
+
             return {
                 success: true,
                 message: 'Bet placed successfully',
@@ -6834,6 +6826,8 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
                 betType: betType,
                 betValue: betValue,
                 betAmount: parseFloat(bet.bet_amount),
+                taxAmount: parseFloat(bet.tax_amount || 0),
+                amountAfterTax: parseFloat(bet.amount_after_tax || 0),
                 odds: parseFloat(bet.odds || 0),
                 status: bet.status,
                 winAmount: bet.win_amount ? parseFloat(bet.win_amount) : 0,
@@ -7158,7 +7152,7 @@ module.exports = {
     getPreCalculatedResults,
     logSuspiciousActivity,
     getAllMinimumCombinations,
-    checkMinimumUserRequirement,
+    checkEnhancedUserRequirement,
 
     // Cleanup and maintenance
     cleanupRedisData,

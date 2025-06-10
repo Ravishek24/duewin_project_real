@@ -156,6 +156,10 @@ const processWebSocketBet = async (betData) => {
             // Store bet in appropriate database table
             const betTypeFormatted = `${betType}:${betValue}`;
             const currentWalletBalance = parseFloat(user.wallet_balance);
+            
+            // Calculate tax and amount after tax
+            const taxAmount = parseFloat((betAmountFloat * 0.05).toFixed(8)); // 5% tax rate
+            const amountAfterTax = parseFloat((betAmountFloat - taxAmount).toFixed(8));
 
             let betRecord;
             switch (gameType) {
@@ -165,6 +169,8 @@ const processWebSocketBet = async (betData) => {
                         bet_number: periodId,
                         bet_type: betTypeFormatted,
                         bet_amount: betAmountFloat,
+                        tax_amount: taxAmount,
+                        amount_after_tax: amountAfterTax,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
@@ -181,6 +187,8 @@ const processWebSocketBet = async (betData) => {
                         bet_number: periodId,
                         bet_type: betTypeFormatted,
                         bet_amount: betAmountFloat,
+                        tax_amount: taxAmount,
+                        amount_after_tax: amountAfterTax,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
@@ -197,6 +205,8 @@ const processWebSocketBet = async (betData) => {
                         bet_number: periodId,
                         bet_type: betTypeFormatted,
                         bet_amount: betAmountFloat,
+                        tax_amount: taxAmount,
+                        amount_after_tax: amountAfterTax,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
@@ -213,6 +223,8 @@ const processWebSocketBet = async (betData) => {
                         bet_number: periodId,
                         bet_type: betTypeFormatted,
                         bet_amount: betAmountFloat,
+                        tax_amount: taxAmount,
+                        amount_after_tax: amountAfterTax,
                         odds: odds,
                         status: 'pending',
                         wallet_balance_before: currentWalletBalance,
