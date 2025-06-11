@@ -568,225 +568,123 @@ const processRollbackTransaction = async (transactionData) => {
 // ======================= MAIN SPRIBE API HANDLERS =======================
 
 /**
- * 🔥 FIXED: Get game launch URL with correct token usage
+ * Get game launch URL
  */
-const getGameLaunchUrl = async (gameId, userId, req) => {
+const getGameLaunchUrl = async (gameId, userId, req = null) => {
   try {
-    console.log('🎮 Starting game launch process:', { gameId, userId });
-    
+    console.log('🎮 Generating game launch URL:', { gameId, userId });
+
+    // Initialize models first
     await initializeModels();
     console.log('✅ Models initialized');
+
+    // Validate game ID against available games
+    const availableGames = spribeConfig.availableGames;
+    const gameExists = availableGames.includes(gameId);
     
-    // Get user ID from JWT token if available
-    let actualUserId = userId;
-    if (req && req.headers && req.headers.authorization) {
-      try {
-        const token = req.headers.authorization.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        if (decoded && decoded.userId) {
-          actualUserId = decoded.userId;
-          console.log('✅ Using user ID from JWT token:', actualUserId);
-        }
-      } catch (error) {
-        console.warn('⚠️ Failed to decode JWT token:', error.message);
-      }
-    }
-    
-    // Validate game ID against staging games
-    if (!spribeConfig.availableGames.includes(gameId)) {
-      console.error('❌ Invalid game ID:', { 
-        gameId, 
-        availableGames: spribeConfig.availableGames 
-      });
+    if (!gameExists) {
+      console.error(`❌ Invalid game ID: ${gameId}`);
+      console.log('Available games:', availableGames.join(', '));
       return {
         success: false,
-        message: `Game ${gameId} is not available in staging environment. Available games: ${spribeConfig.availableGames.join(', ')}`
+        message: `Game ${gameId} is not available. Available games: ${availableGames.join(', ')}`
       };
     }
-    
-    // Get user with SPRIBE token scope
-    const user = await User.scope('withSpribeToken').findByPk(actualUserId);
+
+    // Get provider from config
+    const provider = spribeConfig.providers[gameId];
+    console.log('✅ Found game configuration:', { gameId, provider });
+
+    // Get user from database
+    const user = await User.findByPk(userId);
     if (!user) {
-      console.error('❌ User not found:', { actualUserId });
+      console.error(`❌ User not found: ${userId}`);
       return {
         success: false,
         message: 'User not found'
       };
     }
-    console.log('✅ User found:', { userId: user.user_id });
-    
-    // Check for existing active session first
-    console.log('🔄 Checking for existing active sessions...');
-    const existingSession = await SpribeGameSession.findOne({
-      where: {
-        user_id: actualUserId,
-        game_id: gameId,
-        status: 'active'
-      },
-      order: [['created_at', 'DESC']]
-    });
-    
-    if (existingSession) {
-      console.log('✅ Found existing active session:', { sessionId: existingSession.id });
-      
-      // Check if the existing session is still valid (less than 4 hours old)
-      const sessionAge = Date.now() - new Date(existingSession.started_at).getTime();
-      const maxAge = 4 * 60 * 60 * 1000; // 4 hours
-      
-      if (sessionAge < maxAge) {
-        // Check if user has valid token
-        if (!user.isSpribeTokenValid()) {
-          console.log('🔄 Generating new SPRIBE user token for existing session...');
-          const userToken = user.generateSpribeToken();
-          await user.save();
-          console.log('✅ New SPRIBE user token generated for existing session');
-        }
-        
-        // Use existing session
-        console.log('✅ Reusing existing valid session');
-        
-        // Get user's balance for frontend display
-        const thirdPartyWalletService = require('./thirdPartyWalletService');
-        const walletResult = await thirdPartyWalletService.getBalance(actualUserId, 'USD');
-        
-        if (!walletResult.success) {
-          console.error('❌ Failed to get wallet balance:', walletResult.message);
-          return {
-            success: false,
-            message: 'Failed to get wallet balance'
-          };
-        }
-        
-        // Generate launch URL with user token (not launch token!)
-        const returnUrl = `${process.env.FRONTEND_URL}/games`;
-        const accountHistoryUrl = `${process.env.FRONTEND_URL}/account/history`;
-        
-        const launchUrl = generateGameLaunchUrl(gameId, user, {
-          currency: 'USD',
-          token: user.spribe_token, // 🔥 FIX: Use user token, not launch token
-          returnUrl,
-          accountHistoryUrl,
-          ircDuration: 3600,
-        });
-        
-        return {
-          success: true,
-          url: launchUrl,
-          sessionId: existingSession.id,
-          warningMessage: walletResult.balance <= 0 ? 'You have no funds available to play. Please deposit first.' : null
-        };
-      } else {
-        // Mark old session as expired
-        console.log('🔄 Marking old session as expired...');
-        await existingSession.update({
-          status: 'expired',
-          ended_at: new Date()
-        });
-      }
-    }
-    
-    // 🔥 FIXED: Generate or refresh SPRIBE user token
-    let userToken;
-    if (!user.isSpribeTokenValid()) {
-      console.log('🔄 Generating new SPRIBE user token...');
-      userToken = user.generateSpribeToken();
-      await user.save();
-      console.log('✅ New SPRIBE user token generated:', {
-        userId: user.user_id,
-        token: userToken.substring(0, 8) + '...',
-        createdAt: user.spribe_token_created_at,
-        expiresAt: user.spribe_token_expires_at
-      });
-    } else {
-      userToken = user.spribe_token;
-      console.log('✅ Using existing valid SPRIBE user token:', {
-        userId: user.user_id,
-        token: userToken.substring(0, 8) + '...',
-        createdAt: user.spribe_token_created_at,
-        expiresAt: user.spribe_token_expires_at
-      });
-    }
-    
-    // 🔥 FIXED: Generate unique launch token (for internal session tracking)
-    const launchToken = generateUniqueSessionToken();
-    console.log('✅ Generated unique launch token:', { token: launchToken.substring(0, 8) + '...' });
-    
-    // Check wallet balance
+
+    // Check if user has sufficient balance
     const thirdPartyWalletService = require('./thirdPartyWalletService');
-    console.log('🔄 Checking third-party wallet balance...');
-    const walletResult = await thirdPartyWalletService.getBalance(actualUserId, 'USD');
+    const walletResult = await thirdPartyWalletService.getBalance(userId, 'USD');
     
     if (!walletResult.success) {
-      console.error('❌ Failed to get third-party wallet balance:', walletResult.message);
+      console.error(`❌ Failed to get wallet balance for user ${userId}`);
       return {
         success: false,
         message: 'Failed to get wallet balance'
       };
     }
+
+    // If third-party wallet is empty, try to transfer from main wallet
+    if (walletResult.balance <= 0) {
+      console.log(`💰 Third-party wallet empty for user ${userId}, attempting transfer from main wallet...`);
+      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+      
+      if (!transferResult.success) {
+        console.log(`⚠️ User ${userId} has no funds available in main wallet`);
+        return {
+          success: true,
+          url: null,
+          sessionId: null,
+          warningMessage: 'You have no funds available to play. Please deposit first.'
+        };
+      }
+      
+      console.log(`✅ Successfully transferred funds to third-party wallet for user ${userId}`);
+    }
+
+    // Generate unique tokens for the session
+    const launchToken = generateUniqueSessionToken();
+    const userToken = generateUniqueSessionToken();
     
-    const usdBalance = walletResult.balance;
-    console.log('✅ Third-party wallet balance:', { usd: usdBalance });
-    
-    // Generate frontend return URLs
-    const returnUrl = `${process.env.FRONTEND_URL}/games`;
-    const accountHistoryUrl = `${process.env.FRONTEND_URL}/account/history`;
-    console.log('✅ Generated URLs:', { returnUrl, accountHistoryUrl });
-    
-    // 🔥 FIXED: Create game session with unique launch token
-    console.log('🔄 Creating new game session...');
+    // Create game session with proper parameters
     const sessionResult = await createGameSession(
-      actualUserId, 
-      gameId, 
-      spribeConfig.providers[gameId], 
-      launchToken, // Store launch token in session for tracking
-      userToken,   // Store user token separately
+      userId,
+      gameId,
+      provider,
+      launchToken,
+      userToken,
       'USD',
-      req.headers['x-forwarded-for'] || req.connection.remoteAddress
+      req?.ip || '127.0.0.1'
     );
-    
+
     if (!sessionResult.success) {
-      console.error('❌ Failed to create game session:', sessionResult.message);
+      console.error(`❌ Failed to create game session for user ${userId}`);
       return {
         success: false,
         message: 'Failed to create game session'
       };
     }
-    console.log('✅ Game session created:', { sessionId: sessionResult.session.id });
-    
-    // 🔥 CRITICAL FIX: Generate launch URL with USER TOKEN (not launch token)
-    console.log('🔄 Generating launch URL...');
-    const launchUrl = generateGameLaunchUrl(gameId, user, {
+
+    // Generate launch URL with proper parameters
+    const launchUrl = await generateGameLaunchUrl(gameId, userId, {
+      userToken: userToken,
       currency: 'USD',
-      token: userToken, // 🔥 USE USER TOKEN FOR LAUNCH URL
-      returnUrl,
-      accountHistoryUrl,
-      ircDuration: 3600,
+      lang: 'en',
+      returnUrl: spribeConfig.returnUrl,
+      accountHistoryUrl: spribeConfig.accountHistoryUrl
     });
-    console.log('✅ Launch URL generated');
-    
-    // Log session creation
-    console.log(`✅ SPRIBE Session Created:`, {
-      sessionId: sessionResult.session.id,
-      userId: actualUserId,
+
+    console.log('✅ Game launch URL generated successfully:', {
       gameId,
-      launchToken: launchToken.substring(0, 8) + '...',
-      userToken: userToken.substring(0, 8) + '...',
-      currency: 'USD',
-      balance: usdBalance
+      userId,
+      sessionId: sessionResult.session.id,
+      provider: provider
     });
-    
+
     return {
       success: true,
       url: launchUrl,
-      sessionId: sessionResult.session.id,
-      warningMessage: usdBalance <= 0 ? 'You have no funds available to play. Please deposit first.' : null
+      sessionId: sessionResult.session.id
     };
   } catch (error) {
     console.error('❌ Error generating game launch URL:', error);
-    console.error('Error stack:', error.stack);
     return {
       success: false,
-      message: `Failed to generate game launch URL: ${error.message}`
+      message: 'Failed to generate game launch URL',
+      error: error.message
     };
   }
 };

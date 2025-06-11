@@ -2257,7 +2257,10 @@ const performRealTimeOptimization = async (gameType, duration, periodId) => {
  * @param {string} periodId - Period ID
  * @returns {Object} - Optimized result
  */
-const getRealTimeOptimizedResult = async (gameType, duration, periodId) => {
+/**
+ * UPDATED: Get real-time optimized result with timeline support
+ */
+const getRealTimeOptimizedResult = async (gameType, duration, periodId, timeline = 'default') => {
     try {
         const durationKey = duration === 30 ? '30s' :
             duration === 60 ? '1m' :
@@ -2265,69 +2268,43 @@ const getRealTimeOptimizedResult = async (gameType, duration, periodId) => {
                     duration === 300 ? '5m' : '10m';
 
         // Get fallback data (pre-calculated)
-        const fallbackKey = `${gameType}:${durationKey}:${periodId}:fallbacks`;
+        const fallbackKey = `${gameType}:${durationKey}:${timeline}:${periodId}:fallbacks`;
         const fallbackData = await redisClient.get(fallbackKey);
 
         if (!fallbackData) {
-            logger.warn('No real-time data available, using standard calculation', {
-                gameType,
-                periodId
-            });
-            return await calculateOptimizedResult(gameType, duration, periodId);
+            console.log(`⚠️ REALTIME: No real-time data for ${gameType} ${periodId}`);
+            return null;
         }
 
         const fallbacks = JSON.parse(fallbackData);
 
-        // Priority selection based on your rules:
+        // Priority selection:
         // 1. Use valid 60/40 result (lowest payout)
         if (fallbacks.lowestPayout && fallbacks.lowestPayout.isValid) {
-            logger.info('Using real-time optimized result (60/40 compliant)', {
-                gameType,
-                periodId,
-                result: fallbacks.lowestPayout.result
-            });
+            console.log(`✅ REALTIME: Using lowest payout result (60/40 compliant)`);
             return fallbacks.lowestPayout.result;
         }
 
         // 2. Use second lowest if available
         if (fallbacks.secondLowest && fallbacks.secondLowest.isValid) {
-            logger.info('Using second lowest payout result', {
-                gameType,
-                periodId,
-                result: fallbacks.secondLowest.result
-            });
+            console.log(`✅ REALTIME: Using second lowest result`);
             return fallbacks.secondLowest.result;
         }
 
-        // 3. Use third lowest if available
+        // 3. Use third lowest if available  
         if (fallbacks.thirdLowest && fallbacks.thirdLowest.isValid) {
-            logger.info('Using third lowest payout result', {
-                gameType,
-                periodId,
-                result: fallbacks.thirdLowest.result
-            });
+            console.log(`✅ REALTIME: Using third lowest result`);
             return fallbacks.thirdLowest.result;
         }
 
-        // 4. Fallback to standard calculation
-        logger.warn('No valid real-time results available, using standard calculation', {
-            gameType,
-            periodId
-        });
-        return await calculateOptimizedResult(gameType, duration, periodId);
+        console.log(`⚠️ REALTIME: No valid real-time results available`);
+        return null;
 
     } catch (error) {
-        logger.error('Error getting real-time optimized result', {
-            error: error.message,
-            stack: error.stack,
-            gameType,
-            periodId
-        });
-        // Fallback to standard calculation
-        return await calculateOptimizedResult(gameType, duration, periodId);
+        console.error('Error getting real-time optimized result:', error);
+        return null;
     }
 };
-
 /**
  * Additional safety checks for bet processing
  * @param {Object} betData - Bet data
@@ -3116,87 +3093,6 @@ const isMinimumBetPeriod = async (periodId) => {
             periodId
         });
         return false;
-    }
-};
-
-/**
- * Generate result where all users lose (UPDATED - for < 10 users rule)
- * @param {string} gameType - Game type
- * @param {number} duration - Duration in seconds
- * @param {string} periodId - Period ID
- * @returns {Promise<Object>} - Result that makes all users lose
- */
-const generateAllLoseResult = async (gameType, duration, periodId) => {
-    try {
-        const durationKey = duration === 30 ? '30s' :
-            duration === 60 ? '1m' :
-                duration === 180 ? '3m' :
-                    duration === 300 ? '5m' : '10m';
-
-        // Get all bets for this period
-        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
-        const placedBets = new Set();
-
-        // Collect all bet combinations
-        for (const key of betKeys) {
-            try {
-                const betData = await redisClient.get(key);
-                if (betData) {
-                    const bet = JSON.parse(betData);
-                    placedBets.add(`${bet.betType}:${bet.betValue}`);
-                }
-            } catch (parseError) {
-                continue;
-            }
-        }
-
-        // Generate all possible results (now with deterministic colors)
-        const allPossibleResults = await generateAllPossibleResults(gameType);
-
-        // Find results that don't match any placed bets
-        const losingResults = allPossibleResults.filter(result => {
-            // Check if this result would make all bets lose
-            for (const betCombo of placedBets) {
-                const mockBet = { bet_type: betCombo };
-                if (checkBetWin(mockBet, result, gameType)) {
-                    return false; // This result would make someone win
-                }
-            }
-            return true; // This result makes everyone lose
-        });
-
-        if (losingResults.length > 0) {
-            // Select random losing result
-            const selectedResult = losingResults[Math.floor(Math.random() * losingResults.length)];
-
-            logger.info('Generated all-lose result', {
-                gameType,
-                periodId,
-                placedBetsCount: placedBets.size,
-                losingResultsCount: losingResults.length,
-                selectedResult
-            });
-
-            return selectedResult;
-        } else {
-            // Fallback: use minimum bet result if no pure losing result found
-            logger.warn('No pure losing result found, using minimum bet fallback', {
-                gameType,
-                periodId
-            });
-
-            return await getMinimumBetResult(gameType, duration, periodId);
-        }
-    } catch (error) {
-        logger.error('Error generating all-lose result', {
-            error: error.message,
-            stack: error.stack,
-            gameType,
-            periodId
-        });
-
-        // Ultimate fallback: random result (with deterministic colors)
-        return await generateRandomResult(gameType);
     }
 };
 
@@ -5703,6 +5599,51 @@ const getPeriodStatusWithTimeline = async (gameType, duration, timeline, periodI
     }
 };
 
+/**
+ * NEW: Select fallback result when 60/40 rule fails
+ * Uses lowest, 2nd lowest, 3rd lowest chain
+ */
+const selectFallbackResult = async (gameType, duration, periodId) => {
+    try {
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        // Get fallback data from Redis
+        const fallbackKey = `${gameType}:${durationKey}:${periodId}:fallbacks`;
+        const fallbackData = await redisClient.get(fallbackKey);
+
+        if (fallbackData) {
+            const fallbacks = JSON.parse(fallbackData);
+            
+            // Create fallback options array
+            const fallbackOptions = [
+                fallbacks.lowestPayout,
+                fallbacks.secondLowest, 
+                fallbacks.thirdLowest
+            ].filter(option => option && option.result);
+
+            if (fallbackOptions.length > 0) {
+                // Randomly select from available fallback options
+                const selectedFallback = fallbackOptions[Math.floor(Math.random() * fallbackOptions.length)];
+                
+                console.log(`🔄 FALLBACK: Selected ${fallbackOptions.indexOf(selectedFallback) + 1} of ${fallbackOptions.length} options`);
+                
+                return selectedFallback.result;
+            }
+        }
+
+        // If no fallback data available, generate random
+        console.log(`🆘 FALLBACK: No fallback data, using random`);
+        return await generateRandomResult(gameType);
+
+    } catch (error) {
+        console.error('Error selecting fallback result:', error);
+        return await generateRandomResult(gameType);
+    }
+};
+
 
 /**
  * ENHANCED: Process game results with timeline support
@@ -5712,24 +5653,23 @@ const getPeriodStatusWithTimeline = async (gameType, duration, timeline, periodI
  * @param {string} timeline - Timeline
  * @returns {Promise<Object>} - Result data
  */
+/**
+ * FIXED: Enhanced result processing with complete optimization flow
+ */
 const processGameResults = async (gameType, duration, periodId, timeline = 'default', transaction = null) => {
     const lockKey = `process_${gameType}_${duration}_${periodId}_${timeline}`;
     
     try {
-        console.log(`🎲 Processing game results for ${gameType} ${duration}s ${timeline} - ${periodId}`);
+        console.log(`🎲 ENHANCED: Processing game results for ${gameType} ${duration}s - ${periodId}`);
 
-        // LAYER 1: Memory lock to prevent same-process duplicates
+        // LAYER 1: Memory lock
         if (globalProcessingLocks.has(lockKey)) {
-            console.log(`🔒 LAYER 1: Already processing ${periodId} in memory, skipping...`);
-            
-            // Wait for the processing to complete and return existing result
+            console.log(`🔒 LAYER 1: Already processing ${periodId}, waiting...`);
             let attempts = 0;
             while (globalProcessingLocks.has(lockKey) && attempts < 30) {
                 await new Promise(resolve => setTimeout(resolve, 500));
                 attempts++;
             }
-            
-            // Try to find the result that should now exist
             const existingResult = await checkExistingResult(gameType, duration, periodId, timeline);
             if (existingResult) {
                 return {
@@ -5743,31 +5683,18 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
             }
         }
         
-        // Set memory lock immediately
-        globalProcessingLocks.set(lockKey, {
-            timestamp: Date.now(),
-            processId: process.pid
-        });
+        globalProcessingLocks.set(lockKey, { timestamp: Date.now(), processId: process.pid });
 
-        // Ensure models are loaded
         const models = await ensureModelsInitialized();
-        
         const useTransaction = transaction || await sequelize.transaction();
         const shouldCommit = !transaction;
         
         try {
-            // LAYER 2: Database existence check with FOR UPDATE lock
-            console.log(`🔍 LAYER 2: Checking database for existing result...`);
-            
+            // LAYER 2: Database check
             let existingResult = await checkExistingResult(gameType, duration, periodId, timeline, useTransaction);
-            
             if (existingResult) {
-                console.log(`⚠️ LAYER 2: Result already exists for ${gameType} ${timeline} - ${periodId}, returning existing`);
-                
-                if (shouldCommit) {
-                    await useTransaction.commit();
-                }
-                
+                console.log(`⚠️ LAYER 2: Result exists, returning existing`);
+                if (shouldCommit) await useTransaction.commit();
                 return {
                     success: true,
                     result: existingResult.dbResult,
@@ -5778,35 +5705,19 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
                 };
             }
             
-            // LAYER 3: Redis lock for cross-instance protection
+            // LAYER 3: Redis lock
             const redisLockKey = `processing_lock_${gameType}_${duration}_${periodId}_${timeline}`;
             const redisLockValue = `${Date.now()}_${process.pid}`;
-            
-            console.log(`🔍 LAYER 3: Acquiring Redis lock...`);
-            // Fix: Use the updated Redis helper with proper options
-            const redisLockAcquired = await redisClient.set(
-                redisLockKey,
-                redisLockValue,
-                'EX',
-                30,
-                'NX'
-            );
+            const redisLockAcquired = await redisClient.set(redisLockKey, redisLockValue, 'EX', 30, 'NX');
             
             if (!redisLockAcquired) {
-                console.log(`🔒 LAYER 3: Redis lock failed, another instance is processing ${periodId}`);
-                
-                if (shouldCommit) {
-                    await useTransaction.rollback();
-                }
-                
-                // Wait and check for result
+                console.log(`🔒 LAYER 3: Redis lock failed, waiting...`);
+                if (shouldCommit) await useTransaction.rollback();
                 let attempts = 0;
                 while (attempts < 20) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    
                     const waitResult = await checkExistingResult(gameType, duration, periodId, timeline);
                     if (waitResult) {
-                        console.log(`✅ Found result after Redis wait for ${periodId}`);
                         return {
                             success: true,
                             result: waitResult.dbResult,
@@ -5818,23 +5729,14 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
                     }
                     attempts++;
                 }
-                
                 throw new Error('Failed to get result after Redis lock wait');
             }
             
-            console.log(`🔒 LAYER 3: Redis lock acquired for ${periodId}`);
-            
             try {
-                // FINAL CHECK: One more database check after acquiring Redis lock
+                // FINAL CHECK after Redis lock
                 existingResult = await checkExistingResult(gameType, duration, periodId, timeline, useTransaction);
-                
                 if (existingResult) {
-                    console.log(`⚠️ FINAL CHECK: Result created by another process, returning existing`);
-                    
-                    if (shouldCommit) {
-                        await useTransaction.commit();
-                    }
-                    
+                    if (shouldCommit) await useTransaction.commit();
                     return {
                         success: true,
                         result: existingResult.dbResult,
@@ -5845,17 +5747,100 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
                     };
                 }
                 
-                // NOW SAFE TO GENERATE NEW RESULT
-                console.log(`✅ All checks passed, generating NEW result for ${periodId}`);
+                // ✅ NOW SAFE TO GENERATE NEW RESULT WITH COMPLETE LOGIC
+                console.log(`✅ ENHANCED: Generating NEW result with full optimization logic`);
                 
-                // Generate NEW result specific to timeline
-                let result = await generateResultForTimeline(gameType, timeline);
+                // STEP 1: Get unique user count for this period
+                const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId, timeline);
+                console.log(`👥 ENHANCED: ${uniqueUserCount} unique users found`);
                 
-                console.log(`✅ Generated NEW result for ${timeline}:`, result);
+                let result;
+                let resultSource;
                 
-                // Save result to database with timeline
+                // STEP 2: Apply priority logic
+                if (uniqueUserCount === 0) {
+                    // NO USERS: Random result
+                    console.log(`🎲 ENHANCED: No users - generating random result`);
+                    result = await generateRandomResult(gameType);
+                    resultSource = 'random_no_users';
+                    
+                } else if (uniqueUserCount < ENHANCED_USER_THRESHOLD) {
+                    // < 100 USERS: Enhanced protection (all-lose or minimum bet)
+                    console.log(`🛡️ ENHANCED: ${uniqueUserCount} users < ${ENHANCED_USER_THRESHOLD} - using protection`);
+                    
+                    const enhancedValidation = await checkEnhancedUserRequirement(gameType, duration, periodId, timeline);
+                    
+                    if (enhancedValidation.shouldUseProtectedResult) {
+                        if (enhancedValidation.protectionReason === 'INSUFFICIENT_USERS') {
+                            // Try all-lose first
+                            const allLoseResult = await generateAllLoseResult(gameType, duration, periodId);
+                            if (allLoseResult) {
+                                result = allLoseResult;
+                                resultSource = 'all_lose_insufficient_users';
+                                console.log(`🎯 ENHANCED: Using all-lose result`);
+                            } else {
+                                // Fallback to protected result
+                                const protectedResult = await selectProtectedResult(gameType, duration, periodId, timeline, enhancedValidation.outcomeAnalysis);
+                                result = protectedResult.result;
+                                resultSource = 'protected_insufficient_users';
+                                console.log(`🎯 ENHANCED: Using protected result (${protectedResult.reason})`);
+                            }
+                        } else {
+                            // Gaming detection
+                            const protectedResult = await selectProtectedResult(gameType, duration, periodId, timeline, enhancedValidation.outcomeAnalysis);
+                            result = protectedResult.result;
+                            resultSource = 'protected_gaming_detection';
+                            console.log(`🎯 ENHANCED: Using protected result for gaming detection`);
+                        }
+                    } else {
+                        // Normal flow for small user count
+                        result = await getRealTimeOptimizedResult(gameType, duration, periodId);
+                        resultSource = 'realtime_small_user_count';
+                    }
+                    
+                } else {
+                    // >= 100 USERS: Normal optimization flow
+                    console.log(`📊 ENHANCED: ${uniqueUserCount} users >= ${ENHANCED_USER_THRESHOLD} - using optimization`);
+                    
+                    // Try real-time optimized result first
+                    const realTimeResult = await getRealTimeOptimizedResult(gameType, duration, periodId);
+                    
+                    if (realTimeResult) {
+                        result = realTimeResult;
+                        resultSource = 'realtime_optimized';
+                        console.log(`⚡ ENHANCED: Using real-time optimized result`);
+                    } else {
+                        // Fallback to calculated optimization
+                        console.log(`🔄 ENHANCED: No real-time data, calculating optimization...`);
+                        const optimizedResult = await calculateOptimizedResult(gameType, duration, periodId);
+                        
+                        if (optimizedResult && optimizedResult.optimalResult) {
+                            // Validate 60/40 compliance
+                            const validation = await validate60_40Result(optimizedResult, gameType);
+                            
+                            if (validation.isSafe) {
+                                result = optimizedResult.optimalResult.result;
+                                resultSource = 'calculated_optimized_60_40';
+                                console.log(`✅ ENHANCED: Using 60/40 compliant result`);
+                            } else {
+                                // Use fallback chain (lowest, 2nd lowest, 3rd lowest)
+                                result = await selectFallbackResult(gameType, duration, periodId);
+                                resultSource = 'fallback_chain';
+                                console.log(`⚠️ ENHANCED: 60/40 failed, using fallback chain`);
+                            }
+                        } else {
+                            // Ultimate fallback
+                            result = await generateRandomResult(gameType);
+                            resultSource = 'fallback_random';
+                            console.log(`🆘 ENHANCED: Ultimate fallback to random`);
+                        }
+                    }
+                }
+                
+                console.log(`✅ ENHANCED: Generated result via ${resultSource}:`, result);
+                
+                // STEP 3: Save to database
                 let savedResult;
-                
                 if (gameType === 'wingo') {
                     savedResult = await models.BetResultWingo.create({
                         bet_number: periodId,
@@ -5906,24 +5891,12 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
                     }, { transaction: useTransaction });
                 }
                 
-                // Process winners for this specific timeline
-                const winners = await processWinningBetsWithTimeline(
-                    gameType, 
-                    duration, 
-                    periodId, 
-                    timeline, 
-                    result, 
-                    useTransaction
-                );
+                // STEP 4: Process winners
+                const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, useTransaction);
                 
-                console.log(`🏆 Processed ${winners.length} winning bets for ${timeline}`);
+                if (shouldCommit) await useTransaction.commit();
                 
-                // Commit transaction if we created it
-                if (shouldCommit) {
-                    await useTransaction.commit();
-                }
-                
-                console.log(`✅ Successfully created NEW result for ${gameType} ${periodId}`);
+                console.log(`✅ ENHANCED: Complete result processing done - ${resultSource}`);
                 
                 return {
                     success: true,
@@ -5931,16 +5904,17 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
                     gameResult: result,
                     winners: winners,
                     timeline: timeline,
-                    source: 'new'
+                    source: resultSource,
+                    userCount: uniqueUserCount,
+                    protectionApplied: uniqueUserCount < ENHANCED_USER_THRESHOLD
                 };
                 
             } finally {
-                // Always release Redis lock
+                // Release Redis lock
                 try {
                     const currentLock = await redisClient.get(redisLockKey);
                     if (currentLock === redisLockValue) {
                         await redisClient.del(redisLockKey);
-                        console.log(`🔓 Released Redis lock for ${periodId}`);
                     }
                 } catch (lockError) {
                     console.error('❌ Error releasing Redis lock:', lockError);
@@ -5948,29 +5922,15 @@ const processGameResults = async (gameType, duration, periodId, timeline = 'defa
             }
             
         } catch (error) {
-            // Rollback transaction if we created it
-            if (shouldCommit) {
-                await useTransaction.rollback();
-            }
+            if (shouldCommit) await useTransaction.rollback();
             throw error;
         }
         
     } catch (error) {
-        console.error(`❌ Error processing game results for ${timeline}:`, error);
+        console.error(`❌ ENHANCED: Error processing game results:`, error);
         throw error;
     } finally {
-        // ALWAYS release memory lock
         globalProcessingLocks.delete(lockKey);
-        
-        // Clean up old memory locks periodically
-        if (globalProcessingLocks.size > 50) {
-            const now = Date.now();
-            for (const [key, lock] of globalProcessingLocks.entries()) {
-                if (now - lock.timestamp > 300000) { // 5 minutes old
-                    globalProcessingLocks.delete(key);
-                }
-            }
-        }
     }
 };
 
@@ -7096,7 +7056,6 @@ module.exports = {
 
     // Period management
     isMinimumBetPeriod,
-    generateAllLoseResult,
     initializePeriod,
     getActivePeriods,
     getPeriodStatus,
@@ -7190,6 +7149,7 @@ module.exports = {
     analyzeOutcomeCoverage,
     getBetsOnSpecificOutcome,
     selectProtectedResult,
+    selectFallbackResult,
 
     //constants
     PLATFORM_FEE_RATE,

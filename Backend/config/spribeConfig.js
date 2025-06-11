@@ -6,7 +6,6 @@ const config = {
   // API Configuration
   apiBaseUrl: process.env.SPRIBE_API_BASE_URL || 'https://dev-test.spribe.io/api',
   gameLaunchUrl: process.env.SPRIBE_GAME_LAUNCH_URL || 'https://dev-test.spribe.io/games/launch',
-  callbackUrl: process.env.SPRIBE_CALLBACK_URL || 'https://strike.atsproduct.in/api/spribe/callback',
   returnUrl: process.env.SPRIBE_RETURN_URL || 'https://strike.atsproduct.in/games',
   accountHistoryUrl: process.env.SPRIBE_ACCOUNT_HISTORY_URL || 'https://strike.atsproduct.in/account/history',
   
@@ -54,7 +53,16 @@ const config = {
   gameInfoUrl: process.env.SPRIBE_GAME_INFO_URL || 'https://cdn.spribe.io',
   
   // Logging Configuration
-  enableDetailedLogging: true
+  enableDetailedLogging: true,
+  
+  // 🔥 UPDATED: Separate callback URLs for each action type as required by SPRIBE
+  callbackUrls: {
+    auth: 'https://strike.atsproduct.in/api/spribe/auth',
+    info: 'https://strike.atsproduct.in/api/spribe/info',
+    withdraw: 'https://strike.atsproduct.in/api/spribe/withdraw',
+    deposit: 'https://strike.atsproduct.in/api/spribe/deposit',
+    rollback: 'https://strike.atsproduct.in/api/spribe/rollback'
+  },
 };
 
 // Validate required fields
@@ -71,7 +79,6 @@ if (!config.clientId || !config.clientSecret) {
 console.log('📋 SPRIBE Configuration:', {
   apiBaseUrl: config.apiBaseUrl,
   gameLaunchUrl: config.gameLaunchUrl,
-  callbackUrl: config.callbackUrl,
   returnUrl: config.returnUrl,
   accountHistoryUrl: config.accountHistoryUrl,
   availableGames: config.availableGames,

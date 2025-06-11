@@ -257,7 +257,7 @@ router.get('/launch/:gameId', async (req, res) => {
       });
     }
 
-    const launchUrl = await spribeService.getGameLaunchUrl(gameId, userId, token);
+    const launchUrl = await spribeService.getGameLaunchUrl(gameId, userId, req);
     console.log('✅ Launch URL generated:', launchUrl);
 
     return res.json({

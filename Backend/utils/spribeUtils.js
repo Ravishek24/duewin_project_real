@@ -1,6 +1,7 @@
 // utils/spribeUtils.js - UPDATED FOR USD CURRENCY
 const crypto = require('crypto');
 const spribeConfig = require('../config/spribeConfig');
+const logger = require('../utils/logger');
 
 /**
  * Format amount for SPRIBE API (convert from decimal to integer units)
@@ -77,65 +78,80 @@ const parseAmount = (amount, currency) => {
 /**
  * Generate game launch URL
  * @param {string} gameId - Game identifier
- * @param {Object} user - User object
+ * @param {string} userId - User identifier
  * @param {Object} options - Launch options
  * @returns {string} - Complete launch URL
  */
-const generateGameLaunchUrl = (gameId, user, options = {}) => {
-  console.log('\n🎮 ===== GENERATING SPRIBE LAUNCH URL =====');
-  console.log('📦 Input parameters:', {
-    gameId,
-    userId: user.user_id,
-    options: {
-      ...options,
-      token: options.token ? options.token.substring(0, 8) + '...' : null
+const generateGameLaunchUrl = async (gameId, userId, options = {}) => {
+  try {
+    logger.info('🎮 Generating game launch URL:', { gameId, userId });
+
+    // Validate required parameters
+    if (!gameId || !userId) {
+      throw new Error('Missing required parameters: gameId and userId are required');
     }
-  });
 
-  // Validate required parameters
-  if (!gameId || !user || !options.token) {
-    console.error('❌ Missing required parameters:', {
-      gameId: !!gameId,
-      user: !!user,
-      token: !!options.token
+    // Ensure userId is a string and not undefined
+    if (typeof userId === 'object' || userId === undefined) {
+      throw new Error('Invalid userId: must be a string and not undefined');
+    }
+
+    // Generate timestamp for security
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    // Construct base URL
+    const baseUrl = spribeConfig.gameLaunchUrl;
+
+    // Prepare query parameters according to SPRIBE documentation
+    const queryParams = new URLSearchParams({
+      user: userId.toString(),
+      token: options.userToken || '',
+      currency: options.currency || 'USD',
+      operator: spribeConfig.clientId, // Use client ID as operator
+      lang: options.lang || 'en'
     });
-    throw new Error('Missing required parameters for game launch URL');
+
+    // Add optional parameters if provided
+    if (options.returnUrl) {
+      queryParams.append('return_url', options.returnUrl);
+    }
+
+    // Add callback URLs with security parameters
+    const callbackParams = new URLSearchParams({
+      client_id: spribeConfig.clientId,
+      client_secret: spribeConfig.clientSecret,
+      timestamp: timestamp.toString()
+    });
+
+    // Construct callback URLs using the base URL from config
+    const callbackBaseUrl = spribeConfig.callbackBaseUrl || 'https://strike.atsproduct.in';
+    
+    // Add callback URLs
+    queryParams.append('auth_callback_url', `${callbackBaseUrl}/api/spribe/auth?${callbackParams.toString()}`);
+    queryParams.append('info_callback_url', `${callbackBaseUrl}/api/spribe/info?${callbackParams.toString()}`);
+    queryParams.append('withdraw_callback_url', `${callbackBaseUrl}/api/spribe/withdraw?${callbackParams.toString()}`);
+    queryParams.append('deposit_callback_url', `${callbackBaseUrl}/api/spribe/deposit?${callbackParams.toString()}`);
+    queryParams.append('rollback_callback_url', `${callbackBaseUrl}/api/spribe/rollback?${callbackParams.toString()}`);
+
+    // Construct final URL
+    const launchUrl = `${baseUrl}/${gameId}?${queryParams.toString()}`;
+
+    logger.info('✅ Launch URL generated:', {
+      success: true,
+      url: launchUrl,
+      sessionId: options.sessionId
+    });
+
+    return {
+      success: true,
+      url: launchUrl,
+      sessionId: options.sessionId
+    };
+
+  } catch (error) {
+    logger.error('❌ Error generating launch URL:', error);
+    throw error;
   }
-
-  const {
-    currency = 'USD',
-    token,
-    returnUrl = spribeConfig.returnUrl,
-    accountHistoryUrl = spribeConfig.accountHistoryUrl,
-    ircDuration = 3600
-  } = options;
-
-  // Generate launch URL
-  const baseUrl = spribeConfig.gameLaunchUrl;
-  const params = new URLSearchParams({
-    user: user.user_id,
-    token: token,
-    lang: 'en',
-    currency: currency,
-    operator: 'strike',
-    callback_url: spribeConfig.callbackUrl,
-    return_url: returnUrl,
-    account_history_url: accountHistoryUrl,
-    irc_duration: ircDuration
-  });
-
-  const launchUrl = `${baseUrl}/${gameId}?${params.toString()}`;
-
-  console.log('✅ Generated launch URL:', {
-    gameId,
-    userId: user.user_id,
-    currency,
-    tokenLength: token.length,
-    operator: 'strike',
-    url: launchUrl
-  });
-
-  return launchUrl;
 };
 
 /**
