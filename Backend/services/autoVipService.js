@@ -1,5 +1,5 @@
 // Backend/services/autoVipService.js - Auto VIP Processing Service
-const { sequelize } = require('../config/db');
+const { getSequelizeInstance } = require('../config/db');
 const { Op } = require('sequelize');
 const moment = require('moment-timezone');
 const logger = require('../utils/logger');
@@ -9,22 +9,10 @@ const User = require('../models/User');
 const VipLevel = require('../models/VipLevel');
 const VipReward = require('../models/VipReward');
 const Transaction = require('../models/Transaction');
+const UserVault = require('../models/UserVault');
 
 // Import referral service for wallet updates
 const { updateWalletBalance } = require('./referralService');
-
-/**
- * VIP Experience History Model (Create this table via migration)
- * This will track all VIP experience gains with history
- */
-let VipExperienceHistory;
-try {
-    // Try to require if the model exists, otherwise we'll create records in a basic way
-    VipExperienceHistory = require('../models/VipExperienceHistory');
-} catch (e) {
-    console.warn('VipExperienceHistory model not found - will use simplified tracking');
-    VipExperienceHistory = null;
-}
 
 /**
  * Record VIP experience automatically when user places a bet
@@ -36,11 +24,13 @@ try {
  * @returns {Object} - Operation result
  */
 const recordVipExperience = async (userId, betAmount, gameType = 'unknown', gameId = null, transaction = null) => {
+    const sequelize = await getSequelizeInstance();
     const t = transaction || await sequelize.transaction();
     const shouldCommit = !transaction; // Only commit if we created the transaction
 
     try {
-        console.log(`🎮 Recording VIP experience for user ${userId}: Bet ${betAmount}, Game: ${gameType}`);
+        console.log(`🎮 [VIP_EXP] Starting VIP experience recording for user ${userId}`);
+        console.log(`🎮 [VIP_EXP] Parameters: betAmount=${betAmount}, gameType=${gameType}, gameId=${gameId}`);
 
         // Get user current VIP status
         const user = await User.findByPk(userId, {
@@ -49,6 +39,7 @@ const recordVipExperience = async (userId, betAmount, gameType = 'unknown', game
         });
 
         if (!user) {
+            console.error(`❌ [VIP_EXP] User ${userId} not found`);
             if (shouldCommit) await t.rollback();
             return {
                 success: false,
@@ -56,41 +47,51 @@ const recordVipExperience = async (userId, betAmount, gameType = 'unknown', game
             };
         }
 
+        console.log(`🎮 [VIP_EXP] Found user: ${user.user_name}, current VIP level: ${user.vip_level}, current EXP: ${user.vip_exp}`);
+
         // Calculate EXP to add (1 EXP per 1 unit of bet amount)
         const expToAdd = Math.floor(parseFloat(betAmount));
         const currentExp = parseInt(user.vip_exp) || 0;
         const newExp = currentExp + expToAdd;
 
-        console.log(`📈 User ${userId}: Current EXP: ${currentExp}, Adding: ${expToAdd}, New Total: ${newExp}`);
+        console.log(`📈 [VIP_EXP] User ${userId}: Current EXP: ${currentExp}, Adding: ${expToAdd}, New Total: ${newExp}`);
 
         // Update user's VIP experience
         await user.update({ 
             vip_exp: newExp 
         }, { transaction: t });
 
-        // Create VIP experience history record (if model exists)
+        // Log after update
+        const updatedUser = await User.findByPk(userId, { attributes: ['vip_exp'], transaction: t });
+        console.log(`✅ [VIP_EXP] After update, user ${userId} VIP EXP is now: ${updatedUser.vip_exp}`);
+
+        // Create VIP experience history record
         let historyRecord = null;
-        if (VipExperienceHistory) {
-            try {
-                historyRecord = await VipExperienceHistory.create({
-                    user_id: userId,
-                    exp_gained: expToAdd,
-                    bet_amount: parseFloat(betAmount),
-                    game_type: gameType,
-                    game_id: gameId,
-                    exp_before: currentExp,
-                    exp_after: newExp,
-                    created_at: new Date()
-                }, { transaction: t });
-            } catch (historyError) {
-                console.warn('Could not create VIP experience history:', historyError.message);
-            }
+        try {
+            historyRecord = await sequelize.models.VipExperienceHistory.create({
+                user_id: userId,
+                exp_gained: expToAdd,
+                bet_amount: parseFloat(betAmount),
+                game_type: gameType,
+                game_id: gameId,
+                exp_before: currentExp,
+                exp_after: newExp,
+                created_at: new Date()
+            }, { transaction: t });
+            console.log(`✅ [VIP_EXP] Created history record with ID: ${historyRecord.id}`);
+        } catch (historyError) {
+            console.error('❌ [VIP_EXP] Could not create VIP experience history:', historyError);
+            console.error('❌ [VIP_EXP] Error details:', historyError.message);
+            console.error('❌ [VIP_EXP] Error stack:', historyError.stack);
         }
 
         // Check for VIP level upgrades
         const levelUpResult = await checkVipLevelUp(userId, newExp, user.vip_level, t);
 
-        if (shouldCommit) await t.commit();
+        if (shouldCommit) {
+            await t.commit();
+            console.log(`✅ [VIP_EXP] Transaction committed successfully`);
+        }
 
         const result = {
             success: true,
@@ -105,14 +106,17 @@ const recordVipExperience = async (userId, betAmount, gameType = 'unknown', game
         };
 
         if (levelUpResult.leveledUp) {
-            console.log(`🎉 User ${userId} leveled up from VIP ${user.vip_level} to VIP ${levelUpResult.newLevel}! Reward: ${levelUpResult.rewardAmount}`);
+            console.log(`🎉 [VIP_EXP] User ${userId} leveled up from VIP ${user.vip_level} to VIP ${levelUpResult.newLevel}! Reward: ${levelUpResult.rewardAmount}`);
         }
 
+        console.log(`🎉 [VIP_EXP] recordVipExperience result:`, result);
         return result;
 
     } catch (error) {
         if (shouldCommit) await t.rollback();
-        console.error('❌ Error recording VIP experience:', error);
+        console.error('❌ [VIP_EXP] Error recording VIP experience:', error);
+        console.error('❌ [VIP_EXP] Error details:', error.message);
+        console.error('❌ [VIP_EXP] Error stack:', error.stack);
         logger.error('Error recording VIP experience:', {
             userId,
             betAmount,
@@ -124,6 +128,49 @@ const recordVipExperience = async (userId, betAmount, gameType = 'unknown', game
             success: false,
             message: 'Error recording VIP experience: ' + error.message
         };
+    }
+};
+
+/**
+ * Update vault interest rate when VIP level changes
+ * @param {number} userId - User ID
+ * @param {number} newLevel - New VIP level
+ * @param {Object} transaction - Database transaction
+ */
+const updateVaultInterestRate = async (userId, newLevel, transaction) => {
+    try {
+        // Get the new VIP level details
+        const vipLevel = await VipLevel.findOne({
+            where: { level: newLevel },
+            transaction
+        });
+
+        if (!vipLevel) {
+            console.log(`⚠️ VIP level ${newLevel} not found for user ${userId}`);
+            return;
+        }
+
+        // Get user's vault
+        const vault = await UserVault.findOne({
+            where: { user_id: userId },
+            transaction
+        });
+
+        if (!vault) {
+            console.log(`⚠️ Vault not found for user ${userId}`);
+            return;
+        }
+
+        // Update vault interest rate
+        await vault.update({
+            interest_rate: vipLevel.vault_interest_rate
+        }, { transaction });
+
+        console.log(`✅ Updated vault interest rate for user ${userId} to ${vipLevel.vault_interest_rate}% (VIP ${newLevel})`);
+
+    } catch (error) {
+        console.error(`❌ Error updating vault interest rate for user ${userId}:`, error);
+        throw error;
     }
 };
 
@@ -175,6 +222,9 @@ const checkVipLevelUp = async (userId, currentExp, currentLevel, transaction) =>
                 { where: { user_id: userId }, transaction }
             );
 
+            // Update vault interest rate
+            await updateVaultInterestRate(userId, newLevel, transaction);
+
             // Get the new level details for reward
             const newLevelDetails = vipLevels.find(l => l.level === newLevel);
             levelUpReward = newLevelDetails ? parseFloat(newLevelDetails.bonus_amount) : 0;
@@ -219,13 +269,8 @@ const checkVipLevelUp = async (userId, currentExp, currentLevel, transaction) =>
         };
 
     } catch (error) {
-        console.error('❌ Error checking VIP level up:', error);
-        return {
-            leveledUp: false,
-            newLevel: currentLevel,
-            nextLevelExp: null,
-            error: error.message
-        };
+        console.error(`❌ Error in VIP level check for user ${userId}:`, error);
+        throw error;
     }
 };
 
@@ -259,9 +304,9 @@ const getUserVipStatus = async (userId) => {
 
         // Get VIP experience history (last 10 records)
         let recentExpHistory = [];
-        if (VipExperienceHistory) {
+        if (sequelize.models.VipExperienceHistory) {
             try {
-                recentExpHistory = await VipExperienceHistory.findAll({
+                recentExpHistory = await sequelize.models.VipExperienceHistory.findAll({
                     where: { user_id: userId },
                     order: [['created_at', 'DESC']],
                     limit: 10,

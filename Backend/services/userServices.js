@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/config');
 const { generateTokens, verifyAccessToken } = require('./tokenService');
 const UserSession = require('../models/UserSession');
+const crypto = require('crypto');
 
 // Function to generate a unique referral code
 const generateReferralCode = async () => {
@@ -390,9 +391,60 @@ const getUserProfile = async (userId) => {
 // Service to update user profile
 const updateUserProfile = async (userId, userData) => {
     try {
-        const { user_name, phone_no, country_code } = userData;
+        const { user_name, phone_no, email, country_code } = userData;
 
-        // If updating phone number, need to verify it
+        // If updating email, need to verify it
+        if (email) {
+            // Check if email is already taken
+            const existingUser = await User.findOne({
+                where: {
+                    email: email,
+                    user_id: { [Op.ne]: userId }
+                }
+            });
+
+            if (existingUser) {
+                return {
+                    success: false,
+                    message: 'Email is already in use.'
+                };
+            }
+
+            // Get current user
+            const user = await User.findByPk(userId);
+            
+            // Generate verification token
+            const verificationToken = crypto.randomBytes(32).toString('hex');
+            const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+            // Update user with new email and verification token
+            await User.update(
+                {
+                    email: email,
+                    email_verification_token: verificationToken,
+                    email_verification_token_expiry: tokenExpiry,
+                    is_email_verified: false
+                },
+                { where: { user_id: userId } }
+            );
+
+            // Send verification email
+            try {
+                await sendVerificationEmail(email, verificationToken, user.user_name);
+            } catch (emailError) {
+                console.error('Failed to send verification email:', emailError);
+                // Don't fail the update if email sending fails
+            }
+
+            return {
+                success: true,
+                message: 'Email updated. Please check your email to verify the new address.',
+                requiresVerification: true,
+                verificationToken: verificationToken
+            };
+        }
+
+        // If updating phone number, just update directly (no OTP)
         if (phone_no) {
             // Check if phone number is already taken
             const existingUser = await User.findOne({
@@ -408,42 +460,30 @@ const updateUserProfile = async (userId, userData) => {
                     message: 'Phone number is already in use.'
                 };
             }
-            
-            // Get current user
-            const user = await User.findByPk(userId);
-            
-            // Generate OTP for new phone number
-            const otpResponse = await otpService.createOtpSession(
-                phone_no, 
-                country_code || '91', 
-                user.user_name,
-                { udf1: user.email, udf2: 'phone_update' }
-            );
-            
-            if (!otpResponse.success) {
-                return {
-                    success: false,
-                    message: `Failed to send OTP: ${otpResponse.message}`
-                };
-            }
-            
-            // First update only the OTP session ID
+
             await User.update(
-                { phone_otp_session_id: otpResponse.otpSessionId.toString() }, 
+                { phone_no },
                 { where: { user_id: userId } }
             );
-            
-            return {
-                success: true,
-                message: 'OTP sent to new phone number. Please verify to complete update.',
-                requiresVerification: true,
-                otpSessionId: otpResponse.otpSessionId,
-                pendingPhoneUpdate: phone_no
-            };
         }
 
         // If only updating name, proceed directly
         if (user_name) {
+            // Check if username is already taken
+            const existingUser = await User.findOne({
+                where: {
+                    user_name: user_name,
+                    user_id: { [Op.ne]: userId }
+                }
+            });
+
+            if (existingUser) {
+                return {
+                    success: false,
+                    message: 'Username is already taken.'
+                };
+            }
+
             await User.update(
                 { user_name }, 
                 { where: { user_id: userId } }
@@ -452,7 +492,7 @@ const updateUserProfile = async (userId, userData) => {
 
         // Get updated user
         const updatedUser = await User.findByPk(userId, {
-            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified']
+            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'is_email_verified']
         });
 
         return {

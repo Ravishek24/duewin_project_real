@@ -54,7 +54,7 @@ router.get('/self-rebate/stats', auth, validateRequest(historyQuerySchema, 'quer
 });
 
 // GET /api/activity/status
-router.get('/activity/status', auth, async (req, res) => {
+router.get('/status', auth, async (req, res) => {
     try {
         const result = await activityRewardsService.getTodayActivityStatus(req.user.user_id);
         
@@ -73,7 +73,7 @@ router.get('/activity/status', auth, async (req, res) => {
 });
 
 // GET /api/activity/history
-router.get('/activity/history', auth, validateRequest(historyQuerySchema, 'query'), async (req, res) => {
+router.get('/history', auth, validateRequest(historyQuerySchema, 'query'), async (req, res) => {
     try {
         const { days } = req.query;
         const result = await activityRewardsService.getActivityRewardHistory(req.user.user_id, days);
@@ -88,6 +88,38 @@ router.get('/activity/history', auth, validateRequest(historyQuerySchema, 'query
         res.status(500).json({
             success: false,
             message: 'Error retrieving activity history'
+        });
+    }
+});
+
+// POST /api/activity/claim
+router.post('/claim', auth, async (req, res) => {
+    try {
+        const { milestoneType, milestoneKey } = req.body;
+        
+        if (!milestoneType || !milestoneKey) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required parameters: milestoneType and milestoneKey'
+            });
+        }
+
+        const result = await activityRewardsService.claimMilestoneReward(
+            req.user.user_id,
+            milestoneType,
+            milestoneKey
+        );
+        
+        if (!result.success) {
+            return res.status(400).json(result);
+        }
+        
+        res.json(result);
+    } catch (error) {
+        console.error('Error claiming activity reward:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error claiming activity reward'
         });
     }
 });

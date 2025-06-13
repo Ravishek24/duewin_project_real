@@ -23,7 +23,28 @@ const autoProcessRechargeForAttendance = async (userId, rechargeAmount, transact
         console.log(`💰 Auto-processing recharge for attendance - User: ${userId}, Amount: ${rechargeAmount}`);
 
         const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const now = moment.tz('Asia/Kolkata');
         console.log(`📅 Processing for date: ${today}`);
+
+        // Get user's last login time
+        const user = await User.findOne({
+            where: { user_id: userId },
+            attributes: ['last_login_at'],
+            transaction: t
+        });
+
+        // Check if user has logged in today
+        const hasLoggedInToday = user && user.last_login_at && 
+            moment(user.last_login_at).format('YYYY-MM-DD') === today;
+
+        if (!hasLoggedInToday) {
+            console.log('⚠️ User has not logged in today');
+            if (shouldCommit) await t.commit();
+            return {
+                success: false,
+                message: 'User must log in today to be eligible for attendance bonus'
+            };
+        }
 
         // Find today's attendance record
         let attendanceRecord = await AttendanceRecord.findOne({
@@ -70,7 +91,7 @@ const autoProcessRechargeForAttendance = async (userId, rechargeAmount, transact
                 additional_bonus: 0,                    // No additional recharge bonus
                 bonus_amount: streakBonus,              // Only streak bonus
                 bonus_claimed: false,
-                claim_eligible: true,                   // Auto-eligible since recharged
+                claim_eligible: true,                   // Auto-eligible since recharged and logged in today
                 created_at: new Date(),
                 updated_at: new Date()
             }, { transaction: t });
@@ -91,7 +112,8 @@ const autoProcessRechargeForAttendance = async (userId, rechargeAmount, transact
                 recharge_amount: newTotalRechargeAmount,
                 additional_bonus: 0,                    // No additional recharge bonus
                 bonus_amount: streakBonus,              // Only streak bonus
-                claim_eligible: true
+                claim_eligible: true,                   // Auto-eligible since recharged and logged in today
+                updated_at: new Date()                  // Update timestamp for today's check
             }, { transaction: t });
 
             console.log(`✅ Updated attendance record - Total recharge: ${newTotalRechargeAmount}, Bonus: ${streakBonus}`);
@@ -108,7 +130,9 @@ const autoProcessRechargeForAttendance = async (userId, rechargeAmount, transact
             totalBonus: parseFloat(attendanceRecord.bonus_amount),
             isEligible: true,
             attendanceDate: today,
-            totalRechargeAmount: parseFloat(attendanceRecord.recharge_amount)
+            totalRechargeAmount: parseFloat(attendanceRecord.recharge_amount),
+            hasLoggedInToday: true,                     // We know this is true because we checked
+            hasRechargedToday: true                     // We know this is true because we just recharged
         };
 
     } catch (error) {
@@ -135,6 +159,27 @@ const autoProcessRechargeForAttendance = async (userId, rechargeAmount, transact
 const getTodayAttendanceStatus = async (userId) => {
     try {
         const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const now = moment.tz('Asia/Kolkata');
+        
+        console.log('📅 Date check:', {
+            today: today,
+            currentTime: now.format('HH:mm:ss')
+        });
+        
+        // Get user's last login time
+        const user = await User.findOne({
+            where: { user_id: userId },
+            attributes: ['last_login_at']
+        });
+
+        // Check if user has logged in today
+        const hasLoggedInToday = user && user.last_login_at && 
+            moment(user.last_login_at).format('YYYY-MM-DD') === today;
+
+        console.log('🔑 Login check:', {
+            lastLogin: user?.last_login_at ? moment(user.last_login_at).format('YYYY-MM-DD HH:mm:ss') : 'Never',
+            hasLoggedInToday: hasLoggedInToday
+        });
         
         const attendanceRecord = await AttendanceRecord.findOne({
             where: {
@@ -148,6 +193,7 @@ const getTodayAttendanceStatus = async (userId) => {
                 success: true,
                 hasAttended: false,
                 hasRecharged: false,
+                hasLoggedInToday: hasLoggedInToday,
                 isEligibleForBonus: false,
                 bonusClaimed: false,
                 streak: 0,
@@ -156,11 +202,31 @@ const getTodayAttendanceStatus = async (userId) => {
             };
         }
 
+        // Check if recharge was done today
+        const hasRechargedToday = attendanceRecord.has_recharged && 
+            moment(attendanceRecord.updated_at).format('YYYY-MM-DD') === today;
+
+        console.log('💰 Recharge check:', {
+            lastRecharge: attendanceRecord.updated_at ? moment(attendanceRecord.updated_at).format('YYYY-MM-DD HH:mm:ss') : 'Never',
+            hasRechargedToday: hasRechargedToday,
+            rechargeAmount: parseFloat(attendanceRecord.recharge_amount || 0)
+        });
+
+        const isEligible = attendanceRecord.claim_eligible && hasLoggedInToday && hasRechargedToday;
+        console.log('🎯 Eligibility check:', {
+            claimEligible: attendanceRecord.claim_eligible,
+            hasLoggedInToday,
+            hasRechargedToday,
+            isEligible
+        });
+
         return {
             success: true,
             hasAttended: true,
             hasRecharged: attendanceRecord.has_recharged,
-            isEligibleForBonus: attendanceRecord.claim_eligible,
+            hasLoggedInToday: hasLoggedInToday,
+            hasRechargedToday: hasRechargedToday,
+            isEligibleForBonus: isEligible,
             bonusClaimed: attendanceRecord.bonus_claimed,
             streak: attendanceRecord.streak_count,
             bonusAmount: parseFloat(attendanceRecord.bonus_amount || 0),

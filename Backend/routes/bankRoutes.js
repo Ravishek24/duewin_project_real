@@ -1,31 +1,23 @@
 const express = require('express');
 const router = express.Router();
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+const { auth } = require('../middlewares/authMiddleware');
 const rateLimiters = require('../middleware/rateLimiter');
 const validationRules = require('../middleware/inputValidator');
 const {
     getBankAccountsController,
-    initBankAccountController,
-    completeBankAccountController,
+    addBankAccountController,
     updateBankAccountController,
     deleteBankAccountController
 } = require('../controllers/bankAccountController');
 
-// All bank routes require authentication and phone verification
+// All bank routes require authentication
 router.use(auth);
-router.use(requirePhoneVerification);
 
-// Initialize bank account addition (send OTP)
-router.post('/accounts/init',
+// Add bank account
+router.post('/accounts',
     rateLimiters.bankAccount,
     validationRules.bankAccount,
-    initBankAccountController
-);
-
-// Complete bank account addition (verify OTP)
-router.post('/accounts/complete',
-    rateLimiters.bankAccount,
-    completeBankAccountController
+    addBankAccountController
 );
 
 // Update bank account

@@ -41,7 +41,7 @@ const processBetForActivityReward = async (userId, betAmount, gameType, transact
         let activityRecord = await ActivityReward.findOne({
             where: {
                 user_id: userId,
-                reward_date: today
+                date: today
             },
             transaction: t
         });
@@ -49,15 +49,11 @@ const processBetForActivityReward = async (userId, betAmount, gameType, transact
         if (!activityRecord) {
             activityRecord = await ActivityReward.create({
                 user_id: userId,
-                reward_date: today,
+                date: today,
                 lottery_bet_amount: 0,
                 all_games_bet_amount: 0,
-                lottery_milestone_50k_claimed: false,
-                lottery_milestone_100k_claimed: false,
-                all_games_milestone_500_claimed: false,
-                lottery_reward_earned: 0,
-                all_games_reward_earned: 0,
-                total_reward_earned: 0
+                claimed_milestones: {},
+                total_rewards: 0
             }, { transaction: t });
         }
 
@@ -110,16 +106,17 @@ const checkAndProcessMilestones = async (activityRecord, transaction) => {
         const userId = activityRecord.user_id;
         const lotteryAmount = parseFloat(activityRecord.lottery_bet_amount);
         const allGamesAmount = parseFloat(activityRecord.all_games_bet_amount);
+        const claimedMilestones = activityRecord.claimed_milestones || {};
 
         // Check lottery milestones
-        if (lotteryAmount >= 50000 && !activityRecord.lottery_milestone_50k_claimed) {
+        if (lotteryAmount >= 50000 && !claimedMilestones.lottery_50k) {
             const reward = ACTIVITY_MILESTONES.lottery[50000];
             await processRewardClaim(userId, reward.amount, 'lottery_50k', reward.description, transaction);
             
+            claimedMilestones.lottery_50k = true;
             await activityRecord.update({
-                lottery_milestone_50k_claimed: true,
-                lottery_reward_earned: parseFloat(activityRecord.lottery_reward_earned) + reward.amount,
-                total_reward_earned: parseFloat(activityRecord.total_reward_earned) + reward.amount
+                claimed_milestones: claimedMilestones,
+                total_rewards: parseFloat(activityRecord.total_rewards) + reward.amount
             }, { transaction });
 
             rewardsEarned.push({
@@ -130,14 +127,14 @@ const checkAndProcessMilestones = async (activityRecord, transaction) => {
             });
         }
 
-        if (lotteryAmount >= 100000 && !activityRecord.lottery_milestone_100k_claimed) {
+        if (lotteryAmount >= 100000 && !claimedMilestones.lottery_100k) {
             const reward = ACTIVITY_MILESTONES.lottery[100000];
             await processRewardClaim(userId, reward.amount, 'lottery_100k', reward.description, transaction);
             
+            claimedMilestones.lottery_100k = true;
             await activityRecord.update({
-                lottery_milestone_100k_claimed: true,
-                lottery_reward_earned: parseFloat(activityRecord.lottery_reward_earned) + reward.amount,
-                total_reward_earned: parseFloat(activityRecord.total_reward_earned) + reward.amount
+                claimed_milestones: claimedMilestones,
+                total_rewards: parseFloat(activityRecord.total_rewards) + reward.amount
             }, { transaction });
 
             rewardsEarned.push({
@@ -149,14 +146,14 @@ const checkAndProcessMilestones = async (activityRecord, transaction) => {
         }
 
         // Check all games milestone
-        if (allGamesAmount >= 500 && !activityRecord.all_games_milestone_500_claimed) {
+        if (allGamesAmount >= 500 && !claimedMilestones.all_games_500) {
             const reward = ACTIVITY_MILESTONES.all_games[500];
             await processRewardClaim(userId, reward.amount, 'all_games_500', reward.description, transaction);
             
+            claimedMilestones.all_games_500 = true;
             await activityRecord.update({
-                all_games_milestone_500_claimed: true,
-                all_games_reward_earned: parseFloat(activityRecord.all_games_reward_earned) + reward.amount,
-                total_reward_earned: parseFloat(activityRecord.total_reward_earned) + reward.amount
+                claimed_milestones: claimedMilestones,
+                total_rewards: parseFloat(activityRecord.total_rewards) + reward.amount
             }, { transaction });
 
             rewardsEarned.push({
@@ -215,7 +212,7 @@ const getTodayActivityStatus = async (userId) => {
         const activityRecord = await ActivityReward.findOne({
             where: {
                 user_id: userId,
-                reward_date: today
+                date: today
             }
         });
 
@@ -244,6 +241,7 @@ const getTodayActivityStatus = async (userId) => {
 
         const lotteryAmount = parseFloat(activityRecord.lottery_bet_amount);
         const allGamesAmount = parseFloat(activityRecord.all_games_bet_amount);
+        const claimedMilestones = activityRecord.claimed_milestones || {};
 
         return {
             success: true,
@@ -255,16 +253,16 @@ const getTodayActivityStatus = async (userId) => {
                         target: 50000,
                         achieved: lotteryAmount >= 50000,
                         reward: 200,
-                        claimed: activityRecord.lottery_milestone_50k_claimed
+                        claimed: claimedMilestones.lottery_50k || false
                     },
                     '100K': {
                         target: 100000,
                         achieved: lotteryAmount >= 100000,
                         reward: 500,
-                        claimed: activityRecord.lottery_milestone_100k_claimed
+                        claimed: claimedMilestones.lottery_100k || false
                     }
                 },
-                totalRewards: parseFloat(activityRecord.lottery_reward_earned)
+                totalRewards: parseFloat(activityRecord.total_rewards)
             },
             allGames: {
                 betAmount: allGamesAmount,
@@ -273,12 +271,12 @@ const getTodayActivityStatus = async (userId) => {
                         target: 500,
                         achieved: allGamesAmount >= 500,
                         reward: 2,
-                        claimed: activityRecord.all_games_milestone_500_claimed
+                        claimed: claimedMilestones.all_games_500 || false
                     }
                 },
-                totalRewards: parseFloat(activityRecord.all_games_reward_earned)
+                totalRewards: parseFloat(activityRecord.total_rewards)
             },
-            totalRewardsEarned: parseFloat(activityRecord.total_reward_earned)
+            totalRewardsEarned: parseFloat(activityRecord.total_rewards)
         };
 
     } catch (error) {
@@ -291,7 +289,7 @@ const getTodayActivityStatus = async (userId) => {
 };
 
 /**
- * Get user's activity reward history
+ * Get activity reward history
  */
 const getActivityRewardHistory = async (userId, days = 30) => {
     try {
@@ -301,28 +299,26 @@ const getActivityRewardHistory = async (userId, days = 30) => {
         const activities = await ActivityReward.findAll({
             where: {
                 user_id: userId,
-                reward_date: {
+                date: {
                     [Op.between]: [startDate, endDate]
                 }
             },
-            order: [['reward_date', 'DESC']],
+            order: [['date', 'DESC']],
             attributes: [
-                'reward_date', 'lottery_bet_amount', 'all_games_bet_amount',
-                'lottery_milestone_50k_claimed', 'lottery_milestone_100k_claimed',
-                'all_games_milestone_500_claimed', 'lottery_reward_earned',
-                'all_games_reward_earned', 'total_reward_earned'
+                'date', 'lottery_bet_amount', 'all_games_bet_amount',
+                'claimed_milestones', 'total_rewards'
             ]
         });
 
         const totalStats = activities.reduce((acc, activity) => {
             acc.totalLotteryBets += parseFloat(activity.lottery_bet_amount);
             acc.totalAllGamesBets += parseFloat(activity.all_games_bet_amount);
-            acc.totalRewards += parseFloat(activity.total_reward_earned);
-            acc.milestonesAchieved += (
-                (activity.lottery_milestone_50k_claimed ? 1 : 0) +
-                (activity.lottery_milestone_100k_claimed ? 1 : 0) +
-                (activity.all_games_milestone_500_claimed ? 1 : 0)
-            );
+            acc.totalRewards += parseFloat(activity.total_rewards);
+            
+            // Count claimed milestones from JSON field
+            const claimedMilestones = activity.claimed_milestones || {};
+            acc.milestonesAchieved += Object.keys(claimedMilestones).length;
+            
             return acc;
         }, {
             totalLotteryBets: 0,
@@ -333,21 +329,20 @@ const getActivityRewardHistory = async (userId, days = 30) => {
 
         return {
             success: true,
-            history: activities.map(activity => ({
-                date: activity.reward_date,
-                lotteryBetAmount: parseFloat(activity.lottery_bet_amount),
-                allGamesBetAmount: parseFloat(activity.all_games_bet_amount),
-                milestones: {
-                    lottery50k: activity.lottery_milestone_50k_claimed,
-                    lottery100k: activity.lottery_milestone_100k_claimed,
-                    allGames500: activity.all_games_milestone_500_claimed
-                },
-                rewards: {
-                    lottery: parseFloat(activity.lottery_reward_earned),
-                    allGames: parseFloat(activity.all_games_reward_earned),
-                    total: parseFloat(activity.total_reward_earned)
-                }
-            })),
+            history: activities.map(activity => {
+                const claimedMilestones = activity.claimed_milestones || {};
+                return {
+                    date: activity.date,
+                    lotteryBetAmount: parseFloat(activity.lottery_bet_amount),
+                    allGamesBetAmount: parseFloat(activity.all_games_bet_amount),
+                    milestones: {
+                        lottery50k: claimedMilestones.lottery_50k || false,
+                        lottery100k: claimedMilestones.lottery_100k || false,
+                        allGames500: claimedMilestones.all_games_500 || false
+                    },
+                    totalRewards: parseFloat(activity.total_rewards)
+                };
+            }),
             statistics: totalStats
         };
 
@@ -360,10 +355,116 @@ const getActivityRewardHistory = async (userId, days = 30) => {
     }
 };
 
+/**
+ * Claim a milestone reward manually
+ */
+const claimMilestoneReward = async (userId, milestoneType, milestoneKey) => {
+    const t = await sequelize.transaction();
+    
+    try {
+        const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+        
+        // Get today's activity record
+        const activityRecord = await ActivityReward.findOne({
+            where: {
+                user_id: userId,
+                date: today
+            },
+            transaction: t
+        });
+
+        if (!activityRecord) {
+            await t.rollback();
+            return {
+                success: false,
+                message: 'No activity record found for today'
+            };
+        }
+
+        const claimedMilestones = activityRecord.claimed_milestones || {};
+        const milestoneKeyInDb = `${milestoneType}_${milestoneKey}`;
+
+        // Check if already claimed
+        if (claimedMilestones[milestoneKeyInDb]) {
+            await t.rollback();
+            return {
+                success: false,
+                message: 'This milestone reward has already been claimed'
+            };
+        }
+
+        // Validate milestone achievement
+        let isAchieved = false;
+        let rewardAmount = 0;
+
+        if (milestoneType === 'lottery') {
+            const lotteryAmount = parseFloat(activityRecord.lottery_bet_amount);
+            if (milestoneKey === '50K' && lotteryAmount >= 50000) {
+                isAchieved = true;
+                rewardAmount = ACTIVITY_MILESTONES.lottery[50000].amount;
+            } else if (milestoneKey === '100K' && lotteryAmount >= 100000) {
+                isAchieved = true;
+                rewardAmount = ACTIVITY_MILESTONES.lottery[100000].amount;
+            }
+        } else if (milestoneType === 'all_games') {
+            const allGamesAmount = parseFloat(activityRecord.all_games_bet_amount);
+            if (milestoneKey === '500' && allGamesAmount >= 500) {
+                isAchieved = true;
+                rewardAmount = ACTIVITY_MILESTONES.all_games[500].amount;
+            }
+        }
+
+        if (!isAchieved) {
+            await t.rollback();
+            return {
+                success: false,
+                message: 'Milestone not yet achieved'
+            };
+        }
+
+        // Process the reward
+        await processRewardClaim(
+            userId,
+            rewardAmount,
+            milestoneKeyInDb,
+            `${milestoneType.toUpperCase()} ${milestoneKey} Milestone Reward`,
+            t
+        );
+
+        // Update claimed milestones
+        claimedMilestones[milestoneKeyInDb] = true;
+        await activityRecord.update({
+            claimed_milestones: claimedMilestones,
+            total_rewards: parseFloat(activityRecord.total_rewards) + rewardAmount
+        }, { transaction: t });
+
+        await t.commit();
+
+        return {
+            success: true,
+            message: 'Reward claimed successfully',
+            reward: {
+                type: milestoneType,
+                milestone: milestoneKey,
+                amount: rewardAmount
+            }
+        };
+
+    } catch (error) {
+        await t.rollback();
+        console.error('❌ Error claiming milestone reward:', error);
+        return {
+            success: false,
+            message: 'Error claiming reward: ' + error.message
+        };
+    }
+};
+
 module.exports = {
     processBetForActivityReward,
     getTodayActivityStatus,
     getActivityRewardHistory,
+    claimMilestoneReward,
     checkAndProcessMilestones,
     ACTIVITY_MILESTONES
 };

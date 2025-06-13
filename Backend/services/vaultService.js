@@ -154,8 +154,7 @@ const withdrawFromVault = async (userId, amount) => {
         // Update vault balance (deduct)
         const newVaultBalance = currentVaultBalance - withdrawAmount;
         await vault.update({
-            vault_balance: newVaultBalance,
-            total_withdrawn: parseFloat(vault.total_withdrawn) + withdrawAmount
+            vault_balance: newVaultBalance
         }, { transaction: t });
 
         // Update wallet balance (add)
@@ -228,13 +227,13 @@ const getVaultStatus = async (userId) => {
         return {
             success: true,
             vaultBalance: parseFloat(vault.vault_balance),
-            totalDeposited: parseFloat(vault.total_deposited),
-            totalWithdrawn: parseFloat(vault.total_withdrawn),
-            totalInterestEarned: parseFloat(vault.total_interest_earned),
             currentInterestRate: parseFloat(currentInterestRate),
             vipLevel: user.vip_level,
             walletBalance: parseFloat(user.wallet_balance),
-            lastInterestDate: vault.last_interest_date
+            lastInterestDate: vault.last_interest_date,
+            totalDeposited: parseFloat(vault.total_deposited),
+            totalWithdrawn: parseFloat(vault.total_withdrawn),
+            totalInterestEarned: parseFloat(vault.total_interest_earned)
         };
 
     } catch (error) {
@@ -259,7 +258,8 @@ const getVaultHistory = async (userId, limit = 50, offset = 0) => {
             attributes: [
                 'id', 'order_no', 'transaction_type', 'amount',
                 'vault_balance_before', 'vault_balance_after',
-                'interest_rate', 'vip_level', 'description', 'created_at'
+                'wallet_balance_before', 'wallet_balance_after',
+                'vip_level', 'description', 'status', 'created_at'
             ]
         });
 
@@ -272,9 +272,11 @@ const getVaultHistory = async (userId, limit = 50, offset = 0) => {
                 amount: parseFloat(tx.amount),
                 vaultBalanceBefore: parseFloat(tx.vault_balance_before),
                 vaultBalanceAfter: parseFloat(tx.vault_balance_after),
-                interestRate: tx.interest_rate ? parseFloat(tx.interest_rate) : null,
+                walletBalanceBefore: tx.wallet_balance_before ? parseFloat(tx.wallet_balance_before) : null,
+                walletBalanceAfter: tx.wallet_balance_after ? parseFloat(tx.wallet_balance_after) : null,
                 vipLevel: tx.vip_level,
                 description: tx.description,
+                status: tx.status,
                 date: tx.created_at
             })),
             total: transactions.count,
@@ -293,7 +295,6 @@ const getVaultHistory = async (userId, limit = 50, offset = 0) => {
 /**
  * Process daily interest for all users (to be called by cron job)
  */
-// Replace the processDailyInterest function with this version:
 const processDailyInterest = async () => {
     const t = await sequelize.transaction();
 
@@ -314,15 +315,7 @@ const processDailyInterest = async () => {
             include: [{
                 model: User,
                 as: 'vaultuser',
-                attributes: ['user_id', 'vip_level'],
-                include: [{
-                    model: VipLevel,
-                    foreignKey: 'vip_level',
-                    targetKey: 'level',
-                    as: 'vipuser',
-                    attributes: ['vault_interest_rate'],
-                    required: false
-                }]
+                attributes: ['user_id', 'vip_level']
             }],
             transaction: t
         });
@@ -333,25 +326,23 @@ const processDailyInterest = async () => {
         for (const vault of vaults) {
             try {
                 const user = vault.vaultuser;
-                const interestRate = user.vipuser?.vault_interest_rate || 0.00;
+                // Use the stored interest rate from vault (stored as percentage)
+                const interestRate = parseFloat(vault.interest_rate) || 0.00;
 
                 if (interestRate > 0) {
-                    const dailyInterestRate = parseFloat(interestRate) / 100; // Convert percentage to decimal
-                    
-                    // Calculate interest ONLY on principal (total_deposited - total_withdrawn)
-                    const principalAmount = parseFloat(vault.total_deposited) - parseFloat(vault.total_withdrawn);
+                    const dailyInterestRate = interestRate / 100; // Convert percentage to decimal
+                    const principalAmount = parseFloat(vault.vault_balance);
                     const interestAmount = principalAmount * dailyInterestRate;
 
                     if (interestAmount > 0 && principalAmount > 0) {
                         const orderNo = generateOrderNumber();
 
-                        // Update vault balance (add interest) and total interest earned
+                        // Update vault balance (add interest)
                         const currentVaultBalance = parseFloat(vault.vault_balance);
                         const newVaultBalance = currentVaultBalance + interestAmount;
                         
                         await vault.update({
                             vault_balance: newVaultBalance,
-                            total_interest_earned: parseFloat(vault.total_interest_earned) + interestAmount,
                             last_interest_date: today
                         }, { transaction: t });
 
@@ -363,15 +354,14 @@ const processDailyInterest = async () => {
                             amount: interestAmount,
                             vault_balance_before: currentVaultBalance,
                             vault_balance_after: newVaultBalance,
-                            interest_rate: dailyInterestRate,
+                            interest_rate: interestRate,
                             vip_level: user.vip_level,
                             status: 'completed',
-                            description: `Daily vault interest - ${today} (${parseFloat(interestRate)}% on principal)`,
+                            description: `Daily interest payment - Rate: ${interestRate}%`,
                             metadata: {
-                                interest_date: today,
-                                rate_applied: interestRate,
+                                operation: 'interest_payment',
                                 principal_amount: principalAmount,
-                                calculation_method: 'principal_only'
+                                daily_rate: dailyInterestRate
                             }
                         }, { transaction: t });
 
@@ -379,34 +369,17 @@ const processDailyInterest = async () => {
                         totalInterestPaid += interestAmount;
                     }
                 }
-
-                // Update last interest date even if no interest was paid
-                await vault.update({
-                    last_interest_date: today
-                }, { transaction: t });
-
-            } catch (userError) {
-                console.error(`❌ Error processing interest for user ${vault.user_id}:`, userError);
+            } catch (error) {
+                console.error(`❌ Error processing interest for user ${vault.user_id}:`, error);
             }
         }
 
         await t.commit();
-
-        console.log(`✅ Daily interest processed: ${processedCount} users, Total: ${totalInterestPaid}`);
-
-        return {
-            success: true,
-            processedUsers: processedCount,
-            totalInterestPaid
-        };
+        console.log(`✅ Processed interest for ${processedCount} users. Total interest paid: ${totalInterestPaid}`);
 
     } catch (error) {
         await t.rollback();
         console.error('❌ Error processing daily interest:', error);
-        return {
-            success: false,
-            message: 'Error processing daily interest: ' + error.message
-        };
     }
 };
 

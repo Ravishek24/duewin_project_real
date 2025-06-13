@@ -20,7 +20,7 @@ const sendOtpController = async (req, res) => {
         }
 
         // Validate purpose
-        const validPurposes = ['registration', 'login', 'phone_update', 'bank_account', 'withdrawal'];
+        const validPurposes = ['bank_account', 'forgot_password'];
         if (!validPurposes.includes(purpose)) {
             return res.status(400).json({
                 success: false,

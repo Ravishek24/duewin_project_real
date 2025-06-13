@@ -46,7 +46,7 @@ router.get('/analytics/direct', auth, getDirectReferralAnalyticsController);
 router.get('/analytics/team', auth, getTeamReferralAnalyticsController);
 
 // Attendance bonus endpoints - FIXED WITH PROPER ASYNC HANDLERS
-router.post('/attendance', auth, requirePhoneVerification, async (req, res) => {
+router.post('/attendance', auth, async (req, res) => {
     try {
         console.log('📅 DEBUG: Attendance route hit');
         const userId = req.user.user_id;
@@ -193,6 +193,101 @@ router.post('/invitation/claim', auth, requirePhoneVerification, async (req, res
         return res.status(500).json({
             success: false,
             message: 'Server error claiming invitation bonus',
+            debug: { error: error.message }
+        });
+    }
+});
+
+// Attendance history endpoint
+router.get('/attendance/history', auth, async (req, res) => {
+    try {
+        console.log('📅 DEBUG: Attendance history route hit');
+        const userId = req.user.user_id;
+        
+        if (!referralService || !referralService.getAttendanceHistory) {
+            return res.status(500).json({
+                success: false,
+                message: 'Attendance service not available'
+            });
+        }
+        
+        const result = await referralService.getAttendanceHistory(userId);
+        console.log('📋 Attendance history result:', result);
+
+        if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('💥 Error in attendance history route:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting attendance history',
+            debug: { error: error.message }
+        });
+    }
+});
+
+// Self rebate history endpoint
+router.get('/self-rebate/history', auth, async (req, res) => {
+    try {
+        console.log('💰 DEBUG: Self rebate history route hit');
+        const userId = req.user.user_id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        
+        if (!referralService || !referralService.getSelfRebateHistory) {
+            return res.status(500).json({
+                success: false,
+                message: 'Rebate service not available'
+            });
+        }
+        
+        const result = await referralService.getSelfRebateHistory(userId, page, limit);
+        console.log('📋 Self rebate history result:', result);
+
+        if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('💥 Error in self rebate history route:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting self rebate history',
+            debug: { error: error.message }
+        });
+    }
+});
+
+// Self rebate statistics endpoint
+router.get('/self-rebate/stats', auth, async (req, res) => {
+    try {
+        console.log('💰 DEBUG: Self rebate stats route hit');
+        const userId = req.user.user_id;
+        
+        if (!referralService || !referralService.getSelfRebateStats) {
+            return res.status(500).json({
+                success: false,
+                message: 'Rebate service not available'
+            });
+        }
+        
+        const result = await referralService.getSelfRebateStats(userId);
+        console.log('📋 Self rebate stats result:', result);
+
+        if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('💥 Error in self rebate stats route:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting self rebate statistics',
             debug: { error: error.message }
         });
     }

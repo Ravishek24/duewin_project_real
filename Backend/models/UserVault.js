@@ -23,6 +23,11 @@ class UserVault extends Model {
                 defaultValue: 0.00,
                 comment: 'Current amount in vault'
             },
+            last_interest_date: {
+                type: DataTypes.DATEONLY,
+                allowNull: true,
+                comment: 'Last date when interest was calculated'
+            },
             total_deposited: {
                 type: DataTypes.DECIMAL(15, 2),
                 allowNull: false,
@@ -41,11 +46,6 @@ class UserVault extends Model {
                 defaultValue: 0.00,
                 comment: 'Total interest earned till date'
             },
-            last_interest_date: {
-                type: DataTypes.DATEONLY,
-                allowNull: true,
-                comment: 'Last date when interest was calculated'
-            },
             created_at: {
                 type: DataTypes.DATE,
                 defaultValue: DataTypes.NOW
@@ -59,33 +59,19 @@ class UserVault extends Model {
             modelName: 'UserVault',
             tableName: 'user_vaults',
             timestamps: true,
-            createdAt: 'created_at',
-            updatedAt: 'updated_at',
-            indexes: [
-                {
-                    unique: true,
-                    fields: ['user_id']
-                }
-            ]
+            underscored: true
         });
     }
 
     static associate(models) {
-        if (models.User) {
-            this.belongsTo(models.User, {
-                foreignKey: 'user_id',
-                targetKey: 'user_id',
-                as: 'vaultuser'
-            });
-        }
-        
-        if (models.VaultTransaction) {
-            this.hasMany(models.VaultTransaction, {
-                foreignKey: 'user_id',
-                sourceKey: 'user_id',
-                as: 'vaultTransactions'
-            });
-        }
+        this.belongsTo(models.User, {
+            foreignKey: 'user_id',
+            as: 'vaultuser'
+        });
+        this.hasMany(models.VaultTransaction, {
+            foreignKey: 'user_id',
+            as: 'transactions'
+        });
     }
 }
 

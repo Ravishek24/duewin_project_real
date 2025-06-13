@@ -20,13 +20,39 @@ const { auth } = require('../middlewares/authMiddleware');
 const { validateSeamlessRequest } = require('../middlewares/seamlessMiddleware');
 const thirdPartyWalletService = require('../services/thirdPartyWalletService');
 const seamlessWalletService = require('../services/seamlessWalletService');
+const seamlessService = require('../services/seamlessService');
 const User = require('../models/User');
 const SeamlessGameSession = require('../models/SeamlessGameSession');
 
 const router = express.Router();
 
 // Protected routes (require authentication)
-router.get('/games', auth, getFilteredGamesController);
+router.get('/games', auth, async (req, res) => {
+  try {
+    const filters = {
+      provider: req.query.provider,
+      category: req.query.category,
+      mobile: req.query.mobile === 'true',
+      jackpot: req.query.jackpot === 'true',
+      freerounds: req.query.freerounds === 'true',
+      page: req.query.page,
+      limit: req.query.limit
+    };
+
+    const result = await seamlessService.getGamesList(filters);
+    if (result.success) {
+      return res.status(200).json(result);
+    } else {
+      return res.status(400).json(result);
+    }
+  } catch (error) {
+    console.error('Error in games route:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching games list'
+    });
+  }
+});
 router.get('/launch/:gameId', auth, launchGameController);
 
 // New routes for server-side game embedding to help bypass Cloudflare restrictions

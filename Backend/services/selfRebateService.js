@@ -1,6 +1,6 @@
 // Backend/services/selfRebateService.js
 const { sequelize } = require('../config/db');
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 
 // Import models
 const User = require('../models/User');
@@ -20,26 +20,17 @@ const HOUSE_GAMES = ['wingo', '5d', 'k3', 'trx_wix'];
  * Process self rebate for a house game bet
  */
 const processSelfRebate = async (userId, betAmount, gameType, gameId = null, betReferenceId = null, transaction = null) => {
-    const t = transaction || await sequelize.transaction();
-    const shouldCommit = !transaction;
-
     try {
-        console.log(`💰 Processing self rebate for user ${userId}: ${betAmount} in ${gameType}`);
-
-        // Check if it's a house game
+        console.log(`Starting self rebate process for user ${userId}, game ${gameType}, amount ${betAmount}`);
+        
+        // Check if game type is eligible
         if (!HOUSE_GAMES.includes(gameType.toLowerCase())) {
-            console.log(`⚠️ Game ${gameType} is not a house game, skipping self rebate`);
-            if (shouldCommit) await t.commit();
-            return {
-                success: true,
-                message: 'Not a house game, no self rebate applicable',
-                rebateAmount: 0
-            };
+            console.log(`Game type ${gameType} is not eligible for self rebate`);
+            return null;
         }
 
-        // Get user with VIP level details
+        // Get user details with VIP level
         const user = await User.findByPk(userId, {
-            attributes: ['user_id', 'user_name', 'vip_level', 'wallet_balance'],
             include: [{
                 model: VipLevel,
                 foreignKey: 'vip_level',
@@ -48,101 +39,85 @@ const processSelfRebate = async (userId, betAmount, gameType, gameId = null, bet
                 attributes: ['rebate_rate'],
                 required: false
             }],
-            transaction: t
+            transaction
         });
 
         if (!user) {
-            if (shouldCommit) await t.rollback();
-            return {
-                success: false,
-                message: 'User not found'
-            };
+            console.log(`User ${userId} not found`);
+            return null;
         }
 
-        // Get rebate rate from VIP level
-        const rebateRate = user.vipuser?.rebate_rate || 0.00;
-        const rebateRateDecimal = parseFloat(rebateRate) / 100; // Convert percentage to decimal
+        // Get rebate rate from VIP level (stored as percentage, e.g., 0.05 for 5%)
+        // If user's VIP level is 0, use level 1's rebate rate, otherwise use their current level's rate
+        const effectiveVipLevel = user.vip_level === 0 ? 1 : user.vip_level;
+        const vipLevel = await VipLevel.findOne({
+            where: { level: effectiveVipLevel },
+            attributes: ['rebate_rate'],
+            transaction
+        });
 
-        if (rebateRateDecimal <= 0) {
-            console.log(`⚠️ User ${userId} has no rebate rate (VIP level ${user.vip_level})`);
-            if (shouldCommit) await t.commit();
-            return {
-                success: true,
-                message: 'No rebate rate configured for user VIP level',
-                rebateAmount: 0
-            };
-        }
+        const rebateRate = vipLevel ? vipLevel.rebate_rate : 0;
+        console.log(`User VIP level: ${user.vip_level}, effective level: ${effectiveVipLevel}, rebate rate: ${rebateRate}`);
 
-        // Calculate rebate amount
-        const betAmountFloat = parseFloat(betAmount);
-        const rebateAmount = betAmountFloat * rebateRateDecimal;
+        // Calculate rebate amount (rebate rate is already in decimal form, e.g., 0.0050 for 0.50%)
+        const rebateAmount = parseFloat(betAmount) * parseFloat(rebateRate);
+        console.log(`Calculated rebate amount: ${rebateAmount}`);
 
         if (rebateAmount <= 0) {
-            if (shouldCommit) await t.commit();
-            return {
-                success: true,
-                message: 'Rebate amount too small',
-                rebateAmount: 0
-            };
+            console.log('Rebate amount is 0 or negative, skipping');
+            return null;
         }
 
-        // Credit rebate to wallet
-        await updateWalletBalance(userId, rebateAmount, 'add', t);
+        // Use provided transaction or create new one
+        const t = transaction || await sequelize.transaction();
 
-        // Create self rebate record
-        await SelfRebate.create({
-            user_id: userId,
-            bet_amount: betAmountFloat,
-            rebate_rate: rebateRateDecimal,
-            rebate_amount: rebateAmount,
-            game_type: gameType.toLowerCase(),
-            game_id: gameId,
-            vip_level: user.vip_level,
-            bet_reference_id: betReferenceId,
-            status: 'credited',
-            credited_at: new Date(),
-            batch_id: `self_rebate_${Date.now()}`
-        }, { transaction: t });
+        try {
+            // Update user's wallet balance
+            await user.increment('wallet_balance', {
+                by: rebateAmount,
+                transaction: t
+            });
 
-        // Create transaction record
-        await Transaction.create({
-            user_id: userId,
-            type: 'rebate',
-            amount: rebateAmount,
-            status: 'completed',
-            description: `Self rebate for ${gameType} bet - ${(parseFloat(rebateRate)).toFixed(2)}% cashback`,
-            reference_id: `self_rebate_${userId}_${Date.now()}`,
-            game_type: gameType,
-            game_id: gameId,
-            metadata: {
-                rebate_type: 'self_rebate',
-                original_bet_amount: betAmountFloat,
-                rebate_rate: parseFloat(rebateRate),
+            // Create rebate record
+            const rebate = await SelfRebate.create({
+                user_id: userId,
+                bet_amount: betAmount,
+                rebate_rate: rebateRate, // Store as decimal (e.g., 0.05 for 5%)
+                rebate_amount: rebateAmount,
+                game_type: gameType.toLowerCase(),
+                game_id: gameId,
                 vip_level: user.vip_level,
-                bet_reference_id: betReferenceId
+                bet_reference_id: betReferenceId,
+                status: 'credited'
+            }, { transaction: t });
+
+            // Create transaction record
+            await Transaction.create({
+                user_id: userId,
+                type: 'self_rebate',
+                amount: rebateAmount,
+                balance: parseFloat(user.wallet_balance) + rebateAmount,
+                reference_id: rebate.id,
+                status: 'completed',
+                description: `Self rebate for ${gameType} game`
+            }, { transaction: t });
+
+            // Only commit if we created a new transaction
+            if (!transaction) {
+                await t.commit();
             }
-        }, { transaction: t });
-
-        if (shouldCommit) await t.commit();
-
-        console.log(`✅ Self rebate credited: ${rebateAmount} to user ${userId} (${parseFloat(rebateRate).toFixed(2)}% of ${betAmountFloat})`);
-
-        return {
-            success: true,
-            message: 'Self rebate processed successfully',
-            rebateAmount: parseFloat(rebateAmount),
-            rebateRate: parseFloat(rebateRate),
-            originalBetAmount: betAmountFloat,
-            gameType
-        };
-
+            console.log(`Self rebate processed successfully for user ${userId}, amount ${rebateAmount}`);
+            return rebate;
+        } catch (error) {
+            // Only rollback if we created a new transaction
+            if (!transaction) {
+                await t.rollback();
+            }
+            throw error;
+        }
     } catch (error) {
-        if (shouldCommit) await t.rollback();
-        console.error('❌ Error processing self rebate:', error);
-        return {
-            success: false,
-            message: 'Error processing self rebate: ' + error.message
-        };
+        console.error('Error in processSelfRebate:', error);
+        throw error;
     }
 };
 
@@ -160,8 +135,7 @@ const getSelfRebateHistory = async (userId, page = 1, limit = 20) => {
             offset: offset,
             attributes: [
                 'id', 'bet_amount', 'rebate_rate', 'rebate_amount',
-                'game_type', 'game_id', 'vip_level', 'status',
-                'credited_at', 'created_at'
+                'game_type', 'vip_level', 'status', 'created_at'
             ]
         });
 
@@ -175,10 +149,8 @@ const getSelfRebateHistory = async (userId, page = 1, limit = 20) => {
                 rebateRate: parseFloat(rebate.rebate_rate) * 100, // Convert back to percentage
                 rebateAmount: parseFloat(rebate.rebate_amount),
                 gameType: rebate.game_type,
-                gameId: rebate.game_id,
                 vipLevel: rebate.vip_level,
                 status: rebate.status,
-                creditedAt: rebate.credited_at,
                 createdAt: rebate.created_at
             })),
             pagination: {
@@ -211,14 +183,13 @@ const getSelfRebateStats = async (userId, days = 30) => {
         const stats = await SelfRebate.findAll({
             where: {
                 user_id: userId,
-                created_at: { [Op.gte]: startDate },
-                status: 'credited'
+                created_at: { [Op.gte]: startDate }
             },
             attributes: [
-                [sequelize.fn('COUNT', sequelize.col('id')), 'total_rebates'],
-                [sequelize.fn('SUM', sequelize.col('bet_amount')), 'total_bet_amount'],
-                [sequelize.fn('SUM', sequelize.col('rebate_amount')), 'total_rebate_amount'],
-                [sequelize.fn('AVG', sequelize.col('rebate_rate')), 'avg_rebate_rate']
+                [fn('COUNT', col('id')), 'total_rebates'],
+                [fn('SUM', col('bet_amount')), 'total_bet_amount'],
+                [fn('SUM', col('rebate_amount')), 'total_rebate_amount'],
+                [fn('AVG', col('rebate_rate')), 'avg_rebate_rate']
             ],
             raw: true
         });
@@ -227,14 +198,13 @@ const getSelfRebateStats = async (userId, days = 30) => {
         const gameBreakdown = await SelfRebate.findAll({
             where: {
                 user_id: userId,
-                created_at: { [Op.gte]: startDate },
-                status: 'credited'
+                created_at: { [Op.gte]: startDate }
             },
             attributes: [
                 'game_type',
-                [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
-                [sequelize.fn('SUM', sequelize.col('bet_amount')), 'total_bet'],
-                [sequelize.fn('SUM', sequelize.col('rebate_amount')), 'total_rebate']
+                [fn('COUNT', col('id')), 'count'],
+                [fn('SUM', col('bet_amount')), 'total_bet'],
+                [fn('SUM', col('rebate_amount')), 'total_rebate']
             ],
             group: ['game_type'],
             raw: true

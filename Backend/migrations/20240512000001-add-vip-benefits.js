@@ -29,70 +29,70 @@ module.exports = {
           required_exp: 3000,
           bonus_amount: 60.00,
           monthly_reward: 30.00,
-          rebate_rate: 0.05
+          rebate_rate: 0.50
         },
         {
           level: 2,
           required_exp: 30000,
           bonus_amount: 180.00,
           monthly_reward: 90.00,
-          rebate_rate: 0.05
+          rebate_rate: 1.00
         },
         {
           level: 3,
           required_exp: 400000,
           bonus_amount: 690.00,
           monthly_reward: 290.00,
-          rebate_rate: 0.10
+          rebate_rate: 1.50
         },
         {
           level: 4,
           required_exp: 4000000,
           bonus_amount: 1890.00,
           monthly_reward: 890.00,
-          rebate_rate: 0.10
+          rebate_rate: 2.00
         },
         {
           level: 5,
           required_exp: 20000000,
           bonus_amount: 6900.00,
           monthly_reward: 1890.00,
-          rebate_rate: 0.10
+          rebate_rate: 2.50
         },
         {
           level: 6,
           required_exp: 80000000,
           bonus_amount: 16900.00,
           monthly_reward: 6900.00,
-          rebate_rate: 0.15
+          rebate_rate: 3.00
         },
         {
           level: 7,
           required_exp: 300000000,
           bonus_amount: 69000.00,
           monthly_reward: 16900.00,
-          rebate_rate: 0.15
+          rebate_rate: 3.50
         },
         {
           level: 8,
           required_exp: 1000000000,
           bonus_amount: 169000.00,
           monthly_reward: 69000.00,
-          rebate_rate: 0.15
+          rebate_rate: 4.00
         },
         {
           level: 9,
           required_exp: 50000000000,
           bonus_amount: 690000.00,
           monthly_reward: 169000.00,
-          rebate_rate: 0.30
+          rebate_rate: 4.50
         },
         {
           level: 10,
           required_exp: 999999999,
           bonus_amount: 1690000.00,
           monthly_reward: 690000.00,
-          rebate_rate: 0.30
+          rebate_rate: 5.00
         }
       ];
 

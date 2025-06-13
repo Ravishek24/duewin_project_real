@@ -4,6 +4,7 @@ const User = require('../models/User');
 const VipReward = require('../models/VipReward');
 const { Op } = require('sequelize');
 const { sequelize } = require('../config/db');
+const VipExperienceHistory = require('../models/VipExperienceHistory');
 
 /**
  * Get user's VIP level information
@@ -399,11 +400,79 @@ const claimMonthlyReward = async (req, res) => {
     }
 };
 
+/**
+ * Get user's VIP experience history with pagination
+ */
+const getVIPExperienceHistory = async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 15;
+        const offset = (page - 1) * limit;
+
+        // Get total count for pagination
+        const totalCount = await sequelize.models.VipExperienceHistory.count({
+            where: { user_id: userId }
+        });
+
+        // Get experience history with pagination
+        const history = await sequelize.models.VipExperienceHistory.findAll({
+            where: { user_id: userId },
+            order: [['created_at', 'DESC']],
+            limit: limit,
+            offset: offset,
+            attributes: [
+                'id',
+                'exp_gained',
+                'bet_amount',
+                'game_type',
+                'game_id',
+                'exp_before',
+                'exp_after',
+                'created_at'
+            ],
+            raw: true
+        });
+
+        // Format the response
+        const formattedHistory = history.map(record => ({
+            id: record.id,
+            exp_gained: record.exp_gained,
+            bet_amount: parseFloat(record.bet_amount),
+            game_type: record.game_type,
+            game_id: record.game_id,
+            exp_before: record.exp_before,
+            exp_after: record.exp_after,
+            date: record.created_at
+        }));
+
+        res.status(200).json({
+            success: true,
+            data: {
+                history: formattedHistory,
+                pagination: {
+                    current_page: page,
+                    total_pages: Math.ceil(totalCount / limit),
+                    total_records: totalCount,
+                    records_per_page: limit
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching VIP experience history:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch VIP experience history'
+        });
+    }
+};
+
 module.exports = {
     getVIPInfo,
     getVIPLevels,
     getUserVIPStatus,
     calculateVIPLevel,
     claimLevelReward,
-    claimMonthlyReward
+    claimMonthlyReward,
+    getVIPExperienceHistory
 }; 

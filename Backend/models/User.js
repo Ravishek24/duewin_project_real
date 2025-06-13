@@ -151,6 +151,28 @@ class User extends Model {
             updated_at: {
                 type: DataTypes.DATE,
                 defaultValue: DataTypes.NOW
+            },
+            is_active: {
+                type: DataTypes.BOOLEAN,
+                defaultValue: true
+            },
+            is_email_verified: {
+                type: DataTypes.BOOLEAN,
+                defaultValue: false
+            },
+            email_verification_token: {
+                type: DataTypes.STRING,
+                allowNull: true
+            },
+            email_verification_token_expiry: {
+                type: DataTypes.DATE,
+                allowNull: true
+            },
+            last_login_at: {
+                type: DataTypes.DATE
+            },
+            last_login_ip: {
+                type: DataTypes.STRING
             }
         }, {
             sequelize,
@@ -167,7 +189,19 @@ class User extends Model {
                 },
                 withPassword: {
                     attributes: {
-                        include: ['password']
+                        include: [
+                            'user_id', 'user_name', 'email', 'phone_no', 'profile_picture_id',
+                            'password', 'referral_code', 'referring_code', 'wallet_balance',
+                            'is_admin', 'is_phone_verified', 'is_blocked', 'block_reason',
+                            'blocked_at', 'current_ip', 'registration_ip', 'phone_otp_session_id',
+                            'vip_exp', 'vip_level', 'direct_referral_count', 'referral_level',
+                            'reset_token', 'reset_token_expiry', 'actual_deposit_amount',
+                            'bonus_amount', 'total_bet_amount', 'has_received_first_bonus',
+                            'spribe_token', 'spribe_token_created_at', 'spribe_token_expires_at',
+                            'created_at', 'updated_at', 'is_active', 'is_email_verified',
+                            'email_verification_token', 'email_verification_token_expiry',
+                            'last_login_at', 'last_login_ip'
+                        ]
                     }
                 },
                 withSpribeToken: {
@@ -210,6 +244,14 @@ class User extends Model {
                 foreignKey: 'user_id',
                 sourceKey: 'user_id',
                 as: 'thirdPartyWallet'
+            });
+        }
+
+        if (models.VipLevel) {
+            this.belongsTo(models.VipLevel, {
+                foreignKey: 'vip_level',
+                targetKey: 'level',
+                as: 'vipuser'
             });
         }
 

@@ -17,58 +17,30 @@ class ActivityReward extends Model {
                     key: 'user_id'
                 }
             },
-            reward_date: {
+            date: {
                 type: DataTypes.DATEONLY,
                 allowNull: false,
                 comment: 'Date for which reward is calculated'
             },
-            // Lottery category achievements
             lottery_bet_amount: {
-                type: DataTypes.DECIMAL(15, 2),
+                type: DataTypes.DECIMAL(20, 2),
                 allowNull: false,
                 defaultValue: 0.00,
                 comment: 'Total bet amount in lottery games for the day'
             },
-            lottery_milestone_50k_claimed: {
-                type: DataTypes.BOOLEAN,
-                allowNull: false,
-                defaultValue: false,
-                comment: 'Whether 50K lottery milestone reward is claimed'
-            },
-            lottery_milestone_100k_claimed: {
-                type: DataTypes.BOOLEAN,
-                allowNull: false,
-                defaultValue: false,
-                comment: 'Whether 100K lottery milestone reward is claimed'
-            },
-            // All games category achievements
             all_games_bet_amount: {
-                type: DataTypes.DECIMAL(15, 2),
+                type: DataTypes.DECIMAL(20, 2),
                 allowNull: false,
                 defaultValue: 0.00,
                 comment: 'Total bet amount in all games for the day'
             },
-            all_games_milestone_500_claimed: {
-                type: DataTypes.BOOLEAN,
-                allowNull: false,
-                defaultValue: false,
-                comment: 'Whether 500 all games milestone reward is claimed'
+            claimed_milestones: {
+                type: DataTypes.JSON,
+                allowNull: true,
+                comment: 'JSON object storing claimed milestones'
             },
-            // Reward amounts
-            lottery_reward_earned: {
-                type: DataTypes.DECIMAL(10, 2),
-                allowNull: false,
-                defaultValue: 0.00,
-                comment: 'Total lottery rewards earned for the day'
-            },
-            all_games_reward_earned: {
-                type: DataTypes.DECIMAL(10, 2),
-                allowNull: false,
-                defaultValue: 0.00,
-                comment: 'Total all games rewards earned for the day'
-            },
-            total_reward_earned: {
-                type: DataTypes.DECIMAL(10, 2),
+            total_rewards: {
+                type: DataTypes.DECIMAL(20, 2),
                 allowNull: false,
                 defaultValue: 0.00,
                 comment: 'Total rewards earned for the day'
@@ -91,10 +63,10 @@ class ActivityReward extends Model {
             indexes: [
                 {
                     unique: true,
-                    fields: ['user_id', 'reward_date']
+                    fields: ['user_id', 'date']
                 },
                 {
-                    fields: ['reward_date']
+                    fields: ['date']
                 }
             ]
         });

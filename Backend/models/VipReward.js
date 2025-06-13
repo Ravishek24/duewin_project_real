@@ -17,21 +17,21 @@ class VipReward extends Model {
                 }
             },
             level: {
-                type: DataTypes.STRING,
+                type: DataTypes.INTEGER,
                 allowNull: false
             },
             reward_type: {
-                type: DataTypes.STRING,
+                type: DataTypes.ENUM('level_up', 'monthly'),
                 allowNull: false
             },
-            reward_amount: {
+            amount: {
                 type: DataTypes.DECIMAL(10, 2),
                 allowNull: false
             },
-            status: {
-                type: DataTypes.STRING,
+            claimed_at: {
+                type: DataTypes.DATE,
                 allowNull: false,
-                defaultValue: 'pending'
+                defaultValue: DataTypes.NOW
             },
             created_at: {
                 type: DataTypes.DATE,

@@ -1,7 +1,9 @@
 // config/seamlessConfig.js - FIXED VERSION
 const dotenv = require('dotenv');
+const path = require('path');
 
-dotenv.config();
+// Load environment variables from .env file
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const seamlessConfig = {
   api_login: process.env.SEAMLESS_API_LOGIN?.trim(),

@@ -26,7 +26,9 @@ module.exports = {
           'vip_reward',
           'transfer_in',
           'transfer_out',
-          'refund'
+          'refund',
+          'game_move_in',
+          'game_move_out'
         ),
         allowNull: false
       },

@@ -49,6 +49,33 @@ const validationRules = {
         validate
     ],
 
+    // Forgot password validation
+    forgotPassword: [
+        body('phone_no')
+            .matches(/^\d{10,15}$/)
+            .withMessage('Phone number must be 10-15 digits'),
+        validate
+    ],
+
+    // Validate token validation
+    validateToken: [
+        body('token')
+            .notEmpty()
+            .withMessage('Token is required'),
+        validate
+    ],
+
+    // Reset password validation
+    resetPassword: [
+        body('token')
+            .notEmpty()
+            .withMessage('Token is required'),
+        body('new_password')
+            .isLength({ min: 6 })
+            .withMessage('Password must be at least 6 characters long'),
+        validate
+    ],
+
     // Profile update validation
     profileUpdate: [
         body('user_name')

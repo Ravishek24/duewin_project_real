@@ -23,6 +23,8 @@ const internalGameRoutes = require('./internalGameRoutes');
 const vaultRoutes = require('./vaultRoutes');
 const activityRoutes = require('./activityRoutes');
 const websocketDebugRoutes = require('./websocketDebug');
+const announcementRoutes = require('./announcementRoutes');
+const feedbackRoutes = require('./feedbackRoutes');
 
 // Import middleware
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
@@ -115,6 +117,7 @@ router.use('/seamless', seamlessRoutes);
 router.use('/seamless-wallet', auth, seamlessWalletRoutes);
 router.use('/websocket-debug', websocketDebugRoutes);
 router.use('/wallet', auth, walletRoutes);
+router.use('/announcements', announcementRoutes); // Public route for latest announcements
 
 // SPRIBE routes - public endpoints first, then protected ones
 router.use('/spribe', spribeRoutes);  // This will handle both public and protected routes
@@ -126,9 +129,15 @@ router.use('/games', auth, gameRoutes);
 router.use('/internal', auth, internalGameRoutes);
 router.use('/payments', auth, paymentRoutes);
 router.use('/payment-gateways', auth, paymentGatewayRoutes);
-
-// Other protected routes
-router.use('/referrals', auth, referralRoutes);
+router.use('/feedback', auth, feedbackRoutes); // Protected feedback routes
+router.use('/vault', auth, vaultRoutes); // Add vault routes
+router.use('/vip', auth, vipRoutes); // Add vip routes
+router.use('/third-party-wallets', auth, thirdPartyWalletRoutes); // Add third party wallet routes
+router.use('/activity', auth, activityRoutes); // Add activity routes
+router.use('/announcements', auth, announcementRoutes); // Add announcement routes
+router.use('/feedback', auth, feedbackRoutes); // Add feedback routes
+// Add referral routes
+router.use('/referral', auth, referralRoutes);
 
 // Admin routes (handle their own auth internally)
 router.use('/admin', adminRoutes);

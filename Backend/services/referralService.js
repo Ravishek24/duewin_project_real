@@ -1,6 +1,7 @@
 // services/referralService.js - COMPLETE FIXED VERSION
 const { sequelize } = require('../config/db');
 const { Op } = require('sequelize');
+const moment = require('moment-timezone');
 
 // Import only the models that actually exist
 const User = require('../models/User');
@@ -57,6 +58,9 @@ try {
 } catch (e) {
     console.warn('VipReward model not found - using fallback logic');
 }
+
+// Import self rebate service
+const selfRebateService = require('./selfRebateService');
 
 // Helper function to update wallet balance
 const updateWalletBalance = async (userId, amount, operation = 'add', transaction = null) => {
@@ -796,7 +800,6 @@ const recordBetExperience = async (userId, betAmount, gameType = 'unknown', game
     }
 };
 
-
 /**
  * Auto-record referral when user signs up (SHOULD BE CALLED FROM REGISTRATION)
  * @param {number} newUserId - Newly registered user ID
@@ -871,8 +874,6 @@ const autoRecordReferral = async (newUserId, referralCode) => {
         };
     }
 };
-
-// ADD this NEW function for auto-processing recharge for attendance:
 
 /**
  * Auto-process recharge for attendance (SHOULD BE CALLED FROM RECHARGE PROCESSING)
@@ -1022,8 +1023,6 @@ const processDirectInvitationBonus = async (userId) => {
         };
     }
 };
-
-
 
 /**
  * Process first recharge bonus
@@ -1220,8 +1219,6 @@ const processRechargeForAttendance = async (userId, rechargeAmount) => {
         };
     }
 };
-
-
 
 /**
  * Update referral status when a user recharges
@@ -1777,13 +1774,216 @@ const getTotalDeposits = async (userId) => {
     }
 };
 
+/**
+ * Record attendance for a user
+ * @param {number} userId - User ID
+ * @returns {Object} - Operation result
+ */
+const recordAttendance = async (userId) => {
+    try {
+        const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+        
+        // Get user's last login time
+        const user = await User.findOne({
+            where: { user_id: userId },
+            attributes: ['last_login_at']
+        });
 
+        // Check if user has logged in today
+        const hasLoggedInToday = user && user.last_login_at && 
+            moment(user.last_login_at).format('YYYY-MM-DD') === today;
 
+        if (!hasLoggedInToday) {
+            return {
+                success: false,
+                message: 'You must log in today to record attendance'
+            };
+        }
+
+        // Find today's attendance record
+        let attendanceRecord = await AttendanceRecord.findOne({
+            where: {
+                user_id: userId,
+                attendance_date: today
+            }
+        });
+
+        if (attendanceRecord) {
+            return {
+                success: false,
+                message: 'Attendance already recorded for today'
+            };
+        }
+
+        // Get yesterday's attendance for streak calculation
+        const yesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').format('YYYY-MM-DD');
+        const yesterdayAttendance = await AttendanceRecord.findOne({
+            where: {
+                user_id: userId,
+                attendance_date: yesterday
+            }
+        });
+
+        let streak = 1;
+        if (yesterdayAttendance && yesterdayAttendance.has_recharged) {
+            streak = (yesterdayAttendance.streak_count || 0) + 1;
+        }
+
+        // Create new attendance record
+        attendanceRecord = await AttendanceRecord.create({
+            user_id: userId,
+            date: today,
+            attendance_date: today,
+            streak_count: streak,
+            has_recharged: false,                    // Will be updated when user recharges
+            recharge_amount: 0,
+            additional_bonus: 0,
+            bonus_amount: 0,
+            bonus_claimed: false,
+            claim_eligible: false,                   // Will be true only after recharge
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+
+        return {
+            success: true,
+            message: 'Attendance recorded successfully',
+            streak: streak,
+            hasRecharged: false,
+            isEligibleForBonus: false,
+            attendanceDate: today
+        };
+
+    } catch (error) {
+        console.error('Error recording attendance:', error);
+        return {
+            success: false,
+            message: 'Error recording attendance: ' + error.message
+        };
+    }
+};
+
+/**
+ * Get user's attendance history
+ * @param {number} userId - User ID
+ * @returns {Object} - Attendance history
+ */
+const getAttendanceHistory = async (userId) => {
+    try {
+        const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const thirtyDaysAgo = moment.tz('Asia/Kolkata').subtract(30, 'days').format('YYYY-MM-DD');
+
+        // Get attendance records for last 30 days
+        const attendanceRecords = await AttendanceRecord.findAll({
+            where: {
+                user_id: userId,
+                attendance_date: {
+                    [Op.between]: [thirtyDaysAgo, today]
+                }
+            },
+            order: [['attendance_date', 'DESC']]
+        });
+
+        // Get today's attendance status
+        const todayRecord = attendanceRecords.find(record => 
+            record.attendance_date === today
+        );
+
+        // Calculate current streak
+        let currentStreak = 0;
+        let lastDate = moment.tz('Asia/Kolkata');
+        
+        for (const record of attendanceRecords) {
+            const recordDate = moment(record.attendance_date);
+            if (lastDate.diff(recordDate, 'days') === 1 && record.has_recharged) {
+                currentStreak++;
+                lastDate = recordDate;
+            } else {
+                break;
+            }
+        }
+
+        // Format the response
+        const history = attendanceRecords.map(record => ({
+            date: record.attendance_date,
+            hasAttended: true,
+            hasRecharged: record.has_recharged,
+            rechargeAmount: record.recharge_amount || 0,
+            streakCount: record.streak_count,
+            bonusAmount: record.bonus_amount,
+            additionalBonus: record.additional_bonus,
+            isBonusClaimed: record.bonus_claimed,
+            isBonusEligible: record.claim_eligible
+        }));
+
+        return {
+            success: true,
+            today: {
+                hasAttended: !!todayRecord,
+                hasRecharged: todayRecord?.has_recharged || false,
+                rechargeAmount: todayRecord?.recharge_amount || 0,
+                streakCount: todayRecord?.streak_count || 0,
+                bonusAmount: todayRecord?.bonus_amount || 0,
+                additionalBonus: todayRecord?.additional_bonus || 0,
+                isBonusClaimed: todayRecord?.bonus_claimed || false,
+                isBonusEligible: todayRecord?.claim_eligible || false
+            },
+            currentStreak,
+            history
+        };
+
+    } catch (error) {
+        console.error('Error getting attendance history:', error);
+        return {
+            success: false,
+            message: 'Error getting attendance history: ' + error.message
+        };
+    }
+};
+
+/**
+ * Get user's self rebate history
+ * @param {number} userId - User ID
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - Rebate history
+ */
+const getSelfRebateHistory = async (userId, page = 1, limit = 10) => {
+    try {
+        return await selfRebateService.getSelfRebateHistory(userId, page, limit);
+    } catch (error) {
+        console.error('Error getting self rebate history:', error);
+        return {
+            success: false,
+            message: 'Error getting self rebate history: ' + error.message
+        };
+    }
+};
+
+/**
+ * Get user's self rebate statistics
+ * @param {number} userId - User ID
+ * @returns {Object} - Rebate statistics
+ */
+const getSelfRebateStats = async (userId) => {
+    try {
+        return await selfRebateService.getSelfRebateStats(userId);
+    } catch (error) {
+        console.error('Error getting self rebate stats:', error);
+        return {
+            success: false,
+            message: 'Error getting self rebate stats: ' + error.message
+        };
+    }
+};
 
 module.exports = {
-
     // New/modified attendance functions
     autoProcessRechargeForAttendance,
+    recordAttendance,
+    getAttendanceHistory,
+    getSelfRebateHistory,
+    getSelfRebateStats,
 
     // Old attendance functions
     createReferralTree,
@@ -1804,6 +2004,5 @@ module.exports = {
     processReferrals,
     getTotalDeposits,
     updateWalletBalance,
-
     autoRecordReferral,
 };

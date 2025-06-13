@@ -5,17 +5,23 @@ const {
     updateUsdtAccount, 
     deleteUsdtAccount 
 } = require('../controllers/usdtAccountController');
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+const { auth } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
-// All USDT account routes require authentication and email verification
+// All USDT account routes require authentication
 router.use(auth);
-router.use(requirePhoneVerification);
 
+// Get all USDT accounts for the authenticated user
 router.get('/', getUsdtAccounts);
+
+// Add a new USDT account
 router.post('/', addUsdtAccount);
+
+// Update a USDT account
 router.put('/:id', updateUsdtAccount);
+
+// Delete a USDT account
 router.delete('/:id', deleteUsdtAccount);
 
 module.exports = router;

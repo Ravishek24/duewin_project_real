@@ -1,4 +1,5 @@
 // services/spribeService.js - FIXED VERSION TO HANDLE DUPLICATE TOKENS
+const crypto = require('crypto'); // 🔥 ADD THIS LINE
 const axios = require('axios');
 const { generateSpribeHeaders } = require('../utils/spribeSignatureUtils');
 const spribeConfig = require('../config/spribeConfig');
@@ -81,9 +82,8 @@ const verifyDatabaseTables = async () => {
   }
 };
 
-// Generate unique session token
+// 🔥 ALSO UPDATE: Generate unique session token function
 const generateUniqueSessionToken = () => {
-  const crypto = require('crypto');
   const timestamp = Date.now().toString();
   const random = crypto.randomBytes(16).toString('hex');
   return crypto.createHash('sha256').update(timestamp + random).digest('hex');
@@ -567,123 +567,114 @@ const processRollbackTransaction = async (transactionData) => {
 
 // ======================= MAIN SPRIBE API HANDLERS =======================
 
-/**
- * Get game launch URL
- */
+// 🔥 UPDATE: The getGameLaunchUrl function with proper crypto usage
 const getGameLaunchUrl = async (gameId, userId, req = null) => {
   try {
     console.log('🎮 Generating game launch URL:', { gameId, userId });
 
-    // Initialize models first
     await initializeModels();
     console.log('✅ Models initialized');
 
-    // Validate game ID against available games
-    const availableGames = spribeConfig.availableGames;
-    const gameExists = availableGames.includes(gameId);
-    
-    if (!gameExists) {
-      console.error(`❌ Invalid game ID: ${gameId}`);
-      console.log('Available games:', availableGames.join(', '));
+    // Validate game ID
+    if (!spribeConfig.availableGames.includes(gameId)) {
       return {
         success: false,
-        message: `Game ${gameId} is not available. Available games: ${availableGames.join(', ')}`
+        message: `Game ${gameId} is not available`
       };
     }
 
-    // Get provider from config
-    const provider = spribeConfig.providers[gameId];
-    console.log('✅ Found game configuration:', { gameId, provider });
-
-    // Get user from database
+    // Get user
     const user = await User.findByPk(userId);
     if (!user) {
-      console.error(`❌ User not found: ${userId}`);
       return {
         success: false,
         message: 'User not found'
       };
     }
 
-    // Check if user has sufficient balance
+    // Check balance
     const thirdPartyWalletService = require('./thirdPartyWalletService');
     const walletResult = await thirdPartyWalletService.getBalance(userId, 'USD');
     
-    if (!walletResult.success) {
-      console.error(`❌ Failed to get wallet balance for user ${userId}`);
+    if (!walletResult.success || walletResult.balance <= 0) {
       return {
-        success: false,
-        message: 'Failed to get wallet balance'
+        success: true,
+        url: null,
+        sessionId: null,
+        warningMessage: 'Insufficient funds to play'
       };
     }
 
-    // If third-party wallet is empty, try to transfer from main wallet
-    if (walletResult.balance <= 0) {
-      console.log(`💰 Third-party wallet empty for user ${userId}, attempting transfer from main wallet...`);
-      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
-      
-      if (!transferResult.success) {
-        console.log(`⚠️ User ${userId} has no funds available in main wallet`);
-        return {
-          success: true,
-          url: null,
-          sessionId: null,
-          warningMessage: 'You have no funds available to play. Please deposit first.'
-        };
-      }
-      
-      console.log(`✅ Successfully transferred funds to third-party wallet for user ${userId}`);
-    }
+    // Generate tokens
+    const userToken = crypto.randomBytes(32).toString('hex');
+    const launchToken = crypto.randomBytes(32).toString('hex');
 
-    // Generate unique tokens for the session
-    const launchToken = generateUniqueSessionToken();
-    const userToken = generateUniqueSessionToken();
-    
-    // Create game session with proper parameters
+    console.log('🔑 Generated tokens:', {
+      userToken: userToken.substring(0, 8) + '...',
+      launchToken: launchToken.substring(0, 8) + '...'
+    });
+
+    // Create session
     const sessionResult = await createGameSession(
       userId,
       gameId,
-      provider,
-      launchToken,
-      userToken,
+      spribeConfig.providers[gameId],
+      userToken, // This will be sent back as user_token in auth callback
+      launchToken, // Internal reference
       'USD',
       req?.ip || '127.0.0.1'
     );
 
     if (!sessionResult.success) {
-      console.error(`❌ Failed to create game session for user ${userId}`);
       return {
         success: false,
         message: 'Failed to create game session'
       };
     }
 
-    // Generate launch URL with proper parameters
-    const launchUrl = await generateGameLaunchUrl(gameId, userId, {
-      userToken: userToken,
+    // 🔥 FIX: Generate URL with simple callback URLs (no security params in URL)
+    const callbackBase = 'https://strike.atsproduct.in/api/spribe';
+    
+    const queryParams = new URLSearchParams({
+      user: userId.toString(),
+      token: userToken, // SPRIBE will send this back as user_token
       currency: 'USD',
+      operator: spribeConfig.clientId, // 'strike'
       lang: 'en',
-      returnUrl: spribeConfig.returnUrl,
-      accountHistoryUrl: spribeConfig.accountHistoryUrl
+      return_url: spribeConfig.returnUrl,
+      
+      // 🔥 SIMPLIFIED: Just the callback URLs without security params
+      // SPRIBE will authenticate via IP whitelist or other means
+      auth_callback_url: `${callbackBase}/auth`,
+      info_callback_url: `${callbackBase}/info`,
+      withdraw_callback_url: `${callbackBase}/withdraw`,
+      deposit_callback_url: `${callbackBase}/deposit`,
+      rollback_callback_url: `${callbackBase}/rollback`
     });
 
-    console.log('✅ Game launch URL generated successfully:', {
+    const launchUrl = `${spribeConfig.gameLaunchUrl}/${gameId}?${queryParams.toString()}`;
+
+    console.log('✅ Launch URL generated successfully:', {
       gameId,
       userId,
       sessionId: sessionResult.session.id,
-      provider: provider
+      provider: spribeConfig.providers[gameId],
+      userToken: userToken.substring(0, 8) + '...'
     });
+
+    console.log('🔗 Generated launch URL:', launchUrl);
 
     return {
       success: true,
       url: launchUrl,
       sessionId: sessionResult.session.id
     };
+
   } catch (error) {
-    console.error('❌ Error generating game launch URL:', error);
+    console.error('❌ Error generating launch URL:', error);
     return {
       success: false,
-      message: 'Failed to generate game launch URL',
+      message: 'Failed to generate launch URL',
       error: error.message
     };
   }

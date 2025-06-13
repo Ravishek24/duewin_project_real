@@ -8,6 +8,8 @@ const { logger } = require('../utils/logger');
 const moment = require('moment-timezone');
 const { getSequelizeInstance } = require('../config/db');
 const { initializeModels } = require('../models');
+const { Transaction } = require('../models');
+const { recordVipExperience } = require('./autoVipService');
 
 // Import game logic functions for bet processing
 const {
@@ -246,6 +248,40 @@ const processWebSocketBet = async (betData) => {
             
             if (!redisStored) {
                 console.warn(`⚠️ [WS_BET_PROCESS] Redis storage failed, but continuing with transaction`);
+            }
+
+            // Process self rebate
+            try {
+                const selfRebateService = require('./selfRebateService');
+                await selfRebateService.processSelfRebate(
+                    userId,
+                    betAmountFloat,
+                    gameType,
+                    betRecord.bet_id || betRecord.id,
+                    periodId,
+                    t
+                );
+                console.log(`✅ [WS_BET_PROCESS] Self rebate processed successfully`);
+            } catch (rebateError) {
+                console.error(`⚠️ [WS_BET_PROCESS] Error processing self rebate:`, rebateError);
+                // Don't fail the bet if rebate processing fails
+            }
+
+            // Record VIP experience
+            try {
+                await recordVipExperience(userId, betAmountFloat, gameType, betRecord.bet_id || betRecord.id, t);
+            } catch (vipError) {
+                console.error('[VIP_EXP] Error recording VIP experience:', vipError);
+            }
+
+            // Process activity reward
+            try {
+                const { processBetForActivityReward } = require('./activityRewardsService');
+                await processBetForActivityReward(userId, betAmountFloat, gameType, t);
+                console.log(`✅ [WS_BET_PROCESS] Activity reward processed successfully`);
+            } catch (activityError) {
+                console.error(`⚠️ [WS_BET_PROCESS] Error processing activity reward:`, activityError);
+                // Don't fail the bet if activity reward processing fails
             }
 
             // Commit transaction
@@ -737,6 +773,30 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                     socket.join(roomId);
                     socket.currentGame = { gameType, duration, roomId };
 
+                    // Record game move in transaction
+                    try {
+                        const user = await User.findByPk(socket.user.userId);
+                        if (user) {
+                            await Transaction.create({
+                                user_id: socket.user.userId,
+                                order_no: `GAME-${Date.now()}`,
+                                type: 'game_move_in',
+                                amount: 0,
+                                status: 'completed',
+                                description: `User entered ${gameType} ${duration}s room`,
+                                metadata: {
+                                    game_type: gameType,
+                                    room_duration: duration,
+                                    room_id: roomId,
+                                    wallet_balance: user.wallet_balance,
+                                    action: 'enter'
+                                }
+                            });
+                        }
+                    } catch (txError) {
+                        console.error('Failed to record game move in transaction:', txError);
+                    }
+
                     socket.emit('joinedGame', {
                         gameType, 
                         duration, 
@@ -756,12 +816,37 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
             });
 
             // EXISTING: Handle leave game with duration-based rooms
-            socket.on('leaveGame', (data) => {
+            socket.on('leaveGame', async (data) => {
                 try {
                     const { gameType, duration } = data;
                     const roomId = `${gameType}_${duration}`;
                     
                     socket.leave(roomId);
+                    
+                    // Record game move out transaction
+                    try {
+                        const user = await User.findByPk(socket.user.userId);
+                        if (user) {
+                            await Transaction.create({
+                                user_id: socket.user.userId,
+                                order_no: `GAME-${Date.now()}`,
+                                type: 'game_move_out',
+                                amount: 0,
+                                status: 'completed',
+                                description: `User left ${gameType} ${duration}s room`,
+                                metadata: {
+                                    game_type: gameType,
+                                    room_duration: duration,
+                                    room_id: roomId,
+                                    wallet_balance: user.wallet_balance,
+                                    action: 'exit'
+                                }
+                            });
+                        }
+                    } catch (txError) {
+                        console.error('Failed to record game move out transaction:', txError);
+                    }
+
                     socket.currentGame = null;
                     socket.emit('leftGame', { gameType, duration, roomId });
                     

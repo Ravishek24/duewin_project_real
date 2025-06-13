@@ -1,228 +1,148 @@
-const UsdtAccount = require('../models/UsdtAccount');
-const { sequelize } = require('../config/db');
+const { getModels } = require('../models');
+const { Op } = require('sequelize');
 
-// Controller to get user's USDT accounts
+// Get all USDT accounts for the authenticated user
 const getUsdtAccounts = async (req, res) => {
     try {
-        const userId = req.user.user_id;
+        const models = await getModels();
+        const UsdtAccount = models.UsdtAccount;
+
         const usdtAccounts = await UsdtAccount.findAll({
-            where: { user_id: userId },
-            order: [['is_primary', 'DESC'], ['created_at', 'DESC']]
+            where: { user_id: req.user.user_id },
+            order: [['created_at', 'DESC']]
         });
 
-        return res.status(200).json({
+        res.json({
             success: true,
-            usdtAccounts: usdtAccounts
+            data: usdtAccounts
         });
     } catch (error) {
         console.error('Error fetching USDT accounts:', error);
-        return res.status(500).json({
+        res.status(500).json({
             success: false,
-            message: 'Server error fetching USDT accounts.'
+            message: 'An error occurred while fetching USDT accounts'
         });
     }
 };
 
-// Controller to add a USDT account
+// Add a new USDT account
 const addUsdtAccount = async (req, res) => {
-    const t = await sequelize.transaction();
-
     try {
-        const userId = req.user.user_id;
-        const { 
-            wallet_address, 
-            network_type,
-            is_primary = false 
+        const models = await getModels();
+        const UsdtAccount = models.UsdtAccount;
+
+        const {
+            address,
+            network,
+            remark
         } = req.body;
 
-        // Check if this is the first account (should be primary)
-        const existingAccounts = await UsdtAccount.count({
-            where: { user_id: userId },
-            transaction: t
+        // Create new USDT account
+        const usdtAccount = await UsdtAccount.create({
+            user_id: req.user.user_id,
+            address,
+            network,
+            remark
         });
 
-        const shouldBePrimary = existingAccounts === 0 ? true : is_primary;
-
-        // If this account should be primary, unset primary from all other accounts
-        if (shouldBePrimary) {
-            await UsdtAccount.update(
-                { is_primary: false },
-                { 
-                    where: { user_id: userId },
-                    transaction: t 
-                }
-            );
-        }
-
-        // Create the new USDT account
-        const newUsdtAccount = await UsdtAccount.create({
-            user_id: userId,
-            wallet_address,
-            network_type,
-            is_primary: shouldBePrimary
-        }, { transaction: t });
-
-        await t.commit();
-
-        return res.status(201).json({
+        res.status(201).json({
             success: true,
-            message: 'USDT account added successfully.',
-            usdtAccount: newUsdtAccount
+            message: 'USDT account added successfully',
+            data: usdtAccount
         });
     } catch (error) {
-        await t.rollback();
         console.error('Error adding USDT account:', error);
-        return res.status(500).json({
+        res.status(500).json({
             success: false,
-            message: 'Server error adding USDT account.'
+            message: 'An error occurred while adding USDT account'
         });
     }
 };
 
-// Controller to update a USDT account
+// Update a USDT account
 const updateUsdtAccount = async (req, res) => {
-    const t = await sequelize.transaction();
-
     try {
-        const userId = req.user.user_id;
-        const accountId = req.params.id;
-        const { 
-            wallet_address, 
-            network_type,
-            is_primary 
+        const models = await getModels();
+        const UsdtAccount = models.UsdtAccount;
+
+        const { id } = req.params;
+        const {
+            address,
+            network,
+            remark
         } = req.body;
 
-        // Check if the account exists and belongs to the user
+        // Check if USDT account exists and belongs to user
         const usdtAccount = await UsdtAccount.findOne({
             where: {
-                usdt_account_id: accountId,
-                user_id: userId
-            },
-            transaction: t
+                id,
+                user_id: req.user.user_id
+            }
         });
 
         if (!usdtAccount) {
-            await t.rollback();
             return res.status(404).json({
                 success: false,
-                message: 'USDT account not found or does not belong to the user.'
+                message: 'USDT account not found'
             });
         }
 
-        // If this account should be primary, unset primary from all other accounts
-        if (is_primary) {
-            await UsdtAccount.update(
-                { is_primary: false },
-                { 
-                    where: { user_id: userId },
-                    transaction: t 
-                }
-            );
-        }
+        // Update USDT account
+        await usdtAccount.update({
+            address,
+            network,
+            remark
+        });
 
-        // Update the USDT account
-        await UsdtAccount.update(
-            {
-                wallet_address: wallet_address || usdtAccount.wallet_address,
-                network_type: network_type || usdtAccount.network_type,
-                is_primary: is_primary !== undefined ? is_primary : usdtAccount.is_primary
-            },
-            {
-                where: {
-                    usdt_account_id: accountId,
-                    user_id: userId
-                },
-                transaction: t
-            }
-        );
-
-        // Get the updated USDT account
-        const updatedUsdtAccount = await UsdtAccount.findByPk(accountId, { transaction: t });
-
-        await t.commit();
-
-        return res.status(200).json({
+        res.json({
             success: true,
-            message: 'USDT account updated successfully.',
-            usdtAccount: updatedUsdtAccount
+            message: 'USDT account updated successfully',
+            data: usdtAccount
         });
     } catch (error) {
-        await t.rollback();
         console.error('Error updating USDT account:', error);
-        return res.status(500).json({
+        res.status(500).json({
             success: false,
-            message: 'Server error updating USDT account.'
+            message: 'An error occurred while updating USDT account'
         });
     }
 };
 
-// Controller to delete a USDT account
+// Delete a USDT account
 const deleteUsdtAccount = async (req, res) => {
-    const t = await sequelize.transaction();
-
     try {
-        const userId = req.user.user_id;
-        const accountId = req.params.id;
+        const models = await getModels();
+        const UsdtAccount = models.UsdtAccount;
 
-        // Check if the account exists and belongs to the user
+        const { id } = req.params;
+
+        // Check if USDT account exists and belongs to user
         const usdtAccount = await UsdtAccount.findOne({
             where: {
-                usdt_account_id: accountId,
-                user_id: userId
-            },
-            transaction: t
+                id,
+                user_id: req.user.user_id
+            }
         });
 
         if (!usdtAccount) {
-            await t.rollback();
             return res.status(404).json({
                 success: false,
-                message: 'USDT account not found or does not belong to the user.'
+                message: 'USDT account not found'
             });
         }
 
-        const wasPrimary = usdtAccount.is_primary;
+        // Delete USDT account
+        await usdtAccount.destroy();
 
-        // Delete the USDT account
-        await UsdtAccount.destroy({
-            where: {
-                usdt_account_id: accountId,
-                user_id: userId
-            },
-            transaction: t
-        });
-
-        // If this was a primary account, set another account as primary
-        if (wasPrimary) {
-            const anotherAccount = await UsdtAccount.findOne({
-                where: { user_id: userId },
-                order: [['created_at', 'DESC']],
-                transaction: t
-            });
-
-            if (anotherAccount) {
-                await UsdtAccount.update(
-                    { is_primary: true },
-                    { 
-                        where: { usdt_account_id: anotherAccount.usdt_account_id },
-                        transaction: t 
-                    }
-                );
-            }
-        }
-
-        await t.commit();
-
-        return res.status(200).json({
+        res.json({
             success: true,
-            message: 'USDT account deleted successfully.'
+            message: 'USDT account deleted successfully'
         });
     } catch (error) {
-        await t.rollback();
         console.error('Error deleting USDT account:', error);
-        return res.status(500).json({
+        res.status(500).json({
             success: false,
-            message: 'Server error deleting USDT account.'
+            message: 'An error occurred while deleting USDT account'
         });
     }
 };

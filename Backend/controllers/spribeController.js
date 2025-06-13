@@ -232,12 +232,14 @@ const logSpribeResponse = (actionName, response) => {
 };
 
 /**
- * Handle auth callback from SPRIBE
+ * 🔥 FIXED: Handle auth callback from SPRIBE
+ * This handles the authentication request when SPRIBE calls your auth callback URL
  */
 const authCallbackController = async (req, res) => {
   try {
-    logger.info('🔐 ===== SPRIBE AUTH REQUEST =====');
-    logger.info('📦 Request details:', {
+    console.log('🔐 ===== SPRIBE AUTH REQUEST =====');
+    console.log('📦 Request details:', {
+      method: req.method,
       headers: req.headers,
       query: req.query,
       body: req.body,
@@ -245,128 +247,117 @@ const authCallbackController = async (req, res) => {
       timestamp: new Date().toISOString()
     });
 
-    // Extract security parameters from query string
+    // 🔥 FIX 1: Handle query parameters for security validation
     const { client_id, client_secret, timestamp } = req.query;
 
-    // Log security parameter validation
-    logger.info('🔍 Validating security parameters:', {
-      clientId: !!client_id,
-      clientSecret: !!client_secret,
-      timestamp: !!timestamp,
-      receivedParams: Object.keys(req.query)
-    });
-
-    // Validate required parameters
+    // Validate security parameters from query string
     if (!client_id || !client_secret || !timestamp) {
-      logger.error('❌ Missing required security parameters');
+      console.error('❌ Missing security parameters in query');
       return res.status(200).json({
         code: 413,
-        message: 'Missing required security parameters',
-        details: {
-          missingParams: {
-            clientId: !client_id,
-            clientSecret: !client_secret,
-            timestamp: !timestamp
-          }
-        }
+        message: 'Missing required security parameters'
       });
     }
 
-    // Validate client ID and secret
+    // Validate client credentials
     if (client_id !== spribeConfig.clientId || client_secret !== spribeConfig.clientSecret) {
-      logger.error('❌ Invalid security parameters');
+      console.error('❌ Invalid security parameters');
       return res.status(200).json({
         code: 413,
-        message: 'Invalid security parameters'
+        message: 'Invalid Client-Signature'
       });
     }
 
-    // Extract user token and session token
+    // 🔥 FIX 2: Extract correct field names from SPRIBE request
     const { user_token, session_token, platform, currency } = req.body;
 
     if (!user_token || !session_token) {
-      logger.error('❌ Missing required tokens');
+      console.error('❌ Missing required tokens');
       return res.status(200).json({
-        code: 400,
-        message: 'Missing required tokens'
+        code: 401,
+        message: 'User token is invalid'
       });
     }
 
-    // Find the game session
-    const session = await GameSession.findOne({
+    console.log('🔍 Processing auth with tokens:', {
+      user_token: user_token.substring(0, 8) + '...',
+      session_token: session_token.substring(0, 8) + '...',
+      platform,
+      currency
+    });
+
+    // 🔥 FIX 3: Find session by user_token (not spribe_token)
+    const session = await SpribeGameSession.findOne({
       where: {
-        userToken: user_token,
-        launchToken: session_token,
+        launch_token: user_token, // This is the user token we generated
         status: 'active'
       }
     });
 
     if (!session) {
-      logger.error('❌ Session not found');
+      console.error('❌ Session not found for user_token');
       return res.status(200).json({
-        code: 404,
-        message: 'Session not found'
+        code: 401,
+        message: 'User token is invalid'
       });
     }
+
+    // Update session with SPRIBE's session token
+    await session.update({
+      session_token: session_token,
+      platform: platform || 'desktop'
+    });
 
     // Get user details
-    const user = await User.findByPk(session.userId);
+    const user = await User.findByPk(session.user_id);
     if (!user) {
-      logger.error('❌ User not found');
+      console.error('❌ User not found');
       return res.status(200).json({
-        code: 404,
-        message: 'User not found'
+        code: 401,
+        message: 'User token is invalid'
       });
     }
 
-    // Get third-party wallet balance
-    const thirdPartyWallet = await ThirdPartyWallet.findOne({
-      where: { userId: user.id }
-    });
+    // Get balance from third-party wallet
+    const thirdPartyWalletService = require('../services/thirdPartyWalletService');
+    const walletResult = await thirdPartyWalletService.getBalance(user.id, currency || 'USD');
 
-    if (!thirdPartyWallet) {
-      logger.error('❌ Third-party wallet not found');
+    if (!walletResult.success) {
+      console.error('❌ Failed to get balance');
       return res.status(200).json({
-        code: 404,
-        message: 'Third-party wallet not found'
+        code: 500,
+        message: 'Internal error'
       });
     }
 
-    // Convert balance to USD if needed
-    let balance = thirdPartyWallet.balance;
-    if (thirdPartyWallet.currency !== currency) {
-      balance = await convertCurrency(
-        thirdPartyWallet.balance,
-        thirdPartyWallet.currency,
-        currency
-      );
-    }
+    // Format balance for SPRIBE (convert to units: $1 = 1000 units)
+    const formattedBalance = Math.round(walletResult.balance * 1000);
 
-    // Return success response
-    return res.status(200).json({
-      code: 0,
+    // 🔥 FIX 4: Return response in correct SPRIBE format
+    const response = {
+      code: 200,
       message: 'Success',
       data: {
-        user: {
-          id: user.id,
-          username: user.username,
-          balance: balance,
-          currency: currency
-        },
-        session: {
-          id: session.id,
-          token: session_token,
-          platform: platform
-        }
+        user_id: user.id.toString(),
+        username: user.username || user.user_name,
+        balance: formattedBalance,
+        currency: currency || 'USD'
       }
+    };
+
+    console.log('✅ Auth successful:', {
+      userId: user.id,
+      balance: formattedBalance,
+      currency: currency || 'USD'
     });
 
+    return res.status(200).json(response);
+
   } catch (error) {
-    logger.error('❌ Error in auth callback:', error);
+    console.error('❌ Auth error:', error);
     return res.status(200).json({
       code: 500,
-      message: 'Internal server error',
-      error: error.message
+      message: 'Internal error'
     });
   }
 };

@@ -1,6 +1,6 @@
 const { Model, DataTypes } = require('sequelize');
 
-class BankAccount extends Model {
+class UsdtAccount extends Model {
     static init(sequelize) {
         return super.init({
             id: {
@@ -13,29 +13,20 @@ class BankAccount extends Model {
                 allowNull: false,
                 references: {
                     model: 'users',
-                    key: 'id'
+                    key: 'user_id'
                 }
             },
-            bank_name: {
+            address: {
                 type: DataTypes.STRING,
                 allowNull: false
             },
-            account_number: {
+            network: {
                 type: DataTypes.STRING,
                 allowNull: false
             },
-            account_holder: {
+            remark: {
                 type: DataTypes.STRING,
-                allowNull: false
-            },
-            ifsc_code: {
-                type: DataTypes.STRING,
-                allowNull: false
-            },
-            is_primary: {
-                type: DataTypes.BOOLEAN,
-                allowNull: false,
-                defaultValue: false
+                allowNull: true
             },
             created_at: {
                 type: DataTypes.DATE,
@@ -47,8 +38,8 @@ class BankAccount extends Model {
             }
         }, {
             sequelize,
-            modelName: 'BankAccount',
-            tableName: 'bank_accounts',
+            modelName: 'UsdtAccount',
+            tableName: 'usdt_accounts',
             timestamps: true,
             createdAt: 'created_at',
             updatedAt: 'updated_at'
@@ -59,10 +50,11 @@ class BankAccount extends Model {
         if (models.User) {
             this.belongsTo(models.User, {
                 foreignKey: 'user_id',
-                as: 'accountuser'
+                targetKey: 'user_id',
+                as: 'user'
             });
         }
     }
 }
 
-module.exports = BankAccount;
+module.exports = UsdtAccount; 

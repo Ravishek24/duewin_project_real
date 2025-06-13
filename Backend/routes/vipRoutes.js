@@ -23,4 +23,7 @@ router.get('/calculate', auth, vipController.calculateVIPLevel);
 router.post('/claim-level-reward', auth, vipController.claimLevelReward);
 router.post('/claim-monthly-reward', auth, vipController.claimMonthlyReward);
 
+// Experience History Endpoint
+router.get('/experience-history', auth, vipController.getVIPExperienceHistory);
+
 module.exports = router; 

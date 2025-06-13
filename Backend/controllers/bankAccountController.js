@@ -1,165 +1,190 @@
-const { 
-    getBankAccounts, 
-    initBankAccountAddition,
-    completeBankAccountAddition,
-    updateBankAccount, 
-    deleteBankAccount 
-} = require('../services/bankAccountServices');
+const { getModels } = require('../models');
+const { Op } = require('sequelize');
 
-// Controller to get user's bank accounts
+// Get all bank accounts for the authenticated user
 const getBankAccountsController = async (req, res) => {
     try {
-        const userId = req.user.user_id;
-        const result = await getBankAccounts(userId);
-        
-        if (result.success) {
-            return res.status(200).json(result);
-        } else {
-            return res.status(500).json(result);
-        }
+        const models = await getModels();
+        const BankAccount = models.BankAccount;
+
+        const bankAccounts = await BankAccount.findAll({
+            where: { user_id: req.user.user_id },
+            order: [['is_primary', 'DESC'], ['created_at', 'DESC']]
+        });
+
+        res.json({
+            success: true,
+            data: bankAccounts
+        });
     } catch (error) {
         console.error('Error fetching bank accounts:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error fetching bank accounts.' 
+        res.status(500).json({
+            success: false,
+            message: 'An error occurred while fetching bank accounts'
         });
     }
 };
 
-// Controller to initialize bank account addition (sent OTP)
-const initBankAccountController = async (req, res) => {
-    const { 
-        account_holder_name, 
-        account_number, 
-        bank_name, 
-        ifsc_code, 
-        branch_name,
-        is_primary 
-    } = req.body;
-
-    // Validate required fields
-    if (!account_holder_name || !account_number || !bank_name || !ifsc_code) {
-        return res.status(400).json({
-            success: false,
-            message: 'Please provide all required fields: account holder name, account number, bank name, and IFSC code.'
-        });
-    }
-
+// Add a new bank account
+const addBankAccountController = async (req, res) => {
     try {
-        const userId = req.user.user_id;
-        const result = await initBankAccountAddition(userId, {
-            account_holder_name,
+        const models = await getModels();
+        const BankAccount = models.BankAccount;
+
+        const {
+            bank_name,
             account_number,
-            bank_name,
             ifsc_code,
-            branch_name,
-            is_primary
-        });
-        
-        if (result.success) {
-            return res.status(200).json(result);
-        } else {
-            return res.status(400).json(result);
-        }
-    } catch (error) {
-        console.error('Error initializing bank account addition:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error during bank account addition initialization.' 
-        });
-    }
-};
-
-// Controller to complete bank account addition after OTP verification
-const completeBankAccountController = async (req, res) => {
-    const { otp_session_id } = req.body;
-
-    if (!otp_session_id) {
-        return res.status(400).json({
-            success: false,
-            message: 'OTP session ID is required.'
-        });
-    }
-
-    try {
-        const userId = req.user.user_id;
-        const result = await completeBankAccountAddition(userId, otp_session_id);
-        
-        if (result.success) {
-            return res.status(201).json(result);
-        } else {
-            return res.status(400).json(result);
-        }
-    } catch (error) {
-        console.error('Error completing bank account addition:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error completing bank account addition.' 
-        });
-    }
-};
-
-// Controller to update a bank account
-const updateBankAccountController = async (req, res) => {
-    const accountId = req.params.id;
-    const { 
-        account_holder_name, 
-        bank_name, 
-        ifsc_code, 
-        branch_name,
-        is_primary 
-    } = req.body;
-
-    try {
-        const userId = req.user.user_id;
-        const result = await updateBankAccount(userId, accountId, {
             account_holder_name,
+            is_primary = false
+        } = req.body;
+
+        // If this is set as primary, unset any existing primary account
+        if (is_primary) {
+            await BankAccount.update(
+                { is_primary: false },
+                {
+                    where: {
+                        user_id: req.user.user_id,
+                        is_primary: true
+                    }
+                }
+            );
+        }
+
+        // Create new bank account
+        const bankAccount = await BankAccount.create({
+            user_id: req.user.user_id,
             bank_name,
+            account_number,
             ifsc_code,
-            branch_name,
+            account_holder: account_holder_name,
             is_primary
         });
-        
-        if (result.success) {
-            return res.status(200).json(result);
-        } else {
-            return res.status(400).json(result);
+
+        res.status(201).json({
+            success: true,
+            message: 'Bank account added successfully',
+            data: bankAccount
+        });
+    } catch (error) {
+        console.error('Error adding bank account:', error);
+        res.status(500).json({
+            success: false,
+            message: 'An error occurred while adding bank account'
+        });
+    }
+};
+
+// Update a bank account
+const updateBankAccountController = async (req, res) => {
+    try {
+        const models = await getModels();
+        const BankAccount = models.BankAccount;
+
+        const { id } = req.params;
+        const {
+            bank_name,
+            account_number,
+            ifsc_code,
+            account_holder_name,
+            is_primary
+        } = req.body;
+
+        // Check if bank account exists and belongs to user
+        const bankAccount = await BankAccount.findOne({
+            where: {
+                id,
+                user_id: req.user.user_id
+            }
+        });
+
+        if (!bankAccount) {
+            return res.status(404).json({
+                success: false,
+                message: 'Bank account not found'
+            });
         }
+
+        // If setting as primary, unset any existing primary account
+        if (is_primary) {
+            await BankAccount.update(
+                { is_primary: false },
+                {
+                    where: {
+                        user_id: req.user.user_id,
+                        is_primary: true,
+                        id: { [Op.ne]: id }
+                    }
+                }
+            );
+        }
+
+        // Update bank account
+        await bankAccount.update({
+            bank_name,
+            account_number,
+            ifsc_code,
+            account_holder: account_holder_name,
+            is_primary
+        });
+
+        res.json({
+            success: true,
+            message: 'Bank account updated successfully',
+            data: bankAccount
+        });
     } catch (error) {
         console.error('Error updating bank account:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error updating bank account.' 
+        res.status(500).json({
+            success: false,
+            message: 'An error occurred while updating bank account'
         });
     }
 };
 
-// Controller to delete a bank account
+// Delete a bank account
 const deleteBankAccountController = async (req, res) => {
-    const accountId = req.params.id;
-
     try {
-        const userId = req.user.user_id;
-        const result = await deleteBankAccount(userId, accountId);
-        
-        if (result.success) {
-            return res.status(200).json(result);
-        } else {
-            return res.status(400).json(result);
+        const models = await getModels();
+        const BankAccount = models.BankAccount;
+
+        const { id } = req.params;
+
+        // Check if bank account exists and belongs to user
+        const bankAccount = await BankAccount.findOne({
+            where: {
+                id,
+                user_id: req.user.user_id
+            }
+        });
+
+        if (!bankAccount) {
+            return res.status(404).json({
+                success: false,
+                message: 'Bank account not found'
+            });
         }
+
+        // Delete bank account
+        await bankAccount.destroy();
+
+        res.json({
+            success: true,
+            message: 'Bank account deleted successfully'
+        });
     } catch (error) {
         console.error('Error deleting bank account:', error);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error deleting bank account.' 
+        res.status(500).json({
+            success: false,
+            message: 'An error occurred while deleting bank account'
         });
     }
 };
 
 module.exports = {
     getBankAccountsController,
-    initBankAccountController,
-    completeBankAccountController,
+    addBankAccountController,
     updateBankAccountController,
     deleteBankAccountController
 };
