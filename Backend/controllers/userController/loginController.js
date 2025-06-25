@@ -55,8 +55,20 @@ const loginController = async (req, res) => {
         // Non-blocking update of last login
         user.update({ last_login_at: new Date(), last_login_ip: ipAddress }).catch(console.error);
 
-        // Enqueue attendance job (non-blocking)
-        attendanceQueue.add('checkAttendance', { userId: user.user_id }).catch(console.error);
+        // Add attendance job with deduplication
+        const today = new Date().toISOString().split('T')[0];
+        const jobId = `attendance:${user.user_id}:${today}`;
+        
+        attendanceQueue.add('checkAttendance', 
+            { userId: user.user_id }, 
+            { 
+                jobId, // Prevents duplicate jobs
+                removeOnComplete: 5,
+                removeOnFail: 10,
+                attempts: 2,
+                backoff: { type: 'fixed', delay: 5000 }
+            }
+        ).catch(console.error);
 
         // Set security headers
         res.set({

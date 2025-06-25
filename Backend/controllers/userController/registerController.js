@@ -142,29 +142,39 @@ const registerController = async (req, res) => {
             // Commit transaction immediately after user creation
             await transaction.commit();
 
+            // Add background jobs with proper configuration
+            const registrationQueue = require('../../queues/registrationQueue');
+            
+            // Job 1: Apply bonus (higher priority)
+            registrationQueue.add('applyBonus', {
+                type: 'applyBonus',
+                data: { userId: user.user_id }
+            }, {
+                priority: 10,
+                removeOnComplete: 5,
+                removeOnFail: 10,
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 2000 }
+            }).catch(console.error);
+            
+            // Job 2: Record referral (lower priority, runs after bonus)
+            if (referred_by) {
+                registrationQueue.add('recordReferral', {
+                    type: 'recordReferral',
+                    data: { userId: user.user_id, referredBy: referred_by }
+                }, {
+                    priority: 5,
+                    delay: 2000, // Delay to ensure bonus is processed first
+                    removeOnComplete: 5,
+                    removeOnFail: 10,
+                    attempts: 3,
+                    backoff: { type: 'exponential', delay: 2000 }
+                }).catch(console.error);
+            }
+
             // Generate tokens
             const accessToken = generateToken(user);
             const refreshToken = generateRefreshToken(user);
-
-            // Enqueue background jobs (non-blocking)
-            try {
-                // Enqueue registration bonus job
-                registrationQueue.add('applyBonus', {
-                    type: 'applyBonus',
-                    data: { userId: user.user_id }
-                }).catch(console.error);
-
-                // Enqueue referral recording job
-                if (referred_by) {
-                    registrationQueue.add('recordReferral', {
-                        type: 'recordReferral',
-                        data: { userId: user.user_id, referredBy: referred_by }
-                    }).catch(console.error);
-                }
-            } catch (queueError) {
-                console.error('Failed to enqueue background jobs:', queueError);
-                // Don't fail registration if queue fails
-            }
 
             // Set security headers
             setSecurityHeaders(res);

@@ -1,11 +1,8 @@
 const { Queue } = require('bullmq');
+const queueConnections = require('../config/queueConfig');
 
-const connection = {
-  host: '127.0.0.1',
-  port: 6379,
-  db: 0
-};
-
-const attendanceQueue = new Queue('attendance', { connection });
+const attendanceQueue = new Queue('attendance', { 
+  connection: queueConnections.attendance 
+});
 
 module.exports = attendanceQueue; 

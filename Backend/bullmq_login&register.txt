@@ -1,0 +1,1459 @@
+# Backend Deadlock Analysis & Solutions
+
+## 🚨 Critical Deadlock Conditions Found
+
+### 1. **Database Connection Pool Exhaustion**
+
+**Location**: `Backend/config/db.js`
+**Risk**: Very High
+
+```javascript
+// Current problematic configuration
+pool: {
+    max: 5,  // Too low for concurrent operations
+    min: 0,
+    acquire: 30000,
+    idle: 10000
+}
+```
+
+**Issues**:
+- Pool size of 5 is insufficient for concurrent login/registration
+- Long-running transactions can exhaust the pool
+- No connection timeout handling
+
+**Solution**:
+```javascript
+pool: {
+    max: 20,        // Increase pool size
+    min: 5,         // Maintain minimum connections
+    acquire: 15000, // Reduce acquire timeout
+    idle: 10000,
+    evict: 5000,    // Add connection eviction
+    handleDisconnects: true
+}
+```
+
+### 2. **Transaction Management Issues**
+
+**Location**: `Backend/controllers/userController/registerController.js`
+
+**Problem**: Transaction not properly scoped
+```javascript
+// Current problematic code
+const transaction = await User.sequelize.transaction();
+try {
+    // Multiple operations...
+    await transaction.commit();
+    
+    // More operations after commit - DANGEROUS!
+    registrationQueue.add('applyBonus', {...});
+} catch (error) {
+    await transaction.rollback();
+}
+```
+
+**Solution**:
+```javascript
+// Use transaction scoping
+await User.sequelize.transaction(async (t) => {
+    // All database operations here
+    const user = await User.create({...}, { transaction: t });
+    // Transaction auto-commits or rolls back
+});
+
+// Queue operations outside transaction
+registrationQueue.add('applyBonus', {...});
+```
+
+### 3. **Circular Dependency in Model Loading**
+
+**Location**: Multiple files
+**Risk**: High during concurrent requests
+
+**Problem**: Dynamic model loading during request processing
+```javascript
+const models = await getModels();  // Called in every request
+```
+
+**Solution**: Load models once at startup
+```javascript
+// In app.js or main server file
+const models = require('./models');
+// Pass models to controllers instead of loading dynamically
+```
+
+### 4. **Redis Connection Race Conditions**
+
+**Location**: `Backend/config/redisConfig.js`
+
+**Problem**: No connection state management
+```javascript
+// Current problematic approach
+(async () => {
+  await redis.connect(); // Race condition possible
+})();
+```
+
+**Solution**:
+```javascript
+let isConnected = false;
+let connectionPromise = null;
+
+const ensureConnection = async () => {
+    if (isConnected) return redis;
+    if (connectionPromise) return connectionPromise;
+    
+    connectionPromise = redis.connect().then(() => {
+        isConnected = true;
+        return redis;
+    });
+    
+    return connectionPromise;
+};
+```
+
+### 5. **Queue Connection Deadlocks**
+
+**Location**: `Backend/queues/registrationWorker.js`, `Backend/queues/attendanceWorker.js`
+
+**Problem**: Shared Redis connection for queues
+```javascript
+const connection = {
+  host: '127.0.0.1',
+  port: 6379,
+  db: 0  // Same DB for all queues
+};
+```
+
+**Solution**: Separate databases or connection pools
+```javascript
+const attendanceConnection = { host: '127.0.0.1', port: 6379, db: 1 };
+const registrationConnection = { host: '127.0.0.1', port: 6379, db: 2 };
+```
+
+### 6. **Foreign Key Constraint Deadlocks**
+
+**Risk**: Medium
+**Issue**: Complex foreign key relationships can cause deadlocks during concurrent inserts
+
+**Prevention**:
+- Always acquire locks in consistent order
+- Use smaller transaction scopes
+- Implement retry logic for deadlock detection
+
+## 🔧 Immediate Fixes Required
+
+### Fix 1: Update Database Configuration
+```javascript
+// In config/db.js
+pool: {
+    max: 20,
+    min: 5,
+    acquire: 15000,
+    idle: 10000,
+    evict: 5000,
+    handleDisconnects: true,
+    retry: {
+        max: 3,
+        match: [
+            /SequelizeConnectionError/,
+            /SequelizeDeadlockError/,     // Add deadlock detection
+            /SequelizeConnectionRefusedError/,
+            /SequelizeConnectionTimedOutError/
+        ]
+    }
+}
+```
+
+### Fix 2: Implement Connection Health Check
+```javascript
+const checkDatabaseHealth = async () => {
+    try {
+        await sequelize.authenticate();
+        return true;
+    } catch (error) {
+        console.error('Database health check failed:', error);
+        return false;
+    }
+};
+```
+
+### Fix 3: Add Request-Level Timeouts
+```javascript
+// In middleware
+const requestTimeout = (req, res, next) => {
+    req.setTimeout(30000, () => {
+        res.status(408).json({ error: 'Request timeout' });
+    });
+    next();
+};
+```
+
+### Fix 4: Implement Deadlock Retry Logic
+```javascript
+const retryOnDeadlock = async (operation, maxRetries = 3) => {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await operation();
+        } catch (error) {
+            if (error.name === 'SequelizeDeadlockError' && i < maxRetries - 1) {
+                await new Promise(resolve => setTimeout(resolve, 100 * (i + 1)));
+                continue;
+            }
+            throw error;
+        }
+    }
+};
+```
+
+## 🎯 Recommended Architecture Changes
+
+### 1. **Separate Read/Write Operations**
+- Use read replicas for non-critical reads
+- Dedicated connection pools for different operation types
+
+### 2. **Implement Circuit Breaker Pattern**
+```javascript
+const circuitBreaker = {
+    failures: 0,
+    threshold: 5,
+    timeout: 60000,
+    isOpen: false,
+    
+    async execute(operation) {
+        if (this.isOpen) {
+            throw new Error('Circuit breaker is open');
+        }
+        
+        try {
+            const result = await operation();
+            this.failures = 0;
+            return result;
+        } catch (error) {
+            this.failures++;
+            if (this.failures >= this.threshold) {
+                this.isOpen = true;
+                setTimeout(() => this.isOpen = false, this.timeout);
+            }
+            throw error;
+        }
+    }
+};
+```
+
+### 3. **Database Migration Strategy**
+- Add proper indexes for foreign keys
+- Implement proper cascade rules
+- Use database-level deadlock detection
+
+### 4. **Monitoring & Alerting**
+- Monitor connection pool usage
+- Track transaction duration
+- Alert on deadlock occurrences
+
+## 🚀 Performance Optimizations
+
+### 1. **Batch Operations**
+Instead of individual inserts for referrals, use batch operations:
+```javascript
+await models.Referral.bulkCreate(referralData, { 
+    transaction: t,
+    ignoreDuplicates: true 
+});
+```
+
+### 2. **Async Processing**
+Move heavy operations to background queues:
+- Email sending
+- Bonus calculations
+- Referral processing
+
+### 3. **Cache Frequently Accessed Data**
+- User sessions
+- VIP levels
+- System configurations
+
+## ⚠️ Critical Action Items
+
+1. **Immediate**: Increase database connection pool size
+2. **High Priority**: Fix transaction scoping in registration
+3. **High Priority**: Implement deadlock retry logic
+4. **Medium Priority**: Separate queue databases
+5. **Medium Priority**: Add connection health monitoring
+
+These changes will significantly reduce deadlock conditions and improve system reliability under concurrent load.
+
+
+
+# BullMQ Deadlock Analysis & Critical Issues
+
+## 🚨 **CRITICAL BullMQ DEADLOCK CONDITIONS FOUND**
+
+### 1. **Shared Redis Connection Pool Deadlock**
+
+**Location**: All queue files use identical Redis connection
+**Risk**: **VERY HIGH** - Can cause complete system lockup
+
+```javascript
+// PROBLEMATIC: Same connection config everywhere
+const connection = {
+  host: '127.0.0.1',
+  port: 6379,
+  db: 0  // ALL queues using same database!
+};
+```
+
+**Files Affected**:
+- `attendanceQueue.js`
+- `attendanceWorker.js` 
+- `registrationQueue.js`
+- `registrationWorker.js`
+
+**Deadlock Scenario**:
+1. Multiple workers compete for same Redis connection
+2. Queue operations block each other
+3. Workers can't process jobs, causing backlog
+4. System becomes unresponsive
+
+### 2. **Database Connection Exhaustion in Workers**
+
+**Location**: `registrationWorker.js`, `attendanceWorker.js`
+**Risk**: **HIGH** - Workers hold DB connections indefinitely
+
+```javascript
+// PROBLEMATIC: Dynamic model loading in worker
+const worker = new Worker('registration', async job => {
+  const models = await getModels(); // BLOCKS CONNECTION POOL
+  // ... long running operations
+}, { connection });
+```
+
+**Issues**:
+- Each worker job calls `getModels()` 
+- Connections not properly released
+- Can exhaust the 5-connection pool quickly
+- Subsequent jobs fail or timeout
+
+### 3. **Recursive Queue Job Dependencies**
+
+**Location**: `registerController.js` → `registrationWorker.js`
+**Risk**: **MEDIUM-HIGH** - Circular dependencies
+
+```javascript
+// Registration flow creates multiple interdependent jobs:
+// 1. applyBonus job
+// 2. recordReferral job (calls referralService)
+// 3. referralService might trigger more jobs
+```
+
+**Potential Deadlock**:
+- Job A waits for Job B to complete
+- Job B waits for database lock held by Job A
+- Neither can proceed
+
+### 4. **No Job Concurrency Limits**
+
+**Location**: All worker configurations
+**Risk**: **HIGH** - Unlimited concurrent jobs
+
+```javascript
+// MISSING: Concurrency controls
+const worker = new Worker('registration', async job => {
+  // No concurrency limit!
+}, { connection });
+```
+
+**Problems**:
+- Unlimited jobs can spawn
+- Each job holds database connections
+- Memory exhaustion possible
+- Database connection pool starvation
+
+### 5. **Missing Job Retry Logic**
+
+**Location**: All workers
+**Risk**: **MEDIUM** - Failed jobs can cause cascading issues
+
+```javascript
+// NO RETRY CONFIGURATION
+const worker = new Worker('attendance', async job => {
+  // If this fails, job is lost forever
+}, { connection });
+```
+
+## 🔧 **IMMEDIATE FIXES REQUIRED**
+
+### Fix 1: Separate Redis Databases
+```javascript
+// attendanceQueue.js & attendanceWorker.js
+const attendanceConnection = {
+  host: '127.0.0.1',
+  port: 6379,
+  db: 1,  // Dedicated database
+  maxRetriesPerRequest: 3,
+  retryDelayOnFailover: 100,
+  family: 4
+};
+
+// registrationQueue.js & registrationWorker.js  
+const registrationConnection = {
+  host: '127.0.0.1',
+  port: 6379,
+  db: 2,  // Different database
+  maxRetriesPerRequest: 3,
+  retryDelayOnFailover: 100,
+  family: 4
+};
+```
+
+### Fix 2: Add Concurrency Limits & Job Configuration
+```javascript
+const worker = new Worker('registration', async job => {
+  // Job logic here
+}, { 
+  connection: registrationConnection,
+  concurrency: 5,  // Limit concurrent jobs
+  maxStalledCount: 3,
+  stalledInterval: 30000,
+  settings: {
+    retryProcessDelay: 5000
+  }
+});
+```
+
+### Fix 3: Pre-initialize Models (Critical!)
+```javascript
+// At startup, not in workers:
+let modelsCache = null;
+
+const initializeModels = async () => {
+  if (!modelsCache) {
+    modelsCache = await getModels();
+  }
+  return modelsCache;
+};
+
+// In workers, use cached models:
+const worker = new Worker('registration', async job => {
+  const models = modelsCache; // No async call!
+  // ... rest of logic
+}, { connection });
+```
+
+### Fix 4: Add Comprehensive Job Retry & Error Handling
+```javascript
+const worker = new Worker('registration', async job => {
+  try {
+    // Job logic with timeout
+    const result = await Promise.race([
+      processJob(job.data),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Job timeout')), 30000)
+      )
+    ]);
+    return result;
+  } catch (error) {
+    console.error(`Job ${job.id} failed:`, error);
+    
+    // Determine if retryable
+    if (isRetryableError(error)) {
+      throw error; // Will be retried
+    } else {
+      // Log and move to failed queue
+      await logFailedJob(job, error);
+      throw new Error('Non-retryable error');
+    }
+  }
+}, { 
+  connection,
+  concurrency: 3,
+  settings: {
+    stalledInterval: 30000,
+    maxStalledCount: 1
+  }
+});
+
+// Add job retry configuration
+const jobOptions = {
+  attempts: 3,
+  backoff: {
+    type: 'exponential',
+    delay: 2000
+  },
+  removeOnComplete: 10,
+  removeOnFail: 50
+};
+```
+
+### Fix 5: Implement Proper Database Transaction Management in Workers
+```javascript
+// registrationWorker.js - Fixed version
+async function applyRegistrationBonus(userId, models) {
+  const transaction = await models.User.sequelize.transaction();
+  
+  try {
+    await models.User.increment('wallet_balance', {
+      by: 25.00,
+      where: { user_id: userId },
+      transaction
+    });
+
+    await models.Transaction.create({
+      user_id: userId,
+      type: 'registration_bonus',
+      amount: 25.00,
+      status: 'completed',
+      // ... other fields
+    }, { transaction });
+
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+```
+
+## 🛡️ **BullMQ BEST PRACTICES IMPLEMENTATION**
+
+### 1. **Queue Health Monitoring**
+```javascript
+// Add to workerManager.js
+const monitorQueues = () => {
+  setInterval(async () => {
+    try {
+      const registrationQueue = new Queue('registration', { connection: registrationConnection });
+      const attendanceQueue = new Queue('attendance', { connection: attendanceConnection });
+      
+      const regWaiting = await registrationQueue.getWaiting();
+      const regActive = await registrationQueue.getActive();
+      const regFailed = await registrationQueue.getFailed();
+      
+      console.log(`📊 Queue Status:
+        Registration: ${regWaiting.length} waiting, ${regActive.length} active, ${regFailed.length} failed
+        Attendance: Similar stats...
+      `);
+      
+      // Alert if queues are backing up
+      if (regWaiting.length > 100) {
+        console.error('🚨 Registration queue backlog detected!');
+      }
+    } catch (error) {
+      console.error('Queue monitoring failed:', error);
+    }
+  }, 30000); // Check every 30 seconds
+};
+```
+
+### 2. **Graceful Shutdown Enhancement**
+```javascript
+// Enhanced workerManager.js
+const gracefulShutdown = async (signal) => {
+  console.log(`🛑 Received ${signal}. Shutting down workers gracefully...`);
+  
+  // Stop accepting new jobs
+  Object.entries(workers).forEach(([name, worker]) => {
+    if (worker && typeof worker.pause === 'function') {
+      console.log(`⏸️ Pausing ${name} worker...`);
+      worker.pause();
+    }
+  });
+  
+  // Wait for active jobs to complete (max 30 seconds)
+  const shutdownPromises = Object.entries(workers).map(([name, worker]) => {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        console.log(`⏰ Force closing ${name} worker (timeout)`);
+        worker.close();
+        resolve();
+      }, 30000);
+      
+      worker.close().then(() => {
+        clearTimeout(timeout);
+        console.log(`✅ ${name} worker closed gracefully`);
+        resolve();
+      });
+    });
+  });
+  
+  await Promise.all(shutdownPromises);
+  process.exit(0);
+};
+```
+
+### 3. **Dead Letter Queue Implementation**
+```javascript
+// Add to handle permanently failed jobs
+const deadLetterQueue = new Queue('dead-letter', { connection: deadLetterConnection });
+
+const worker = new Worker('registration', async job => {
+  // ... job logic
+}, {
+  connection,
+  concurrency: 3
+});
+
+worker.on('failed', async (job, err) => {
+  if (job.attemptsMade >= job.opts.attempts) {
+    // Move to dead letter queue for manual inspection
+    await deadLetterQueue.add('failed-registration', {
+      originalJob: job.data,
+      error: err.message,
+      attempts: job.attemptsMade,
+      failedAt: new Date()
+    });
+  }
+});
+```
+
+## ⚠️ **CRITICAL ACTIONS NEEDED**
+
+### **Priority 1 (Fix Immediately)**:
+1. ✅ Separate Redis databases for each queue type
+2. ✅ Pre-initialize models at startup, not in workers
+3. ✅ Add concurrency limits to all workers
+4. ✅ Implement proper database transaction management
+
+### **Priority 2 (This Week)**:
+1. Add comprehensive error handling and retry logic
+2. Implement queue monitoring and alerting
+3. Add job timeouts and dead letter queues
+4. Enhance graceful shutdown process
+
+### **Priority 3 (Next Sprint)**:
+1. Implement circuit breaker for external services
+2. Add queue performance metrics
+3. Consider queue clustering for high availability
+4. Implement job deduplication
+
+## 🚀 **Enhanced Architecture Recommendation**
+
+```javascript
+// Recommended queue structure:
+// Queue DB 0: Main application data
+// Queue DB 1: Registration jobs
+// Queue DB 2: Attendance jobs  
+// Queue DB 3: Notification jobs
+// Queue DB 4: Dead letter queue
+// Queue DB 5: Monitoring/health checks
+```
+
+Your current BullMQ implementation has several critical deadlock vulnerabilities that could cause complete system failure under load. The shared Redis connections and unlimited concurrency are the most dangerous issues that need immediate attention.
+
+# Complete BullMQ + Login/Register Flow Analysis
+
+## 🔍 **CURRENT FLOW ANALYSIS**
+
+### **Login Flow** (`loginController.js`)
+```javascript
+// 1. User authentication & validation
+const user = await User.scope('withPassword').findOne({ where: { phone_no } });
+
+// 2. Generate tokens
+const accessToken = generateToken(user);
+const refreshToken = generateRefreshToken(user);
+
+// 3. 🎯 BullMQ INTERACTION - Attendance Queue
+attendanceQueue.add('checkAttendance', { userId: user.user_id }).catch(console.error);
+
+// 4. Response sent immediately
+res.json({ success: true, data: { user, tokens } });
+```
+
+### **Registration Flow** (`registerController.js`)
+```javascript
+// 1. User creation in transaction
+const transaction = await User.sequelize.transaction();
+const user = await User.create({...}, { transaction });
+await transaction.commit();
+
+// 2. 🎯 BullMQ INTERACTIONS - Multiple Queues
+registrationQueue.add('applyBonus', { 
+    type: 'applyBonus', 
+    data: { userId: user.user_id } 
+});
+
+registrationQueue.add('recordReferral', { 
+    type: 'recordReferral', 
+    data: { userId: user.user_id, referredBy: referred_by } 
+});
+
+// 3. Response sent immediately
+res.status(201).json({ success: true, data: { user, tokens } });
+```
+
+## 🚨 **CRITICAL DEADLOCK CONDITIONS**
+
+### **1. Registration Flow Database Deadlock** (VERY HIGH RISK)
+
+**Problem**: Transaction commit → Queue jobs → Database operations
+```
+User Registration Request
+    ↓
+Main Transaction: CREATE USER
+    ↓
+Transaction COMMIT
+    ↓
+Queue Job 1: applyBonus (NEW TRANSACTION)
+Queue Job 2: recordReferral (NEW TRANSACTION)  
+    ↓
+Both jobs try to UPDATE same user record
+    ↓
+🔥 DEADLOCK if jobs run simultaneously
+```
+
+**Specific Deadlock Scenario**:
+1. **Registration Request A** creates User ID 100
+2. **Registration Request B** creates User ID 101  
+3. **Worker 1** processes bonus for User 100 (locks user table)
+4. **Worker 2** processes referral for User 101 (locks referral table)
+5. **Worker 1** tries to update referral table (WAITS for Worker 2)
+6. **Worker 2** tries to update user table (WAITS for Worker 1)
+7. **💥 DEADLOCK** - Both workers stuck forever
+
+### **2. Shared Redis Connection Starvation** (HIGH RISK)
+
+**All queues use same Redis connection**:
+```javascript
+// PROBLEMATIC: Same connection everywhere
+const connection = { host: '127.0.0.1', port: 6379, db: 0 };
+```
+
+**Deadlock Flow**:
+```
+High Login Traffic (100 users/sec)
+    ↓
+100 attendance jobs/sec added to queue
+    ↓
+Registration Traffic (50 users/sec)  
+    ↓
+100 registration jobs/sec (bonus + referral)
+    ↓
+200+ jobs/sec on SAME Redis connection
+    ↓
+Redis connection maxed out
+    ↓
+New jobs can't be added → Queue backs up
+    ↓
+Workers can't get jobs → System hangs
+```
+
+### **3. Database Connection Pool Exhaustion** (HIGH RISK)
+
+**Registration Worker Flow**:
+```javascript
+// registrationWorker.js
+const worker = new Worker('registration', async job => {
+  const models = await getModels(); // 🔥 GRABS DB CONNECTION
+  
+  switch (type) {
+    case 'applyBonus':
+      await applyRegistrationBonus(userId, models); // 🔥 LONG OPERATION
+    case 'recordReferral':  
+      await recordReferral(userId, referredBy, models); // 🔥 LONG OPERATION
+  }
+  // 🔥 CONNECTION HELD UNTIL JOB COMPLETES
+});
+```
+
+**With your 5-connection pool**:
+- Login: 1 connection for user lookup
+- Registration: 1 connection for user creation  
+- Worker 1 (bonus): 1 connection (held for ~2-3 seconds)
+- Worker 2 (referral): 1 connection (held for ~2-3 seconds)
+- Worker 3 (attendance): 1 connection (held for ~1 second)
+- **Pool exhausted with just 5 concurrent operations!**
+
+### **4. Race Condition in Registration Bonus** (MEDIUM-HIGH RISK)
+
+**Problematic Flow**:
+```javascript
+// User created with wallet_balance: 0
+const user = await User.create({ wallet_balance: 0 });
+
+// 🔥 RACE CONDITION: Two jobs might run simultaneously
+// Job 1: applyBonus (reads balance: 0, adds 25)  
+// Job 2: referralBonus (reads balance: 0, adds 10)
+// Result: Last write wins, user loses money!
+```
+
+### **5. Login Attendance Queue Backlog** (MEDIUM RISK)
+
+**Problem**: Every login creates attendance job
+```javascript
+// loginController.js - runs on EVERY login
+attendanceQueue.add('checkAttendance', { userId: user.user_id });
+```
+
+**Backlog Scenario**:
+- 1000 users login in 1 minute
+- 1000 attendance jobs added to queue
+- Worker processes 1 job/second
+- 17-minute backlog builds up
+- Queue memory usage grows
+- System performance degrades
+
+## 🔧 **COMPLETE SOLUTION ARCHITECTURE**
+
+### **Solution 1: Separate Queue Databases & Connection Pools**
+
+```javascript
+// config/queueConfig.js - NEW FILE
+const queueConnections = {
+  attendance: {
+    host: '127.0.0.1',
+    port: 6379,
+    db: 1,
+    maxRetriesPerRequest: 3,
+    retryDelayOnFailover: 100,
+    lazyConnect: true
+  },
+  
+  registration: {
+    host: '127.0.0.1', 
+    port: 6379,
+    db: 2,
+    maxRetriesPerRequest: 3,
+    retryDelayOnFailover: 100,
+    lazyConnect: true
+  },
+  
+  notifications: {
+    host: '127.0.0.1',
+    port: 6379, 
+    db: 3,
+    maxRetriesPerRequest: 3,
+    retryDelayOnFailover: 100,
+    lazyConnect: true
+  }
+};
+
+module.exports = queueConnections;
+```
+
+### **Solution 2: Pre-Initialize Models & Fix Worker Architecture**
+
+```javascript
+// workers/workerInit.js - NEW FILE
+let modelsCache = null;
+let isInitialized = false;
+
+const initializeWorkerModels = async () => {
+  if (isInitialized) return modelsCache;
+  
+  try {
+    const { getModels } = require('../models');
+    modelsCache = await getModels();
+    isInitialized = true;
+    console.log('✅ Worker models initialized');
+    return modelsCache;
+  } catch (error) {
+    console.error('❌ Failed to initialize worker models:', error);
+    throw error;
+  }
+};
+
+const getWorkerModels = () => {
+  if (!isInitialized || !modelsCache) {
+    throw new Error('Worker models not initialized. Call initializeWorkerModels() first.');
+  }
+  return modelsCache;
+};
+
+module.exports = { initializeWorkerModels, getWorkerModels };
+```
+
+### **Solution 3: Fixed Registration Worker with Proper Transaction Management**
+
+```javascript
+// queues/registrationWorker.js - FIXED VERSION
+const { Worker } = require('bullmq');
+const { getWorkerModels } = require('./workerInit');
+const queueConnections = require('../config/queueConfig');
+
+const worker = new Worker('registration', async job => {
+  const { type, data } = job.data;
+  const models = getWorkerModels(); // No async call!
+  
+  try {
+    switch (type) {
+      case 'applyBonus':
+        await applyRegistrationBonusWithRetry(data.userId, models);
+        break;
+        
+      case 'recordReferral':
+        await recordReferralWithRetry(data.userId, data.referredBy, models);
+        break;
+        
+      default:
+        throw new Error(`Unknown job type: ${type}`);
+    }
+  } catch (error) {
+    console.error(`Registration job failed (${type}):`, error);
+    
+    // Determine if error is retryable
+    if (isRetryableError(error)) {
+      throw error; // Will trigger retry
+    } else {
+      // Log and fail permanently
+      await logPermanentFailure(job, error);
+      throw new Error(`Non-retryable error: ${error.message}`);
+    }
+  }
+}, { 
+  connection: queueConnections.registration,
+  concurrency: 3, // Limit concurrent jobs
+  settings: {
+    stalledInterval: 30000,
+    maxStalledCount: 1
+  }
+});
+
+// Enhanced bonus application with deadlock prevention
+async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const transaction = await models.User.sequelize.transaction({
+      isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
+    });
+    
+    try {
+      // Use FOR UPDATE to prevent race conditions
+      const user = await models.User.findByPk(userId, {
+        lock: transaction.LOCK.UPDATE,
+        transaction
+      });
+      
+      if (!user) {
+        throw new Error(`User ${userId} not found`);
+      }
+      
+      // Check if bonus already applied
+      const existingBonus = await models.Transaction.findOne({
+        where: {
+          user_id: userId,
+          type: 'registration_bonus'
+        },
+        transaction
+      });
+      
+      if (existingBonus) {
+        console.log(`Registration bonus already applied for user ${userId}`);
+        await transaction.commit();
+        return { success: true, message: 'Bonus already applied' };
+      }
+      
+      // Apply bonus atomically
+      const BONUS_AMOUNT = 25.00;
+      
+      await models.User.increment('wallet_balance', {
+        by: BONUS_AMOUNT,
+        where: { user_id: userId },
+        transaction
+      });
+      
+      await models.Transaction.create({
+        user_id: userId,
+        type: 'registration_bonus',
+        amount: BONUS_AMOUNT,
+        status: 'completed',
+        description: 'Welcome bonus for new registration',
+        reference_id: `reg_bonus_${userId}_${Date.now()}`,
+        metadata: {
+          bonus_type: 'registration',
+          usage_restriction: 'house_games_only',
+          applied_at: new Date().toISOString()
+        }
+      }, { transaction });
+      
+      await transaction.commit();
+      console.log(`✅ Registration bonus applied for user ${userId}`);
+      return { success: true, amount: BONUS_AMOUNT };
+      
+    } catch (error) {
+      await transaction.rollback();
+      
+      // Check if it's a deadlock error
+      if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
+        console.warn(`Deadlock detected for user ${userId}, retrying (${attempt}/${maxRetries})`);
+        // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+        continue;
+      }
+      
+      console.error(`Failed to apply bonus for user ${userId} (attempt ${attempt}):`, error);
+      throw error;
+    }
+  }
+}
+
+// Enhanced referral recording with deadlock prevention
+async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const transaction = await models.User.sequelize.transaction({
+      isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
+    });
+    
+    try {
+      // Always acquire locks in consistent order: Users first, then Referrals
+      const [referrer, newUser] = await Promise.all([
+        models.User.findOne({
+          where: { referring_code: referredBy },
+          lock: transaction.LOCK.UPDATE,
+          transaction
+        }),
+        models.User.findByPk(userId, {
+          lock: transaction.LOCK.UPDATE,
+          transaction
+        })
+      ]);
+      
+      if (!referrer) {
+        throw new Error(`Invalid referral code: ${referredBy}`);
+      }
+      
+      if (!newUser) {
+        throw new Error(`User ${userId} not found`);
+      }
+      
+      // Check if referral already recorded
+      const existingReferral = await models.Referral.findOne({
+        where: {
+          referrer_id: referrer.user_id,
+          referred_id: userId
+        },
+        transaction
+      });
+      
+      if (existingReferral) {
+        console.log(`Referral already recorded for user ${userId}`);
+        await transaction.commit();
+        return { success: true, message: 'Referral already recorded' };
+      }
+      
+      // Create referral record
+      await models.Referral.create({
+        referrer_id: referrer.user_id,
+        referred_id: userId,
+        level: 1,
+        status: 'active',
+        recorded_at: new Date()
+      }, { transaction });
+      
+      // Update referrer's referral count
+      await models.User.increment('total_referrals', {
+        by: 1,
+        where: { user_id: referrer.user_id },
+        transaction
+      });
+      
+      await transaction.commit();
+      console.log(`✅ Referral recorded: ${referrer.user_id} -> ${userId}`);
+      return { success: true };
+      
+    } catch (error) {
+      await transaction.rollback();
+      
+      if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
+        console.warn(`Deadlock detected for referral ${userId}, retrying (${attempt}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+        continue;
+      }
+      
+      throw error;
+    }
+  }
+}
+
+// Helper functions
+function isRetryableError(error) {
+  const retryableErrors = [
+    'SequelizeDeadlockError',
+    'SequelizeConnectionError',
+    'SequelizeConnectionRefusedError',
+    'SequelizeConnectionTimedOutError'
+  ];
+  return retryableErrors.includes(error.name);
+}
+
+async function logPermanentFailure(job, error) {
+  console.error('Permanent job failure:', {
+    jobId: job.id,
+    jobData: job.data,
+    error: error.message,
+    timestamp: new Date().toISOString()
+  });
+  
+  // Could also store in database for monitoring
+}
+
+module.exports = worker;
+```
+
+### **Solution 4: Enhanced Attendance Worker**
+
+```javascript
+// queues/attendanceWorker.js - FIXED VERSION
+const { Worker } = require('bullmq');
+const { getWorkerModels } = require('./workerInit');
+const queueConnections = require('../config/queueConfig');
+const moment = require('moment-timezone');
+
+const worker = new Worker('attendance', async job => {
+  const { userId } = job.data;
+  const models = getWorkerModels();
+  
+  try {
+    await processAttendanceWithDeduplication(userId, models);
+  } catch (error) {
+    console.error(`Attendance job failed for user ${userId}:`, error);
+    
+    if (isRetryableError(error)) {
+      throw error; // Will trigger retry
+    }
+    
+    // Log and continue for non-critical attendance errors
+    console.warn(`Non-critical attendance error for user ${userId}:`, error.message);
+  }
+}, { 
+  connection: queueConnections.attendance,
+  concurrency: 10, // Higher concurrency for lightweight operations
+  settings: {
+    stalledInterval: 30000,
+    maxStalledCount: 1
+  }
+});
+
+async function processAttendanceWithDeduplication(userId, models) {
+  const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+  
+  // Use Redis-based deduplication to prevent duplicate processing
+  const redis = require('../config/redisConfig').redis;
+  const deduplicationKey = `attendance:${userId}:${today}`;
+  
+  const isAlreadyProcessed = await redis.get(deduplicationKey);
+  if (isAlreadyProcessed) {
+    console.log(`Attendance already processed for user ${userId} on ${today}`);
+    return;
+  }
+  
+  const transaction = await models.User.sequelize.transaction();
+  
+  try {
+    const user = await models.User.findByPk(userId, {
+      attributes: ['last_login_at'],
+      transaction
+    });
+    
+    if (!user) {
+      throw new Error(`User ${userId} not found`);
+    }
+    
+    const hasLoggedInToday = user.last_login_at && 
+      moment(user.last_login_at).format('YYYY-MM-DD') === today;
+    
+    if (hasLoggedInToday) {
+      // Find or create attendance record
+      const [attendanceRecord, created] = await models.AttendanceRecord.findOrCreate({
+        where: {
+          user_id: userId,
+          attendance_date: today
+        },
+        defaults: {
+          has_logged_in_today: true
+        },
+        transaction
+      });
+      
+      if (!created && !attendanceRecord.has_logged_in_today) {
+        await attendanceRecord.update({
+          has_logged_in_today: true
+        }, { transaction });
+      }
+    }
+    
+    await transaction.commit();
+    
+    // Set deduplication flag (expires at end of day)
+    const endOfDay = moment.tz('Asia/Kolkata').endOf('day');
+    const ttl = endOfDay.diff(moment(), 'seconds');
+    await redis.setex(deduplicationKey, ttl, '1');
+    
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+module.exports = worker;
+```
+
+### **Solution 5: Enhanced Controllers with Better Queue Management**
+
+```javascript
+// controllers/userController/loginController.js - ENHANCED
+const loginController = async (req, res) => {
+  try {
+    // ... existing validation logic ...
+    
+    const models = await getModels();
+    const user = await models.User.scope('withPassword').findOne({
+      where: { phone_no },
+      attributes: ['user_id', 'phone_no', 'password', 'is_blocked', 'wallet_balance', 'user_name', 'vip_level', 'profile_picture_id', 'is_phone_verified']
+    });
+    
+    // ... existing validation logic ...
+    
+    // Generate tokens
+    const accessToken = generateToken(user);
+    const refreshToken = generateRefreshToken(user);
+    
+    // Update last login (async, non-blocking)
+    const ipAddress = req.ip || req.connection.remoteAddress;
+    user.update({ 
+      last_login_at: new Date(), 
+      last_login_ip: ipAddress 
+    }).catch(console.error);
+    
+    // Add attendance job with deduplication
+    const attendanceQueue = require('../../queues/attendanceQueue');
+    const today = new Date().toISOString().split('T')[0];
+    const jobId = `attendance:${user.user_id}:${today}`;
+    
+    attendanceQueue.add('checkAttendance', 
+      { userId: user.user_id }, 
+      { 
+        jobId, // Prevents duplicate jobs
+        removeOnComplete: 5,
+        removeOnFail: 10,
+        attempts: 2,
+        backoff: { type: 'fixed', delay: 5000 }
+      }
+    ).catch(console.error);
+    
+    // Response...
+    res.json({
+      success: true,
+      data: { user: { /* user data */ }, tokens: { accessToken, refreshToken } }
+    });
+    
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ success: false, message: 'An error occurred' });
+  }
+};
+```
+
+```javascript
+// controllers/userController/registerController.js - ENHANCED  
+const registerController = async (req, res) => {
+  try {
+    // ... existing validation logic ...
+    
+    const models = await getModels();
+    const transaction = await models.User.sequelize.transaction();
+    
+    let user;
+    try {
+      // ... existing user creation logic ...
+      user = await models.User.create({
+        // ... user data
+      }, { transaction });
+      
+      await transaction.commit();
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
+    
+    // Generate tokens
+    const accessToken = generateToken(user);
+    const refreshToken = generateRefreshToken(user);
+    
+    // Add background jobs with proper configuration
+    const registrationQueue = require('../../queues/registrationQueue');
+    
+    // Job 1: Apply bonus (higher priority)
+    registrationQueue.add('applyBonus', {
+      type: 'applyBonus',
+      data: { userId: user.user_id }
+    }, {
+      priority: 10,
+      removeOnComplete: 5,
+      removeOnFail: 10,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 }
+    }).catch(console.error);
+    
+    // Job 2: Record referral (lower priority, runs after bonus)
+    if (referred_by) {
+      registrationQueue.add('recordReferral', {
+        type: 'recordReferral',
+        data: { userId: user.user_id, referredBy: referred_by }
+      }, {
+        priority: 5,
+        delay: 2000, // Delay to ensure bonus is processed first
+        removeOnComplete: 5,
+        removeOnFail: 10,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 }
+      }).catch(console.error);
+    }
+    
+    // Response sent immediately
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      data: { user: { /* user data */ }, tokens: { accessToken, refreshToken } }
+    });
+    
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ success: false, message: 'Error during registration' });
+  }
+};
+```
+
+### **Solution 6: Enhanced Worker Manager with Health Monitoring**
+
+```javascript
+// workers/workerManager.js - ENHANCED
+const { initializeWorkerModels } = require('./workerInit');
+const queueConnections = require('../config/queueConfig');
+
+console.log('🚀 Starting Enhanced BullMQ Worker Manager...');
+
+// Initialize models first
+initializeWorkerModels().then(() => {
+  console.log('✅ Worker models initialized');
+  
+  // Now start workers
+  const attendanceWorker = require('../queues/attendanceWorker');
+  const registrationWorker = require('../queues/registrationWorker');
+  
+  const workers = {
+    attendance: attendanceWorker,
+    registration: registrationWorker
+  };
+  
+  // Health monitoring
+  const monitorWorkerHealth = () => {
+    setInterval(async () => {
+      try {
+        const { Queue } = require('bullmq');
+        
+        for (const [name, connection] of Object.entries(queueConnections)) {
+          const queue = new Queue(name, { connection });
+          
+          const [waiting, active, completed, failed] = await Promise.all([
+            queue.getWaiting(),
+            queue.getActive(),
+            queue.getCompleted(0, 0),
+            queue.getFailed(0, 0)
+          ]);
+          
+          console.log(`📊 ${name} Queue: ${waiting.length} waiting, ${active.length} active, ${completed.length} completed, ${failed.length} failed`);
+          
+          // Alert on backlog
+          if (waiting.length > 50) {
+            console.error(`🚨 HIGH BACKLOG: ${name} queue has ${waiting.length} waiting jobs`);
+          }
+          
+          // Alert on high failure rate
+          if (failed.length > completed.length * 0.1) {
+            console.error(`🚨 HIGH FAILURE RATE: ${name} queue has ${failed.length} failed jobs`);
+          }
+        }
+      } catch (error) {
+        console.error('Health monitoring failed:', error);
+      }
+    }, 30000);
+  };
+  
+  monitorWorkerHealth();
+  
+  // Enhanced graceful shutdown
+  const gracefulShutdown = async (signal) => {
+    console.log(`🛑 Received ${signal}. Shutting down workers gracefully...`);
+    
+    const shutdownPromises = Object.entries(workers).map(([name, worker]) => {
+      return new Promise((resolve) => {
+        console.log(`⏸️ Stopping ${name} worker...`);
+        
+        const timeout = setTimeout(() => {
+          console.log(`⏰ Force closing ${name} worker (timeout)`);
+          worker.close();
+          resolve();
+        }, 30000);
+        
+        worker.close().then(() => {
+          clearTimeout(timeout);
+          console.log(`✅ ${name} worker closed gracefully`);
+          resolve();
+        }).catch(() => {
+          clearTimeout(timeout);
+          console.log(`❌ ${name} worker force closed`);
+          resolve();
+        });
+      });
+    });
+    
+    await Promise.all(shutdownPromises);
+    console.log('✅ All workers shut down. Exiting...');
+    process.exit(0);
+  };
+  
+  // Signal handlers
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  
+  console.log('✅ Enhanced Worker Manager Started Successfully!');
+  
+}).catch(error => {
+  console.error('❌ Failed to initialize worker models:', error);
+  process.exit(1);
+});
+```
+
+## 📊 **BEFORE vs AFTER COMPARISON**
+
+### **BEFORE (Current Issues)**:
+- ❌ Shared Redis connection → Queue deadlocks
+- ❌ Dynamic model loading → DB connection exhaustion  
+- ❌ No concurrency limits → Resource starvation
+- ❌ Race conditions in bonus application
+- ❌ No error handling or retries
+- ❌ No job deduplication → Duplicate processing
+
+### **AFTER (Enhanced Solution)**:
+- ✅ Separate Redis databases → Isolated queue performance
+- ✅ Pre-initialized models → Consistent DB connections
+- ✅ Proper concurrency limits → Controlled resource usage
+- ✅ Atomic operations with locking → No race conditions
+- ✅ Comprehensive error handling → Resilient operations
+- ✅ Job deduplication → Prevents duplicate processing
+- ✅ Health monitoring → Proactive issue detection
+- ✅ Graceful shutdown → Safe service restarts
+
+## ⚠️ **IMPLEMENTATION PRIORITY**
+
+### **CRITICAL (Fix Today)**:
+1. ✅ Separate Redis databases for queues
+2. ✅ Pre-initialize models at startup
+3. ✅ Add concurrency limits to workers
+4. ✅ Fix transaction management in workers
+
+### **HIGH (This Week)**:
+1. Implement deadlock retry logic
+2. Add job deduplication
+3. Enhance error handling
+4. Add health monitoring
+
+### **MEDIUM (Next Sprint)**:
+1. Implement circuit breakers
+2. Add performance metrics
+3. Dead letter queue implementation
+4. Advanced monitoring dashboards
+
+This enhanced architecture will eliminate deadlocks and provide a robust, scalable queue system for your authentication flows.
+
