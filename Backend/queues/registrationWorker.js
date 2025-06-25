@@ -140,14 +140,28 @@ async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 
       const newUser = await models.User.findByPk(userId, { attributes: ['user_id'] });
       if (!referrer) throw new Error(`Invalid referral code: ${referredBy}`);
       if (!newUser) throw new Error(`User ${userId} not found`);
-      // Always lock in ascending order
-      const userIds = [referrer.user_id, newUser.user_id].sort((a, b) => a - b);
-      const users = await models.User.findAll({
-        where: { user_id: userIds },
-        lock: transaction.LOCK.UPDATE,
-        order: [['user_id', 'ASC']],
+      
+      // 🚀 CRITICAL: Always lock in ascending order to prevent deadlocks
+      const lockIds = [referrer.user_id, newUser.user_id].sort((a, b) => a - b);
+      
+      // 🚀 Use SELECT FOR UPDATE with SKIP LOCKED for advanced deadlock prevention
+      const lockedUsers = await models.sequelize.query(`
+        SELECT user_id FROM users 
+        WHERE user_id IN (:userIds) 
+        FOR UPDATE SKIP LOCKED
+      `, {
+        replacements: { userIds: lockIds },
+        type: models.sequelize.QueryTypes.SELECT,
         transaction
       });
+      
+      if (lockedUsers.length !== 2) {
+        // Another process is working on these users, skip this attempt
+        await transaction.rollback();
+        console.log(`Skipping referral ${userId} - users already locked by another process`);
+        continue;
+      }
+      
       // Check if referral already recorded
       const existingReferral = await models.ReferralTree.findOne({
         where: {
@@ -161,6 +175,7 @@ async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 
         await transaction.commit();
         return { success: true, message: 'Referral already recorded' };
       }
+      
       // Create referral record
       await models.ReferralTree.create({
         referrer_id: referrer.user_id,
@@ -169,12 +184,14 @@ async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 
         status: 'active',
         created_at: new Date()
       }, { transaction });
+      
       // Update referrer's referral count (atomic increment)
       await models.User.increment('direct_referral_count', {
         by: 1,
         where: { user_id: referrer.user_id },
         transaction
       });
+      
       await transaction.commit();
       console.log(`✅ Referral recorded: ${referrer.user_id} -> ${userId}`);
       return { success: true };
@@ -182,7 +199,9 @@ async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 
       await transaction.rollback();
       if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
         console.warn(`Deadlock detected for referral ${userId}, retrying (${attempt}/${maxRetries})`);
-        await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+        // 🚀 Randomized exponential backoff
+        const delay = Math.random() * 100 * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
       throw error;

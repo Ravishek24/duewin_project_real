@@ -28,10 +28,11 @@ const config = {
         dialect: 'mysql',
         logging: console.log,  // Enable logging for debugging
         pool: {
-            max: 5,
-            min: 0,
-            acquire: 30000,
-            idle: 10000
+            max: 50,
+            min: 10,
+            acquire: 60000,
+            idle: 30000,
+            evict: 60000
         },
         retry: {
             max: 3,
@@ -61,10 +62,11 @@ const config = {
         dialect: 'mysql',
         logging: false,  // Disable logging in production
         pool: {
-            max: 10,
-            min: 0,
-            acquire: 30000,
-            idle: 10000
+            max: 50,
+            min: 10,
+            acquire: 60000,
+            idle: 30000,
+            evict: 60000
         },
         retry: {
             max: 3,

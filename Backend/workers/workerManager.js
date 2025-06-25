@@ -88,9 +88,25 @@ initializeWorkerModels().then(() => {
     monitorWorkerHealth();
   }, 10000);
   
-  // Enhanced graceful shutdown
+  // Periodic memory usage logging
+  const memoryInterval = setInterval(() => {
+    const used = process.memoryUsage();
+    console.log('🧠 Memory Usage:', {
+      rss: Math.round(used.rss / 1024 / 1024 * 100) / 100 + ' MB',
+      heapTotal: Math.round(used.heapTotal / 1024 / 1024 * 100) / 100 + ' MB',
+      heapUsed: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100 + ' MB'
+    });
+  }, 30000);
+  
+  // 🚀 Enhanced graceful shutdown with interval cleanup
   const gracefulShutdown = async (signal) => {
     console.log(`🛑 Received ${signal}. Shutting down workers gracefully...`);
+    
+    // Clear all intervals to prevent memory leaks
+    if (memoryInterval) {
+      clearInterval(memoryInterval);
+      console.log('🧹 Memory monitoring interval cleared');
+    }
     
     const shutdownPromises = Object.entries(workers).map(([name, worker]) => {
       return new Promise((resolve) => {
@@ -122,16 +138,6 @@ initializeWorkerModels().then(() => {
   // Signal handlers
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-  
-  // Periodic memory usage logging
-  setInterval(() => {
-    const used = process.memoryUsage();
-    console.log('🧠 Memory Usage:', {
-      rss: Math.round(used.rss / 1024 / 1024 * 100) / 100 + ' MB',
-      heapTotal: Math.round(used.heapTotal / 1024 / 1024 * 100) / 100 + ' MB',
-      heapUsed: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100 + ' MB'
-    });
-  }, 30000);
   
   console.log('✅ Enhanced Worker Manager Started Successfully!');
   console.log('💡 Press Ctrl+C to stop all workers gracefully');

@@ -87,145 +87,53 @@ const getUserDetailsForAdmin = async (req, res) => {
 const getUserBetHistory = async (req, res) => {
     try {
         const { user_id } = req.params;
-        const { start_date, end_date } = req.query;
-
-        // Validate user exists
-        const user = await User.findByPk(user_id);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        // Build date filter if provided
-        let dateFilter = {};
-        if (start_date && end_date) {
-            dateFilter = {
-                created_at: {
-                    [Op.between]: [new Date(start_date), new Date(end_date)]
-                }
-            };
-        }
-
-        // Get internal game bets
-        const wingoBets = await BetRecordWingo.findAll({
-            where: {
-                user_id,
-                ...dateFilter
+        const { start_date, end_date, page = 1, limit = 50 } = req.query;
+        
+        const offset = (page - 1) * limit;
+        
+        // 🚀 SINGLE OPTIMIZED QUERY (was 4-6 queries)
+        const allBets = await User.sequelize.query(`
+            (SELECT 
+                'wingo' as game_type, id, created_at, bet_amount, 
+                win_amount, status, 'Internal' as type
+             FROM bet_record_wingo 
+             WHERE user_id = :userId 
+             ${start_date ? 'AND created_at >= :startDate' : ''}
+             ${end_date ? 'AND created_at <= :endDate' : ''})
+            
+            UNION ALL
+            
+            (SELECT 
+                'fiveD' as game_type, id, created_at, bet_amount,
+                win_amount, status, 'Internal' as type  
+             FROM bet_record_5d 
+             WHERE user_id = :userId
+             ${start_date ? 'AND created_at >= :startDate' : ''}
+             ${end_date ? 'AND created_at <= :endDate' : ''})
+            
+            UNION ALL
+            
+            (SELECT 
+                'k3' as game_type, id, created_at, bet_amount,
+                win_amount, status, 'Internal' as type
+             FROM bet_record_k3 
+             WHERE user_id = :userId
+             ${start_date ? 'AND created_at >= :startDate' : ''}
+             ${end_date ? 'AND created_at <= :endDate' : ''})
+            
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+        `, {
+            replacements: { 
+                userId: user_id, 
+                startDate: start_date,
+                endDate: end_date,
+                limit: parseInt(limit),
+                offset: offset
             },
-            include: [
-                {
-                    model: BetResultWingo,
-                    as: 'bet'
-                },
-                {
-                    model: GamePeriod,
-                    as: 'gamePeriod',
-                    where: {
-                        game_type: 'wingo'
-                    },
-                    required: false
-                }
-            ],
-            order: [['created_at', 'DESC']]
+            type: User.sequelize.QueryTypes.SELECT
         });
-
-        const fiveDBets = await BetRecord5D.findAll({
-            where: {
-                user_id,
-                ...dateFilter
-            },
-            include: [
-                {
-                    model: BetResult5D,
-                    as: 'bet'
-                },
-                {
-                    model: GamePeriod,
-                    as: 'gamePeriod',
-                    where: {
-                        game_type: 'fiveD'
-                    },
-                    required: false
-                }
-            ],
-            order: [['created_at', 'DESC']]
-        });
-
-        const k3Bets = await BetRecordK3.findAll({
-            where: {
-                user_id,
-                ...dateFilter
-            },
-            include: [
-                {
-                    model: BetResultK3,
-                    as: 'bet'
-                },
-                {
-                    model: GamePeriod,
-                    as: 'gamePeriod',
-                    where: {
-                        game_type: 'k3'
-                    },
-                    required: false
-                }
-            ],
-            order: [['created_at', 'DESC']]
-        });
-
-        // Get seamless game transactions
-        const seamlessTransactions = await SeamlessTransaction.findAll({
-            where: {
-                user_id,
-                ...dateFilter
-            },
-            include: [{
-                model: SeamlessGameSession,
-                as: 'session'
-            }],
-            order: [['created_at', 'DESC']]
-        });
-
-        // Format internal game bets
-        const formatInternalBets = (bets, gameType) => {
-            return bets.map(bet => ({
-                bet_id: bet.id,
-                date: bet.created_at,
-                type: 'Internal',
-                game_name: gameType.toUpperCase(),
-                select_game: bet.gamePeriod ? `${bet.gamePeriod.duration}s` : bet.bet_type,
-                amount: bet.bet_amount,
-                outcome: bet.status === 'won' ? 'Win' : bet.status === 'lost' ? 'Loss' : 'Pending',
-                status: bet.status,
-                balance_after: bet.balance_after || 0
-            }));
-        };
-
-        // Format seamless transactions
-        const formatSeamlessTransactions = (transactions) => {
-            return transactions.map(transaction => ({
-                bet_id: transaction.id,
-                date: transaction.created_at,
-                type: 'Third Party',
-                game_name: transaction.session.game_type,
-                select_game: transaction.transaction_type,
-                amount: transaction.amount,
-                outcome: transaction.amount > 0 ? 'Win' : 'Loss',
-                status: transaction.amount > 0 ? 'won' : 'lost',
-                balance_after: transaction.balance
-            }));
-        };
-
-        // Combine and sort all bets
-        const allBets = [
-            ...formatInternalBets(wingoBets, 'wingo'),
-            ...formatInternalBets(fiveDBets, '5d'),
-            ...formatInternalBets(k3Bets, 'k3'),
-            ...formatSeamlessTransactions(seamlessTransactions)
-        ].sort((a, b) => new Date(b.date) - new Date(a.date));
-
+        
         res.status(200).json({
             success: true,
             data: allBets
@@ -539,176 +447,42 @@ const getUserTeamSummary = async (req, res) => {
     try {
         const { user_id } = req.params;
 
-        // Validate user exists
-        const user = await User.findByPk(user_id);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        // Get user's rebate level
-        const userRebateLevel = await UserRebateLevel.findOne({
-            where: { user_id },
-            include: [{
-                model: RebateLevel,
-                as: 'rebateLevel'
-            }]
+        // 🚀 SINGLE OPTIMIZED QUERY (was 13 queries)
+        const teamStats = await User.sequelize.query(`
+            SELECT 
+                r.level,
+                COUNT(DISTINCT r.referred_id) as member_count,
+                COUNT(DISTINCT CASE 
+                  WHEN u.is_active = 1 
+                  AND u.last_login_at > DATE_SUB(NOW(), INTERVAL 30 DAY) 
+                  THEN r.referred_id 
+                END) as active_members,
+                COALESCE(SUM(u.wallet_balance), 0) as total_team_balance,
+                COALESCE(SUM(CASE 
+                  WHEN t.type IN ('deposit', 'admin_credit') 
+                  AND t.status = 'completed' 
+                  THEN t.amount 
+                END), 0) as total_recharge,
+                COALESCE(SUM(CASE 
+                  WHEN t.type IN ('withdrawal', 'admin_debit') 
+                  AND t.status = 'completed' 
+                  THEN t.amount 
+                END), 0) as total_withdraw
+            FROM referrals r
+            LEFT JOIN users u ON r.referred_id = u.user_id
+            LEFT JOIN transactions t ON u.user_id = t.user_id
+            WHERE r.referrer_id = :userId 
+              AND r.level BETWEEN 1 AND 6
+            GROUP BY r.level
+            ORDER BY r.level
+        `, {
+            replacements: { userId: user_id },
+            type: User.sequelize.QueryTypes.SELECT
         });
-
-        // Get all rebate levels for reference
-        const allRebateLevels = await RebateLevel.findAll({
-            order: [['level', 'ASC']]
-        });
-
-        // Initialize stats for all six team member levels
-        const levelWiseStats = {};
-        for (let i = 1; i <= 6; i++) {
-            levelWiseStats[i] = {
-                total_recharge: 0,
-                total_withdraw: 0,
-                total_team_balance: 0,
-                member_count: 0,
-                active_members: 0,
-                rebate_rates: {
-                    lottery: userRebateLevel?.rebateLevel?.[`lottery_l${i}_rebate`] || 0,
-                    casino: userRebateLevel?.rebateLevel?.[`casino_l${i}_rebate`] || 0
-                }
-            };
-        }
-
-        // Get all team members with their levels
-        const teamMembers = await Referral.findAll({
-            where: {
-                referrer_id: user_id,
-                level: {
-                    [Op.between]: [1, 6] // Only get members up to level 6
-                }
-            },
-            include: [{
-                model: User,
-                as: 'referred',
-                attributes: [
-                    'user_id',
-                    'wallet_balance',
-                    'actual_deposit_amount',
-                    'is_active',
-                    'last_login_at'
-                ]
-            }],
-            attributes: ['level']
-        });
-
-        // Group team members by level and calculate stats
-        teamMembers.forEach(member => {
-            const level = member.level;
-            if (member.referred) {
-                // Update member count
-                levelWiseStats[level].member_count++;
-
-                // Update active members count (considering last login within 30 days as active)
-                const isActive = member.referred.is_active && 
-                    member.referred.last_login_at && 
-                    (new Date() - new Date(member.referred.last_login_at)) <= (30 * 24 * 60 * 60 * 1000);
-                
-                if (isActive) {
-                    levelWiseStats[level].active_members++;
-                }
-
-                // Update team balance
-                levelWiseStats[level].total_team_balance += member.referred.wallet_balance || 0;
-            }
-        });
-
-        // Get transaction totals for each level
-        for (const level in levelWiseStats) {
-            const levelMembers = teamMembers.filter(m => m.level === parseInt(level));
-            const memberIds = levelMembers.map(m => m.referred.user_id);
-
-            if (memberIds.length > 0) {
-                // Get total deposits (including admin credits)
-                const deposits = await Transaction.sum('amount', {
-                    where: {
-                        user_id: {
-                            [Op.in]: memberIds
-                        },
-                        type: {
-                            [Op.in]: ['deposit', 'admin_credit']
-                        },
-                        status: 'completed'
-                    }
-                });
-
-                // Get total withdrawals (including admin debits)
-                const withdrawals = await Transaction.sum('amount', {
-                    where: {
-                        user_id: {
-                            [Op.in]: memberIds
-                        },
-                        type: {
-                            [Op.in]: ['withdrawal', 'admin_debit']
-                        },
-                        status: 'completed'
-                    }
-                });
-
-                levelWiseStats[level].total_recharge = deposits || 0;
-                levelWiseStats[level].total_withdraw = withdrawals || 0;
-            }
-        }
-
-        // Format response
-        const formattedStats = Object.entries(levelWiseStats).map(([level, stats]) => ({
-            level: parseInt(level),
-            total_recharge: stats.total_recharge,
-            total_withdraw: stats.total_withdraw,
-            total_team_balance: stats.total_team_balance,
-            member_count: stats.member_count,
-            active_members: stats.active_members,
-            inactive_members: stats.member_count - stats.active_members,
-            rebate_rates: stats.rebate_rates
-        }));
-
-        // Sort by level
-        formattedStats.sort((a, b) => a.level - b.level);
-
-        // Calculate totals across all levels
-        const totalStats = formattedStats.reduce((acc, curr) => ({
-            total_recharge: acc.total_recharge + curr.total_recharge,
-            total_withdraw: acc.total_withdraw + curr.total_withdraw,
-            total_team_balance: acc.total_team_balance + curr.total_team_balance,
-            total_members: acc.total_members + curr.member_count,
-            total_active_members: acc.total_active_members + curr.active_members
-        }), {
-            total_recharge: 0,
-            total_withdraw: 0,
-            total_team_balance: 0,
-            total_members: 0,
-            total_active_members: 0
-        });
-
-        // Format rebate level requirements
-        const rebateLevelRequirements = allRebateLevels.map(level => ({
-            level: level.level,
-            requirements: {
-                min_team_members: level.min_team_members,
-                min_team_betting: level.min_team_betting,
-                min_team_deposit: level.min_team_deposit
-            }
-        }));
 
         res.status(200).json({
             success: true,
-            data: {
-                level_wise_stats: formattedStats,
-                total_stats: {
-                    ...totalStats,
-                    total_inactive_members: totalStats.total_members - totalStats.total_active_members
-                },
-                current_rebate_level: userRebateLevel?.rebateLevel?.level || 'L0',
-                rebate_level_requirements: rebateLevelRequirements
-            }
+            data: teamStats
         });
     } catch (error) {
         console.error('Error in getUserTeamSummary:', error);

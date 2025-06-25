@@ -62,12 +62,28 @@ async function processDepositWithRetry(data, models, maxRetries = 3) {
       isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
     });
     try {
-      // Lock user only once
-      const user = await models.User.findByPk(userId, {
-        lock: transaction.LOCK.UPDATE,
+      // 🚀 Use SELECT FOR UPDATE with SKIP LOCKED for advanced deadlock prevention
+      const lockedUsers = await models.sequelize.query(`
+        SELECT user_id, wallet_balance, actual_deposit_amount, bonus_amount, has_received_first_bonus 
+        FROM users 
+        WHERE user_id = :userId 
+        FOR UPDATE SKIP LOCKED
+      `, {
+        replacements: { userId },
+        type: models.sequelize.QueryTypes.SELECT,
         transaction
       });
+      
+      if (lockedUsers.length === 0) {
+        // User is locked by another process, skip this attempt
+        await transaction.rollback();
+        console.log(`Skipping deposit ${orderId} - user ${userId} locked by another process`);
+        continue;
+      }
+      
+      const user = lockedUsers[0];
       if (!user) throw new Error(`User ${userId} not found`);
+      
       // Check if deposit already processed
       const existingDeposit = await models.WalletRecharge.findOne({
         where: { order_id: orderId, payment_status: 'completed' },
@@ -77,6 +93,7 @@ async function processDepositWithRetry(data, models, maxRetries = 3) {
         await transaction.commit();
         return { success: true, message: 'Deposit already processed' };
       }
+      
       // Create deposit record
       const deposit = await models.WalletRecharge.create({
         user_id: userId,
@@ -87,6 +104,7 @@ async function processDepositWithRetry(data, models, maxRetries = 3) {
         created_at: new Date(),
         updated_at: new Date()
       }, { transaction });
+      
       // Use atomic increment for wallet balance and bonus
       await models.User.increment({
         wallet_balance: parseFloat(amount) + parseFloat(bonusAmount || 0),
@@ -97,6 +115,7 @@ async function processDepositWithRetry(data, models, maxRetries = 3) {
         where: { user_id: userId },
         transaction
       });
+      
       // Create transaction record
       await models.Transaction.create({
         user_id: userId,
@@ -107,12 +126,15 @@ async function processDepositWithRetry(data, models, maxRetries = 3) {
         reference_id: orderId,
         metadata: { deposit_id: deposit.id, bonus: bonusAmount }
       }, { transaction });
+      
       await transaction.commit();
       return { success: true, depositId: deposit.id };
     } catch (error) {
       await transaction.rollback();
       if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+        // 🚀 Randomized exponential backoff
+        const delay = Math.random() * 100 * Math.pow(2, attempt);
+        await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
       throw error;

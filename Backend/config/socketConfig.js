@@ -1,12 +1,147 @@
 // Backend/config/socketConfig.js - ENHANCED WITH ADMIN LIVE DISTRIBUTION
 let io = null;
 
+// 🚀 Optimized Socket Manager for scaling
+class OptimizedSocketManager {
+  constructor() {
+    this.io = null;
+    this.broadcastQueues = new Map();
+    this.rateLimiter = new Map();
+    this.broadcastInterval = null;
+    
+    // 🚀 Batch broadcasts every 100ms with proper cleanup
+    this.startBroadcastProcessing();
+  }
+  
+  startBroadcastProcessing() {
+    // Clear existing interval if any
+    if (this.broadcastInterval) {
+      clearInterval(this.broadcastInterval);
+    }
+    
+    this.broadcastInterval = setInterval(() => this.processBroadcastQueues(), 100);
+  }
+  
+  // 🚀 Cleanup method to prevent memory leaks
+  cleanup() {
+    if (this.broadcastInterval) {
+      clearInterval(this.broadcastInterval);
+      this.broadcastInterval = null;
+      console.log('🧹 Socket broadcast interval cleared');
+    }
+    
+    // Clear all queues
+    this.broadcastQueues.clear();
+    this.rateLimiter.clear();
+  }
+  
+  setIo(socketIoInstance) {
+    this.io = socketIoInstance;
+    this.setupOptimizedHandlers();
+  }
+  
+  // 🚀 Deduped and batched broadcasting
+  queueBroadcast(rooms, event, data) {
+    for (const room of rooms) {
+      if (!this.broadcastQueues.has(room)) {
+        this.broadcastQueues.set(room, new Map());
+      }
+      
+      // Dedupe by event type
+      this.broadcastQueues.get(room).set(event, {
+        data,
+        timestamp: Date.now()
+      });
+    }
+  }
+  
+  processBroadcastQueues() {
+    for (const [room, events] of this.broadcastQueues.entries()) {
+      for (const [event, { data }] of events.entries()) {
+        // 🚀 Single broadcast per room per event type
+        this.io.to(room).emit(event, data);
+      }
+      events.clear();
+    }
+  }
+  
+  // 🚀 Rate-limited broadcasting
+  broadcastGameResult(gameType, duration, result) {
+    const key = `${gameType}_${duration}`;
+    const now = Date.now();
+    
+    // Rate limit: max 1 broadcast per second per game
+    if (this.rateLimiter.has(key)) {
+      const lastBroadcast = this.rateLimiter.get(key);
+      if (now - lastBroadcast < 1000) {
+        return; // Skip this broadcast
+      }
+    }
+    
+    this.rateLimiter.set(key, now);
+    
+    // 🚀 Optimized room targeting (no duplicates)
+    const rooms = new Set([
+      `${gameType}_${duration}`,
+      'games'
+    ]);
+    
+    this.queueBroadcast(Array.from(rooms), 'gameResult', {
+      gameType,
+      duration,
+      result,
+      timestamp: now
+    });
+  }
+  
+  setupOptimizedHandlers() {
+    this.io.on('connection', (socket) => {
+      // 🚀 Connection throttling
+      const clientIP = socket.handshake.address;
+      const connectionsFromIP = Array.from(this.io.sockets.sockets.values())
+        .filter(s => s.handshake.address === clientIP).length;
+      
+      if (connectionsFromIP > 5) {
+        socket.emit('error', { message: 'Too many connections from this IP' });
+        socket.disconnect();
+        return;
+      }
+      
+      // 🚀 Optimized room management
+      socket.on('joinGame', (data) => {
+        const { gameType, duration } = data;
+        const roomName = `${gameType}_${duration}`;
+        
+        // Leave previous game rooms
+        const currentRooms = Array.from(socket.rooms);
+        for (const room of currentRooms) {
+          if (room.includes('_') && room !== roomName) {
+            socket.leave(room);
+          }
+        }
+        
+        // Join new room
+        socket.join(roomName);
+        socket.join('games'); // General game updates
+        
+        socket.emit('joinedGame', { gameType, duration, room: roomName });
+      });
+      
+      // 🚀 Compressed message handling
+      socket.compress(true);
+    });
+  }
+}
+
+const socketManager = new OptimizedSocketManager();
+
 /**
  * Set Socket.IO instance
  * @param {Object} socketIoInstance - Socket.IO server instance
  */
 const setIo = (socketIoInstance) => {
     io = socketIoInstance;
+    socketManager.setIo(socketIoInstance);
     console.log('✅ Socket.IO instance set for game broadcasting');
     
     // Set up game-specific event handlers
@@ -494,10 +629,8 @@ const broadcastGameResult = (gameType, duration, periodId, result, winners = [])
     }
 
     try {
-        const roomName = `${gameType}_${duration}`;
-        
-        // Enhanced result formatting based on game type
-        let enhancedResult = { ...result };
+        // 🚀 Use optimized socket manager for deduplicated broadcasting
+        const enhancedResult = { ...result };
         
         switch (gameType.toLowerCase()) {
             case 'wingo':
@@ -510,30 +643,26 @@ const broadcastGameResult = (gameType, duration, periodId, result, winners = [])
                 
             case 'k3':
                 // Ensure K3 result has all required fields
-                enhancedResult = {
-                    dice_1: result.dice_1,
-                    dice_2: result.dice_2,
-                    dice_3: result.dice_3,
-                    sum: result.sum,
-                    has_pair: result.has_pair,
-                    has_triple: result.has_triple,
-                    is_straight: result.is_straight,
-                    sum_size: result.sum_size,
-                    sum_parity: result.sum_parity
-                };
+                enhancedResult.dice_1 = result.dice_1;
+                enhancedResult.dice_2 = result.dice_2;
+                enhancedResult.dice_3 = result.dice_3;
+                enhancedResult.sum = result.sum;
+                enhancedResult.has_pair = result.has_pair;
+                enhancedResult.has_triple = result.has_triple;
+                enhancedResult.is_straight = result.is_straight;
+                enhancedResult.sum_size = result.sum_size;
+                enhancedResult.sum_parity = result.sum_parity;
                 break;
                 
             case 'fived':
             case '5d':
                 // Ensure 5D result has all required fields
-                enhancedResult = {
-                    A: result.A,
-                    B: result.B,
-                    C: result.C,
-                    D: result.D,
-                    E: result.E,
-                    sum: result.sum
-                };
+                enhancedResult.A = result.A;
+                enhancedResult.B = result.B;
+                enhancedResult.C = result.C;
+                enhancedResult.D = result.D;
+                enhancedResult.E = result.E;
+                enhancedResult.sum = result.sum;
                 break;
         }
         
@@ -551,13 +680,15 @@ const broadcastGameResult = (gameType, duration, periodId, result, winners = [])
             timestamp: new Date().toISOString()
         };
 
-        // Broadcast to specific game room
-        io.to(roomName).emit('gameResult', broadcastData);
+        // 🚀 Use optimized broadcasting (no duplicates)
+        const rooms = new Set([
+            `${gameType}_${duration}`,
+            'games'
+        ]);
         
-        // Also broadcast to general games room
-        io.to('games').emit('gameResult', broadcastData);
+        socketManager.queueBroadcast(Array.from(rooms), 'gameResult', broadcastData);
 
-        // Send additional admin data
+        // Send additional admin data (separate event)
         const adminRoomName = `admin_${gameType}_${duration}`;
         io.to(adminRoomName).emit('adminGameResult', {
             ...broadcastData,
@@ -568,7 +699,7 @@ const broadcastGameResult = (gameType, duration, periodId, result, winners = [])
             }
         });
 
-        console.log(`📡 Game result broadcasted to ${roomName}:`, {
+        console.log(`📡 Game result broadcasted to ${gameType}_${duration}:`, {
             periodId,
             result: typeof enhancedResult === 'object' ? JSON.stringify(enhancedResult) : enhancedResult,
             winnersCount: winners.length
@@ -590,8 +721,6 @@ const broadcastPeriodCountdown = (gameType, duration, periodId, timeRemaining) =
     if (!io) return;
 
     try {
-        const roomName = `${gameType}_${duration}`;
-        
         const countdownData = {
             type: 'periodCountdown',
             gameType,
@@ -603,10 +732,13 @@ const broadcastPeriodCountdown = (gameType, duration, periodId, timeRemaining) =
             timestamp: new Date().toISOString()
         };
 
-        io.to(roomName).emit('periodCountdown', countdownData);
+        // 🚀 Use optimized broadcasting (no duplicates)
+        const rooms = new Set([
+            `${gameType}_${duration}`,
+            'games'
+        ]);
         
-        // Also send to general games room
-        io.to('games').emit('periodCountdown', countdownData);
+        socketManager.queueBroadcast(Array.from(rooms), 'periodCountdown', countdownData);
 
         // Update bet distribution for admins every 10 seconds
         if (Math.round(timeRemaining) % 10 === 0) {
@@ -628,7 +760,6 @@ const broadcastNewPeriod = (gameType, duration, newPeriodId) => {
     if (!io) return;
 
     try {
-        const roomName = `${gameType}_${duration}`;
         const adminRoomName = `admin_${gameType}_${duration}`;
         
         const newPeriodData = {
@@ -640,10 +771,15 @@ const broadcastNewPeriod = (gameType, duration, newPeriodId) => {
             bettingOpen: true
         };
 
-        io.to(roomName).emit('newPeriod', newPeriodData);
-        io.to('games').emit('newPeriod', newPeriodData);
+        // 🚀 Use optimized broadcasting (no duplicates)
+        const rooms = new Set([
+            `${gameType}_${duration}`,
+            'games'
+        ]);
         
-        // Initialize bet distribution for admins
+        socketManager.queueBroadcast(Array.from(rooms), 'newPeriod', newPeriodData);
+        
+        // Initialize bet distribution for admins (separate event)
         io.to(adminRoomName).emit('newPeriodAdmin', {
             ...newPeriodData,
             initialDistribution: {
@@ -653,7 +789,7 @@ const broadcastNewPeriod = (gameType, duration, newPeriodId) => {
             }
         });
 
-        console.log(`🆕 New period broadcasted to ${roomName}: ${newPeriodId}`);
+        console.log(`🆕 New period broadcasted to ${gameType}_${duration}: ${newPeriodId}`);
 
     } catch (error) {
         console.error('Error broadcasting new period:', error);
