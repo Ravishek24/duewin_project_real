@@ -9,7 +9,7 @@ const VipLevel = require('../models/VipLevel');
 const Transaction = require('../models/Transaction');
 
 // Import wallet service
-const { updateWalletBalance } = require('./referralService');
+const { updateWalletBalance } = require('./walletBalanceUtils');
 
 /**
  * House games list - only these games qualify for self rebate
@@ -180,6 +180,10 @@ const getSelfRebateStats = async (userId, days = 30) => {
         const startDate = new Date();
         startDate.setDate(startDate.getDate() - days);
 
+        // Get today's date (start of day)
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
         const stats = await SelfRebate.findAll({
             where: {
                 user_id: userId,
@@ -190,6 +194,18 @@ const getSelfRebateStats = async (userId, days = 30) => {
                 [fn('SUM', col('bet_amount')), 'total_bet_amount'],
                 [fn('SUM', col('rebate_amount')), 'total_rebate_amount'],
                 [fn('AVG', col('rebate_rate')), 'avg_rebate_rate']
+            ],
+            raw: true
+        });
+
+        // Get today's rebate amount specifically
+        const todayStats = await SelfRebate.findAll({
+            where: {
+                user_id: userId,
+                created_at: { [Op.gte]: todayStart }
+            },
+            attributes: [
+                [fn('SUM', col('rebate_amount')), 'today_rebate_amount']
             ],
             raw: true
         });
@@ -217,6 +233,8 @@ const getSelfRebateStats = async (userId, days = 30) => {
             avg_rebate_rate: 0
         };
 
+        const todayRebateAmount = parseFloat(todayStats[0]?.today_rebate_amount || 0);
+
         return {
             success: true,
             period: `Last ${days} days`,
@@ -224,6 +242,7 @@ const getSelfRebateStats = async (userId, days = 30) => {
                 totalRebates: parseInt(totalStats.total_rebates) || 0,
                 totalBetAmount: parseFloat(totalStats.total_bet_amount) || 0,
                 totalRebateAmount: parseFloat(totalStats.total_rebate_amount) || 0,
+                todayRebateAmount: todayRebateAmount,
                 avgRebateRate: parseFloat(totalStats.avg_rebate_rate) * 100 || 0 // Convert to percentage
             },
             gameBreakdown: gameBreakdown.map(game => ({

@@ -1,0 +1,348 @@
+==================================================
+ WOWPAY PAYMENT GATEWAY INTEGRATION DOCUMENTATION
+==================================================
+
+1. INTERFACE INFORMATION
+--------------------------
+Request Address: https://test.wowpay.biz
+
+
+2. PURPOSE OF THE DOCUMENT
+--------------------------
+This documentation is used to guide merchants to achieve a smooth integration with the e-commerce payment gateway system. Relevant technical developers should read this document carefully.
+
+
+3. TARGET AUDIENCE
+--------------------------
+Merchant system designers, programmers, and testers.
+
+
+4. SAFETY INSTRUCTIONS
+--------------------------
+WARNING: Pay close attention to the following situations where financial loss may occur during technical integration!
+
+1. Keys must be kept secure. If your key is lost, unauthorized individuals may simulate asynchronous notifications, causing unpaid orders to be marked as paid and shipped, resulting in financial loss.
+
+2. After an order payment is successful, we send the result to your `notify_url`. After validating the signature, you MUST verify that the payment amount in the notification matches the actual amount the user was supposed to pay.
+
+3. The synchronous notification `return_url` is a user-redirect address. The user is sent here after payment or if they click a "return" button. This redirection CANNOT be used as a reliable basis for confirming payment. Always rely on the asynchronous `notify_url` callback.
+
+4. Our callback server IPs are 86.38.247.84 (IPv4) and fe80::be24:11ff:feb8:ed4c (IPv6). If your system uses an IP whitelist, please add these IPs to allow our callbacks.
+
+
+5. PAYMENT PROCESS DESCRIPTION
+--------------------------------
+1) The merchant generates an order based on the customer's action, including merchant number, order number, amount, etc., and submits a payment request to our gateway.
+2) We process the request data, performing security checks and other validations.
+3) After the user completes the payment, our server sends an asynchronous notification to the `notify_url` provided by the merchant in the initial request. If `notify_url` was not provided, this step is skipped.
+4) The merchant's server receives the successful payment notification, validates it, and processes the order on their end (e.g., ships the goods).
+5) After the asynchronous notification, the user's browser is redirected to the `return_url` provided by the merchant. If `return_url` was not provided, this step is skipped.
+
+
+6. DATA EXCHANGE AND COMMUNICATION PROTOCOLS
+--------------------------------------------
+- Submission Method: POST
+- Content-Type:      application/json; charset=utf-8
+- Data Format:       JSON for both requests and responses.
+- Character Encoding:  UTF-8
+- Signature Algorithm: MD5withRsa or MD5
+- Signature Requirement: All requests and responses must be signed and validated.
+- Logic Flow:        First, check the protocol fields in the response, then business-level fields, and finally the transaction status.
+
+
+7. DIGITAL SIGNATURE ALGORITHM
+--------------------------------
+1) Signature Methods
+The platform supports MD5withRsa and MD5. The callback from our platform will use the same signature method you used in your request.
+
+2) How Keys Are Used
+
+   MD5withRsa:
+   - Platform-to-Merchant (Callback): We sign the request with the Pay platform's private key. You must verify it using the Pay platform's public key.
+   - Merchant-to-Platform (Your Request): You sign the request with your own private key. We verify it using your public key.
+
+   MD5:
+   - Platform-to-Merchant (Callback): We sign the request using the shared merchant key. You verify the signature with the same merchant key.
+   - Merchant-to-Platform (Your Request): You sign the request using the shared merchant key. We verify the signature with the same merchant key.
+
+3) Data Splicing Rules for Signature Generation
+   - Step 1: Take all non-empty request parameters. Sort them alphabetically by parameter name (ASCII order). Concatenate them into a string in the format `key1=value1&key2=value2...`. This result is `stringA`.
+
+   - Important Rules:
+     a. Parameters must be sorted by name in ASCII order (A-Z).
+     b. Parameters with empty or null values are excluded from the signature base string.
+     c. Parameter names are case-sensitive.
+     d. The `sign` parameter itself is never included in the signature base string.
+
+   - Step 2 (for MD5withRsa):
+     RSA encrypt `stringA` using your private key to get the final `sign` value.
+
+   - Step 2 (for MD5):
+     Append `&key=` followed by your secret key to `stringA`. The result is `stringB`. Calculate the MD5 hash of `stringB`. The final `sign` value is the 32-character uppercase representation of the hash.
+
+
+8. INITIATE PAYMENT INTERFACE (DEPOSIT)
+----------------------------------------
+Request URL: https://{request_address}/gw-api/deposit/create
+
+Request Parameters:
+| Parameter     | Required | Type   | Description                                           |
+|---------------|----------|--------|-------------------------------------------------------|
+| merchant_no   | Yes      | string | Your unique merchant number provided by the system.   |
+| out_trade_sn  | Yes      | string | Your unique order number (max 50 chars).              |
+| title         | No       | string | Product name (max 200 chars).                         |
+| amount        | Yes      | string | Payment amount, formatted to two decimal places.      |
+| user_name     | No       | string | Payer's name (Required for Thailand).                 |
+| bank_card_no  | No       | string | Payer's card number (Required for Thailand).          |
+| attach        | No       | string | Additional info, returned as-is (max 255 chars).      |
+| return_url    | No       | string | URL for user redirection after payment (max 255 chars).|
+| notify_url    | Yes      | string | Asynchronous callback URL (max 255 chars).            |
+| sign_type     | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                |
+| sign          | Yes      | string | The generated signature string.                       |
+
+Response Parameters:
+| Parameter | Required | Type   | Description                                           |
+|-----------|----------|--------|-------------------------------------------------------|
+| code      | Yes      | string | Request status. `100` = Success, others = Fail.       |
+| message   | Yes      | string | Information about the request status.                 |
+| data      | Yes      | object | Response data body.                                   |
+| - order_sn| Yes      | string | The system-generated order number.                    |
+| - trade_url| Yes      | string | The URL for the cashier/payment page to redirect to.  |
+
+Test Request Example:
+- Pre-signature String: amount=100&attach=测试产品&merchant_no=ruNkLnM3bncNAzd7&notify_url=http://127.0.0.1:8000&out_trade_sn=20250624141011&return_url=http://127.0.0.1:8000&sign_type=MD5withRsa&title=测试产品
+- Signature Result: hUV6UdYDefjpaDldeVXP+j8ZI9CMizaRsgjIPY3nJfSBoZNnNo4+DVbp4IoKn1PDY9ygSaLKozeK74I/Npvn1GsbIbOl2UOm1Om0yMf5GR4GolvqjAuzcMxiFiDyQ81Lr3gUaVfhwXztvfcn2O6BgDNWzQTWGz9zgw6xz4azxlew8bqduDuQ3+H60jh0tz8WBjPgEMYx3EWTnBzCHaw5ijgPJzFam4tdpEduSTnfrl/9y+ea8RKVdSvDabBvbF/AbmSoR7XGtypReFdAqlkM42olfwyeqOqHPDdJ0cYIEXZIrM9kOHc2nc62Z2/VdEjUGYkhov6I6ZMJk/Ip55VF9Q==
+
+
+9. PAYMENT CALLBACK NOTIFICATION (DEPOSIT)
+------------------------------------------
+This is an asynchronous request sent from our server to your `notify_url`.
+
+Callback Parameters:
+| Parameter    | Required | Type   | Description                                               |
+|--------------|----------|--------|-----------------------------------------------------------|
+| merchant_no  | Yes      | string | Your merchant number.                                     |
+| out_trade_sn | Yes      | string | Your original order number.                               |
+| order_sn     | Yes      | string | The system-generated order number.                        |
+| amount       | Yes      | string | Payment amount.                                           |
+| payment_time | Yes      | string | Payment time in `yyyy-MM-dd HH:mm:ss` format.             |
+| attach       | No       | string | Additional info you sent in the original request.         |
+| trade_status | Yes      | string | `pending`, `success`, `timeout`, `failed`.                |
+| sign_type    | Yes      | string | Signature method used (`MD5withRsa` or `MD5`).              |
+| sign         | Yes      | string | Signature for this callback (not included in verification).|
+
+
+10. QUERY PAYMENT INTERFACE (DEPOSIT)
+---------------------------------------
+Request URL: https://{request_address}/gw-api/deposit/query
+
+Request Parameters:
+| Parameter    | Required | Type   | Description                                           |
+|--------------|----------|--------|-------------------------------------------------------|
+| merchant_no  | Yes      | string | Your unique merchant number.                          |
+| out_trade_sn | Yes      | string | Your unique order number (max 50 chars).              |
+| order_sn     | Yes      | string | The system-generated order number (max 50 chars).     |
+| sign_type    | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                |
+| sign         | Yes      | string | The generated signature string.                       |
+
+Response Parameters:
+| Parameter       | Required | Type    | Description                                               |
+|-----------------|----------|---------|-----------------------------------------------------------|
+| code            | Yes      | string  | Request status. `100` = Success, others = Fail.           |
+| message         | Yes      | string  | Information about the request status.                     |
+| data            | Yes      | object  | Response data body.                                       |
+| - merchant_no   | Yes      | string  | Your merchant number.                                     |
+| - out_trade_sn  | Yes      | string  | Your original order number.                               |
+| - order_sn      | Yes      | string  | The system-generated order number.                        |
+| - amount        | Yes      | decimal | Payment amount, with two decimal places.                  |
+| - payment_time  | Yes      | string  | Payment time in `yyyy-MM-dd HH:mm:ss` format.             |
+| - trade_status  | Yes      | string  | `pending`, `success`, `expired`, `failed`.                |
+
+
+11. INITIATE PAYOUT INTERFACE
+-------------------------------
+Request URL: https://{request_address}/gw-api/payout/create
+
+Request Parameters:
+| Parameter      | Required | Type   | Description                                                                 |
+|----------------|----------|--------|-----------------------------------------------------------------------------|
+| merchant_no    | Yes      | string | Your unique merchant number.                                                |
+| out_trade_sn   | Yes      | string | Your unique order number (max 50 chars).                                    |
+| amount         | Yes      | string | Payout amount, formatted to two decimal places.                             |
+| trade_account  | Yes      | string | Beneficiary's account name (max 50 chars).                                  |
+| trade_number   | Yes      | string | Beneficiary's bank card or account number (max 50 chars).                   |
+| attach         | No       | string | Additional info, returned as-is (max 255 chars).                            |
+| pix            | No       | string | Required for Brazil payments.                                               |
+| pix_type       | No       | string | Required for Brazil payments. Must be `CPF`, `PHONE`, `EMAIL`, `CNP`, `EVP`.  |
+| ifsc           | No       | string | Required for India payments.                                                |
+| bank_code      | No       | string | Required for Indonesia, Nigeria, Philippines, Thailand, Mexico payments.    |
+| notify_url     | Yes      | string | Asynchronous callback URL (max 255 chars).                                  |
+| mobile         | No       | string | Mobile number. Required for Colombia payouts.                               |
+| email          | No       | string | Email address. Required for Colombia payouts.                               |
+| identity       | No       | string | ID number. Required for Colombia payouts.                                   |
+| sign_type      | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                                      |
+| sign           | Yes      | string | The generated signature string.                                             |
+
+Response Parameters:
+| Parameter | Required | Type   | Description                                           |
+|-----------|----------|--------|-------------------------------------------------------|
+| code      | Yes      | string | Request status. `100` = Success, others = Fail.       |
+| message   | Yes      | string | Information about the request status.                 |
+| data      | Yes      | object | Response data body.                                   |
+| - order_sn| Yes      | string | The system-generated order number for the payout.     |
+
+
+12. PAYOUT CALLBACK NOTIFICATION
+--------------------------------
+This is an asynchronous request sent from our server to your `notify_url`.
+
+Callback Parameters:
+| Parameter    | Required | Type   | Description                                               |
+|--------------|----------|--------|-----------------------------------------------------------|
+| merchant_no  | Yes      | string | Your merchant number.                                     |
+| out_trade_sn | Yes      | string | Your original order number.                               |
+| order_sn     | Yes      | string | The system-generated order number.                        |
+| amount       | Yes      | string | Payout amount.                                            |
+| pay_time     | Yes      | string | Payout time in `yyyy-MM-dd HH:mm:ss` format.              |
+| attach       | No       | string | Additional info you sent in the original request.         |
+| trade_status | Yes      | string | `pending`, `success`, `rejected`, `failed`.               |
+| sign_type    | Yes      | string | Signature method used (`MD5withRsa` or `MD5`).              |
+| sign         | Yes      | string | Signature for this callback (not included in verification).|
+
+
+13. QUERY PAYOUT INTERFACE
+----------------------------
+Request URL: https://{request_address}/gw-api/payout/query
+
+Request Parameters:
+| Parameter    | Required | Type   | Description                                           |
+|--------------|----------|--------|-------------------------------------------------------|
+| merchant_no  | Yes      | string | Your unique merchant number.                          |
+| out_trade_sn | Yes      | string | Your unique order number (max 50 chars).              |
+| order_sn     | Yes      | string | The system-generated order number (max 50 chars).     |
+| sign_type    | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                |
+| sign         | Yes      | string | The generated signature string.                       |
+
+Response Parameters:
+| Parameter       | Required | Type    | Description                                               |
+|-----------------|----------|---------|-----------------------------------------------------------|
+| code            | Yes      | string  | Request status. `100` = Success, others = Fail.           |
+| message         | Yes      | string  | Information about the request status.                     |
+| data            | Yes      | object  | Response data body.                                       |
+| - merchant_no   | Yes      | string  | Your merchant number.                                     |
+| - out_trade_sn  | Yes      | string  | Your original order number.                               |
+| - order_sn      | Yes      | string  | The system-generated order number.                        |
+| - amount        | Yes      | decimal | Payout amount, with two decimal places.                   |
+| - payment_time  | Yes      | string  | Payout time in `yyyy-MM-dd HH:mm:ss` format.              |
+| - trade_status  | Yes      | string  | `pending`, `success`, `rejected`, `failed`.               |
+
+
+14. QUERY BANK CODE INTERFACE
+-------------------------------
+Request URL: https://{request_address}/gw-api/bank-code
+
+Request Parameters:
+| Parameter   | Required | Type   | Description                                |
+|-------------|----------|--------|--------------------------------------------|
+| merchant_no | Yes      | string | Your unique merchant number.               |
+| sign_type   | Yes      | string | Signature method: `MD5withRsa` or `MD5`.     |
+| sign        | Yes      | string | The generated signature string.            |
+
+Response Parameters:
+| Parameter  | Required | Type   | Description                                           |
+|------------|----------|--------|-------------------------------------------------------|
+| code       | Yes      | string | Request status. `100` = Success, others = Fail.       |
+| message    | Yes      | string | Information about the request status.                 |
+| data       | Yes      | array  | Array of bank objects.                                |
+| - bank_code| Yes      | string | The bank code.                                        |
+| - bank_name| Yes      | string | The name of the bank (max 50 chars).                  |
+
+
+15. QUERY USER BALANCE
+------------------------
+Request URL: https://{request_address}/gw-api/balance/query
+
+Request Parameters:
+| Parameter   | Required | Type   | Description                                |
+|-------------|----------|--------|--------------------------------------------|
+| merchant_no | Yes      | string | Your unique merchant number.               |
+| sign_type   | Yes      | string | Signature method: `MD5withRsa` or `MD5`.     |
+| sign        | Yes      | string | The generated signature string.            |
+
+Response Parameters:
+| Parameter        | Required | Type   | Description                                           |
+|------------------|----------|--------|-------------------------------------------------------|
+| code             | Yes      | string | Request status. `100` = Success, others = Fail.       |
+| message          | Yes      | string | Information about the request status.                 |
+| data             | Yes      | object | Response data body.                                   |
+| - currency       | Yes      | string | The currency of the balance.                          |
+| - balance        | Yes      | string | Total balance.                                        |
+| - usable_balance | Yes      | string | Balance available for withdrawal.                     |
+
+
+16. QUERY ORDER BY UTR
+------------------------
+Request URL: https://{request_address}/gw-api/utr/query
+
+Request Parameters:
+| Parameter   | Required | Type   | Description                                |
+|-------------|----------|--------|--------------------------------------------|
+| merchant_no | Yes      | string | Your unique merchant number.               |
+| utr         | Yes      | int    | The 12-digit UTR number.                   |
+| sign_type   | Yes      | string | Signature method: `MD5withRsa` or `MD5`.     |
+| sign        | Yes      | string | The generated signature string.            |
+
+Response Parameters:
+| Parameter  | Required | Type    | Description                                           |
+|------------|----------|---------|-------------------------------------------------------|
+| code       | Yes      | string  | Request status. `100` = Success, others = Fail.       |
+| message    | Yes      | string  | Information about the request status.                 |
+| data       | No       | object  | Data body, only present if code is `100`.             |
+| - status   | Yes      | string  | Order status: `success` (completed), `pending` (can be confirmed).|
+| - order_sn | No       | string  | Platform order number (only if status is `success`).  |
+| - amount   | Yes      | decimal | Payment amount, with two decimal places.              |
+
+
+17. CONFIRM ORDER BY UTR (MANUAL COMPLETION)
+---------------------------------------------
+Request URL: https://{request_address}/gw-api/utr/confirm
+
+Request Parameters:
+| Parameter    | Required | Type   | Description                                                   |
+|--------------|----------|--------|---------------------------------------------------------------|
+| merchant_no  | Yes      | string | Your unique merchant number.                                  |
+| utr          | Yes      | int    | The 12-digit UTR number.                                      |
+| order_sn     | No       | string | Platform order number. Must provide `order_sn` or `out_trade_sn`. |
+| out_trade_sn | No       | string | Merchant order number. Must provide `order_sn` or `out_trade_sn`. |
+| sign_type    | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                        |
+| sign         | Yes      | string | The generated signature string.                               |
+
+Response Parameters:
+| Parameter | Required | Type   | Description                                       |
+|-----------|----------|--------|---------------------------------------------------|
+| code      | Yes      | string | Request status. `100` = Success, others = Fail.   |
+| message   | Yes      | string | Information about the request status.             |
+
+
+
+
+
+
+
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+utr：
+202506241410
+订单号：
+20250624141011
+系统订单号：
+  System Order Number:
+20250624141011
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+bonsTx+tt1HAn3ePIc7hnWCAAVyXpu0ELkQL3H43qiOdJyC5/R0G+paC5DVpdJGbi/faaLt28hRT+/kH93d3avgb0XAX6XpiTe9huG8Vpi4pM8YFcrpvOdYBDzT1sOUU2HSSrbXPw2I1ISTmq0F7iJYsTGeGa5gYjElQm2oVbPsueUY3+PpkUxwvsX29YO7eW9NuoXnaKA9hkDy+b+7Jn16M5uPL/Fgf6ladYoZ20O8vswOM2OexPgqJxnjtUc4MgKuruEDsQAWLYPVqDjST4IiI6RYA+ryhC70nXMQIdcxfgjHXZwMrqLs/qQ9PSePeo6VrY0L3ZiRGXtw6syhXng==

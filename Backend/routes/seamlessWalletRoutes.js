@@ -181,6 +181,55 @@ router.post('/transfer-to-third-party', auth, async (req, res) => {
   }
 });
 
+// NEW: Manual transfer endpoint for game preparation
+router.post('/prepare-for-game', auth, async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const { gameId } = req.body;
+    
+    console.log(`🎮 Preparing user ${userId} for game ${gameId}`);
+    
+    // Check if user has balance in main wallet
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    if (parseFloat(user.wallet_balance) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No funds available in main wallet to transfer'
+      });
+    }
+    
+    // Transfer funds to third-party wallet
+    const result = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        message: 'Funds transferred successfully. You can now launch the game.',
+        gameId: gameId,
+        ...result
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: result.message || 'Failed to transfer funds'
+      });
+    }
+  } catch (error) {
+    console.error('Error preparing for game:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error preparing for game'
+    });
+  }
+});
+
 // Admin-only routes
 router.post('/freerounds/add', auth, addFreeRoundsController);
 router.post('/freerounds/remove', auth, removeFreeRoundsController);

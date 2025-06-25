@@ -8,6 +8,8 @@ const UsdtAccount = require('../models/UsdtAccount');
 const ReferralCommission = require('../models/ReferralCommission');
 const GameTransaction = require('../models/GameTransaction');
 const SeamlessTransaction = require('../models/SeamlessTransaction');
+const PaymentGateway = require('../models/PaymentGateway');
+const { updateWalletBalance } = require('./walletBalanceUtils');
 
 // Service to get user wallet balance
 const getWalletBalance = async (userId) => {
@@ -233,6 +235,7 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
         wr.payment_gateway_id,
         wr.status,
         wr.bonus_amount,
+        wr.order_id,
         wr.created_at,
         wr.updated_at,
         pg.name as payment_gateway_name,
@@ -256,6 +259,7 @@ const getRechargeHistory = async (userId, page = 1, limit = 10) => {
       success: true,
       recharges: rechargesArray.map(recharge => ({
         id: recharge.id,
+        order_id: recharge.order_id || `DEP${recharge.id}`,
         amount: parseFloat(recharge.amount).toFixed(2),
         bonus_amount: parseFloat(recharge.bonus_amount || 0).toFixed(2),
         status: recharge.status,
@@ -306,6 +310,7 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
         ww.id,
         ww.user_id,
         ww.amount,
+        ww.withdrawal_type,
         ww.payment_gateway_id,
         ww.transaction_id,
         ww.status,
@@ -337,8 +342,7 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
         amount: parseFloat(withdrawal.amount).toFixed(2),
         status: withdrawal.status,
         transaction_id: withdrawal.transaction_id,
-        payment_method: withdrawal.payment_gateway_name || 'Unknown',
-        payment_code: withdrawal.payment_gateway_code || null,
+        withdrawal_type: withdrawal.withdrawal_type || null,
         rejection_reason: withdrawal.rejection_reason,
         created_at: withdrawal.created_at,
         updated_at: withdrawal.updated_at
@@ -360,55 +364,6 @@ const getWithdrawalHistory = async (userId, page = 1, limit = 10) => {
   }
 };
 
-
-// Service to update wallet balance (internal use only)
-const updateWalletBalance = async (userId, amount, operation, transaction) => {
-  try {
-    const user = await User.findByPk(userId, {
-      attributes: ['user_id', 'wallet_balance'],
-      lock: true,
-      transaction
-    });
-
-    if (!user) {
-      return {
-        success: false,
-        message: 'User not found.'
-      };
-    }
-
-    const currentBalance = parseFloat(user.wallet_balance);
-    const newBalance = operation === 'add' 
-      ? currentBalance + parseFloat(amount)
-      : currentBalance - parseFloat(amount);
-
-    if (newBalance < 0) {
-      return {
-        success: false,
-        message: 'Insufficient balance.'
-      };
-    }
-
-    await User.update(
-      { wallet_balance: newBalance },
-      { 
-        where: { user_id: userId },
-        transaction
-      }
-    );
-
-    return {
-      success: true,
-      newBalance: newBalance
-    };
-  } catch (error) {
-    console.error('Error updating wallet balance:', error);
-    return {
-      success: false,
-      message: 'Server error updating wallet balance.'
-    };
-  }
-};
 
 // Service to process wallet recharge
 const processRecharge = async (userId, amount, orderId, transactionId, paymentGateway) => {
@@ -515,7 +470,7 @@ const processRecharge = async (userId, amount, orderId, transactionId, paymentGa
 };
 
 // Service to process wallet withdrawal
-const processWithdrawal = async (userId, amount, orderId, transactionId, paymentGateway, withdrawalType) => {
+const processWithdrawal = async (userId, amount, orderId, transactionId, paymentGateway, withdrawalType, bank_account_id, usdt_account_id) => {
   const t = await sequelize.transaction();
 
   try {
@@ -561,17 +516,39 @@ const processWithdrawal = async (userId, amount, orderId, transactionId, payment
       };
     }
 
-    // Create withdrawal record
-    const withdrawal = await WalletWithdrawal.create({
+    // Get payment gateway ID
+    const gateway = await PaymentGateway.findOne({
+      where: { code: paymentGateway },
+      transaction: t
+    });
+
+    if (!gateway) {
+      await t.rollback();
+      return {
+        success: false,
+        message: 'Invalid payment gateway.'
+      };
+    }
+
+    // Prepare withdrawal data
+    const withdrawalData = {
       user_id: userId,
-      withdrawal_amount: amount,
-      order_id: orderId,
+      amount: amount,
+      payment_gateway_id: gateway.gateway_id,
       transaction_id: transactionId,
-      payment_gateway: paymentGateway,
+      status: 'pending',
       withdrawal_type: withdrawalType,
-      payment_status: true,
-      time_of_success: new Date()
-    }, { transaction: t });
+      created_at: new Date(),
+      updated_at: new Date()
+    };
+    if (withdrawalType === 'BANK') {
+      withdrawalData.bank_account_id = bank_account_id;
+    } else if (withdrawalType === 'USDT') {
+      withdrawalData.usdt_account_id = usdt_account_id;
+    }
+
+    // Create withdrawal record
+    const withdrawal = await WalletWithdrawal.create(withdrawalData, { transaction: t });
 
     // Update wallet balance
     const balanceResult = await updateWalletBalance(userId, amount, 'subtract', t);

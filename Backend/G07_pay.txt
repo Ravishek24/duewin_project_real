@@ -1,0 +1,250 @@
+Of course. I have analyzed the document.
+
+-----
+
+````text
+==================================================
+ SOLPAY PAYMENT GATEWAY INTEGRATION DOCUMENTATION
+==================================================
+
+1. GENERAL INFORMATION & PROTOCOLS
+------------------------------------
+
+1.1. Data Interaction
+- Submission Method: POST
+- Content-Type:      application/json; charset=utf-8
+- Data Format:       JSON for both requests and responses.
+- Character Encoding:  UTF-8
+- Amount Format:     Amounts are strings with two decimal places (e.g., "100.00").
+
+1.2. Signature Algorithm
+- Type: RSA Asymmetric Encryption
+- Key Length: 1024 bits
+- Key Format: PKCS#8
+- Requirement: All requests and responses must be signed and validated.
+
+1.3. Important Precautions
+- API request parameters must not contain Chinese characters or special symbols like emojis.
+- The `name` field in the payment API is for display purposes on the user's side and is not validated. It should be composed of letters, numbers, and spaces, not exceeding 30 characters.
+- The `email` and `phone` fields are required by upstream providers but are not used to contact the customer. However, they must follow correct formatting rules (e.g., phone numbers must be purely numeric, email must be in `xxx@xx.xx` format).
+
+1.4. Payout Fee Type (`feeType`) Explanation
+This field in the Payout API determines how the transaction fee is handled:
+- `0`: The fee is DEDUCTED FROM THE TRANSFER AMOUNT. (e.g., Request payout of 1000, fee is 5, customer receives 995).
+- `1`: The fee is DEDUCTED FROM THE MERCHANT'S BALANCE. (e.g., Request payout of 1000, customer receives 1000, merchant balance is debited 1005).
+
+
+2. MERCHANT ACCOUNT & CONFIGURATION
+-------------------------------------
+
+2.1. Account Application
+- To get started, apply to open a merchant account with the platform.
+
+2.2. RSA Key Configuration
+The platform uses RSA asymmetric encryption to secure transaction data.
+- **Merchant Request Flow**: You sign request data with your **Merchant Private Key**. The platform verifies it using the **Merchant Public Key** you have configured in the merchant portal.
+- **Platform Response Flow**: The platform signs response data with the **Platform Private Key**. You verify it using the **Platform Public Key** displayed in your merchant portal.
+
+2.3. Generating RSA Keys
+- You can use online tools to generate a 1024-bit, PKCS#8 format RSA key pair.
+- Example Tool: `http://web.chacuo.net/netrsakeypair`
+- Before using the public or private key, ensure you remove all line breaks and spaces. You can use a tool like `http://www.txttool.com/WenBen_StrCompress.asp`.
+
+2.4. Payout IP Whitelist
+- To use the Payout (Transfer) API, you must configure an IP whitelist. Please contact customer service to set this up.
+
+2.5. Merchant Account Top-Up (Recharge)
+- Please contact customer service to get the recharge account information.
+- When making a remittance, you must include a remark in the format: `Your Merchant Name + Date`.
+- Keep a screenshot of the payment receipt.
+- After payment, log in to the system backend, go to "Financial Center" -> "Recharge", click "Offline Recharge", and upload the screenshot for review. Your account will be credited after the review is complete.
+
+
+3. SIGNATURE & ENCRYPTION RULES (RSA)
+---------------------------------------
+
+This process is used for creating the `sign` field in your requests.
+
+- **Step 1: Create the String-to-Sign (`strX`)**
+  Take all parameters in your request JSON object. Sort them alphabetically by the parameter name (the "key"). Then, concatenate ONLY THE VALUES of these sorted parameters into a single string.
+
+- **IMPORTANT RULES for `strX` Creation:**
+  - The sorting is based on the parameter name's ASCII value (A-Z).
+  - Only the parameter values are concatenated, not the keys.
+  - Parameter values are used in their original form and should NOT be URL-encoded.
+  - The `platSign` parameter from platform responses is never included when you verify a signature.
+
+- **Step 2: Encrypt the String**
+  Use your **Merchant Private Key** to RSA-encrypt the `strX` string created in Step 1. The result is your signature.
+
+- **Step 3: Add Signature to Request**
+  Add the generated signature to your original JSON request payload with the key `sign`.
+
+- **Example:**
+  1. Original request JSON:
+     ```json
+     {
+         "dateTime": "20200712205101",
+         "merchantCode": "S820200906085630000001",
+         "payMoney": "20000",
+         "method": "BRI",
+         "productDetail": "Buy Bus",
+         "phone": "06281235078907",
+         "name": "King",
+         "orderNum": "ORD1232r343",
+         "notifyUrl": "[https://www.my.biz.com](https://www.my.biz.com)",
+         "expiryPeriod": "1440",
+         "email": "biz@mail.com"
+     }
+     ```
+
+  2. After sorting keys alphabetically (`dateTime`, `email`, `expiryPeriod`, `merchantCode`, etc.), the concatenated VALUE string (`strX`) is:
+     `20200712205101biz@mail.com1440S820200906085630000001BRIKinghttps://www.my.biz.comORD1232r3432000006281235078907Buy Bus`
+
+  3. RSA-encrypt `strX` with your private key to get the signature.
+
+  4. Final request payload sent to the server:
+     ```json
+     {
+         "dateTime": "...",
+         "merchantCode": "...",
+         "payMoney": "...",
+         "method": "...",
+         "productDetail": "...",
+         "phone": "...",
+         "name": "...",
+         "orderNum": "...",
+         "notifyUrl": "...",
+         "expiryPeriod": "...",
+         "email": "...",
+         "sign": "PH+WZVUQirCsmKN8DbHJeHuozWWEia0fUW+CkKU6iJ5z51sOfbGYoEZK6AsIYgD6THAi9h7kFlRkgU0+39Hh+1iQ0MJA403HBYmM9LmCkCx0xtEyRwaYKlhGu/48GFucIWTyxvi7DnkxpBHz8LQPWiIyklvo5T/2T/LX+FO2joO+xAXwCzPc1iG66yrWK4sXsYOO6Ge5z8XgaVfnCuaTqeIvKMffHY15sS45DxSxzkXV9xRM3nfryNn74d6UyrH7KpauCyKZhHxfQktKUvlgbf1nHJK35RRg/1vB02oKu3YjBD6aciQhQuasCx9H7c1mC/3tt0OymwokzFTwpiRVFA=="
+     }
+     ```
+
+4. ASYNCHRONOUS CALLBACK RULES
+-------------------------------
+
+- **Format**: Callbacks are sent from the platform to your `notifyUrl` as a `POST` request with `form` data.
+- **Required Response**: Upon receiving a notification and successfully processing it, your server **MUST** respond with the plain text string `SUCCESS`.
+- **Retry Mechanism**: If your server does not return `SUCCESS`, the platform will retry the notification 6 times in total.
+- **Retry Schedule**: 1 second, 30 seconds, 60 seconds, 90 seconds, 1 hour, 2 hours.
+- **NOTE ON DUPLICATE NOTIFICATIONS**: Due to network conditions, notifications may be delayed or sent more than once. Your system must be ableto handle duplicate notifications. If you have already processed an order status update, simply return `SUCCESS` without processing it again.
+
+
+5. API ENDPOINTS
+------------------
+
+### 5.1. India Deposit (Collection)
+- **Description**: Creates a payment link for a customer to deposit funds.
+- **URL**: `https://openapi.solpay.link/gateway/v1/INR/pay`
+- **Method**: POST
+- **Request Parameters**:
+| Parameter     | Type        | Required | Description                                                            |
+|---------------|-------------|----------|------------------------------------------------------------------------|
+| merchantCode  | String      | Yes      | Your Merchant ID from the merchant portal.                             |
+| orderNum      | String(<=32)| Yes      | Your unique order number.                                              |
+| payMoney      | String      | Yes      | Transaction amount (e.g., "100.00").                                   |
+| productDetail | String(<=32)| Yes      | A description of the product or service.                               |
+| name          | String(<=32)| Yes      | Customer's name (does not require validation).                         |
+| email         | String(<=32)| Yes      | Customer's email (must be a valid format).                             |
+| phone         | String(<=32)| Yes      | Customer's phone number.                                               |
+| notifyUrl     | String(<=200)| Yes      | Your callback URL for asynchronous notifications.                      |
+| redirectUrl   | String(<=200)| Yes      | URL to redirect the user to after a successful payment.                |
+| expiryPeriod  | String      | Yes      | Order expiration time in minutes [30-7200]. Default is `1440`.          |
+| sign          | String      | Yes      | RSA signature of the request. See Section 3.                           |
+- **Response Parameters**:
+| Parameter       | Type   | Description                                                           |
+|-----------------|--------|-----------------------------------------------------------------------|
+| platRespCode    | String | Response code (`SUCCESS`, `FAIL`, `UNKNOWN`, etc.). This is the API request status, not the order status. |
+| platOrderNum    | String | The order number generated by the platform.                           |
+| url             | String | The cashier URL to which the user should be redirected.               |
+| orderNum        | String | Your original merchant order number.                                  |
+| name            | String | Customer's name.                                                      |
+| email           | String | Customer's email.                                                     |
+| phone           | String | Customer's phone number.                                              |
+| payMoney        | String | Transaction amount.                                                   |
+| payFee          | String | Transaction fee.                                                      |
+| platSign        | String | The platform's RSA signature for the response. You must verify this.  |
+
+### 5.2. India Payout (Withdrawal)
+- **Description**: Transfers funds from your merchant account to a specified beneficiary account in India.
+- **URL**: `https://openapi.solpay.link/gateway/v1/INR/cash`
+- **Method**: POST
+- **Request Parameters**:
+| Parameter   | Type        | Required | Description                                                            |
+|-------------|-------------|----------|------------------------------------------------------------------------|
+| merchantCode| String      | Yes      | Your Merchant ID.                                                      |
+| orderNum    | String(<=32)| Yes      | Your unique order number for this payout.                              |
+| money       | String      | Yes      | Payout amount (e.g., "100.00").                                        |
+| description | String(<=32)| Yes      | Description of the transaction.                                        |
+| name        | String(<=32)| Yes      | Beneficiary's full name.                                               |
+| bankName    | String(<=32)| Yes      | Beneficiary's bank name.                                               |
+| bankAccount | String(<=32)| Yes      | Beneficiary's bank account number.                                     |
+| ifscCode    | String(<=32)| Yes      | Beneficiary's bank IFSC code.                                          |
+| notifyUrl   | String(<=200)| Yes      | Your callback URL for asynchronous notifications.                      |
+| email       | String(<=32)| Yes      | Beneficiary's email.                                                   |
+| phone       | String(<=32)| Yes      | Beneficiary's phone number (purely numeric, no country code).          |
+| feeType     | String      | Yes      | Fee handling: `0` (deduct from amount), `1` (deduct from balance).     |
+| sign        | String      | Yes      | RSA signature of the request.                                          |
+- **Response Parameters**:
+| Parameter       | Type   | Description                                                           |
+|-----------------|--------|-----------------------------------------------------------------------|
+| platRespCode    | String | API request status (`SUCCESS`, `FAIL`, etc.).                           |
+| platOrderNum    | String | The payout order number generated by the platform.                    |
+| orderNum        | String | Your original payout order number.                                    |
+| statusMsg       | String | A description of the status, e.g., "Apply".                           |
+| money           | String | Payout amount.                                                        |
+| fee             | String | Transaction fee.                                                      |
+| platSign        | String | The platform's RSA signature for the response.                        |
+
+### 5.3. Query APIs
+- **Description**: A single endpoint to query the status of both deposit and payout orders.
+- **URL**: `https://openapi.solpay.link/gateway/v1/query`
+- **Method**: POST
+- **Request Parameters**:
+| Parameter    | Type   | Required | Description                                                            |
+|--------------|--------|----------|------------------------------------------------------------------------|
+| merchantCode | String | Yes      | Your Merchant ID.                                                      |
+| platOrderNum | String | Yes      | The platform-generated order number you want to query.                 |
+| queryType    | String | Yes      | Type of query: `ORDER_QUERY` (for deposits), `CASH_QUERY` (for payouts). |
+| sign         | String | Yes      | RSA signature of the request.                                          |
+- **Response Parameters & Status Codes**:
+| Parameter    | Type   | Description                                                                     |
+|--------------|--------|---------------------------------------------------------------------------------|
+| platRespCode | String | API request status (`SUCCESS`, `FAIL`, etc.).                                     |
+| platOrderNum | String | Platform order number.                                                          |
+| orderNum     | String | Your merchant order number.                                                     |
+| amount       | double | Transaction amount.                                                             |
+| fee          | double | Transaction fee.                                                                |
+| status       | String | The actual status of the order. See breakdown below.                            |
+| msg          | String | Description of the status.                                                      |
+| tradeTime    | String | Transaction time (successful/failed), format `YYYY-MM-DD HH:mm:ss`.               |
+| platSign     | String | The platform's RSA signature for the response.                                  |
+
+- **`status` Breakdown for `ORDER_QUERY` (Deposit):**
+  - **Unpaid**: `INIT_ORDER`, `NO_PAY`, `OPEN_PAY_URL`
+  - **Success**: `SUCCESS`
+  - **Failed**: `PAY_CANCEL`, `PAY_ERROR`
+
+- **`status` Breakdown for `CASH_QUERY` (Payout):**
+  - **In Progress**: `0`, `1`, `5`
+  - **Success**: `2`
+  - **Failed**: `3`, `4`
+
+### 5.4. Query Account Balance
+- **Description**: Check your available and frozen balances.
+- **URL**: `https://openapi.solpay.link/gateway/v1/queryBalance`
+- **Method**: POST
+- **Request Parameters**:
+| Parameter    | Type   | Required | Description           |
+|--------------|--------|----------|-----------------------|
+| merchantCode | String | Yes      | Your Merchant ID.     |
+| sign         | String | Yes      | RSA signature.        |
+- **Response Parameters**:
+| Parameter    | Type   | Description                                             |
+|--------------|--------|---------------------------------------------------------|
+| platRespCode | String | API request status (`SUCCESS`, `FAIL`, etc.).            |
+| balance      | double | Your available balance.                                 |
+| freeze       | double | Your frozen balance (payouts in progress, unsettled funds). |
+| platSign     | String | The platform's RSA signature for the response.          |
+````

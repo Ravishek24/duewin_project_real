@@ -47,7 +47,7 @@ async function updateBalance() {
         // Find user by phone number
         const user = await User.findOne({
             where: {
-                phone_no: '1234567894'
+                phone_no: '0123456789'
             }
         });
 

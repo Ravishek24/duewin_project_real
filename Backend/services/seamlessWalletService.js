@@ -316,11 +316,9 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
     // 2. Ensure third-party wallet exists and has balance
     const walletResult = await thirdPartyWalletService.getBalance(userId);
     if (!walletResult.success || walletResult.balance <= 0) {
-      console.log('💰 Transferring funds to third-party wallet...');
-      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
-      if (!transferResult.success) {
-        console.warn('⚠️ Transfer failed:', transferResult.message);
-      }
+      console.log('💰 No balance in third-party wallet. User needs to transfer funds manually.');
+      // REMOVED: Automatic transfer to prevent unwanted transfers
+      // Users should manually transfer funds when they want to play
     }
 
     // 3. Get game URL using exact credentials
@@ -518,6 +516,13 @@ const processDebitRequest = async (queryParams) => {
       
       return { status: '500', msg: 'Failed to update wallet' };
     }
+
+    // Update total_bet_amount
+    await User.increment('total_bet_amount', {
+      by: betAmount,
+      where: { user_id: user.user_id },
+      transaction: t
+    });
     
     // Record transaction
     const transactionRecord = await SeamlessTransaction.create({

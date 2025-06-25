@@ -21,6 +21,16 @@ class WalletRecharge extends Model {
                 type: DataTypes.DECIMAL(10, 2),
                 allowNull: false
             },
+            order_id: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Unique order ID for payment tracking'
+            },
+            transaction_id: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Transaction ID from payment gateway'
+            },
             payment_gateway_id: {
                 type: DataTypes.INTEGER,
                 allowNull: false,

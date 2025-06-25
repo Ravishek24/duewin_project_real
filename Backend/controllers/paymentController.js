@@ -24,6 +24,45 @@ const {
   processOkPayCallback 
 } = require('../services/okPayService');
 
+// Import the new GH Pay service
+const { 
+  createGhPayDepositOrder,
+  processGhPayWithdrawal,
+  processGhPayCallback
+} = require('../services/ghPayService');
+
+// Import the new WOWPAY service
+const {
+  createWowPayDepositOrder,
+  processWowPayDepositCallback,
+  createWowPayWithdrawalOrder,
+  processWowPayWithdrawalCallback
+} = require('../services/wowPayService');
+
+// Import the new PPAYPRO service
+const {
+  createPpayProDepositOrder,
+  processPpayProDepositCallback,
+  createPpayProWithdrawalOrder,
+  processPpayProWithdrawalCallback
+} = require('../services/ppayProService');
+
+// Import the new SOLPAY service
+const {
+  createSolPayDepositOrder,
+  processSolPayDepositCallback,
+  createSolPayWithdrawalOrder,
+  processSolPayWithdrawalCallback
+} = require('../services/solPayService');
+
+// Import the new LPay service
+const {
+  createLPayCollectionOrder,
+  processLPayCollectionCallback,
+  createLPayTransferOrder,
+  processLPayWithdrawalCallback
+} = require('../services/lPayService');
+
 // Import PaymentGateway model
 const PaymentGateway = require('../models/PaymentGateway');
 const User = require('../models/User');
@@ -34,10 +73,10 @@ const WalletWithdrawal = require('../models/WalletWithdrawal');
 // Controller to handle payment creation (adding money to wallet) with gateway selection
 // Updated section for paymentController.js to include MxPay
 
-// Update the payInController to support OKPAY specifically
+// Update the payInController to support PPAYPRO
 const payInController = async (req, res) => {
   try {
-    const { amount, pay_type = 'UPI', gateway = 'OKPAY' } = req.body;
+    const { amount, pay_type = 'UPI', gateway = 'OKPAY', paymentType, channel, feeType, ...optionalFields } = req.body;
     const userId = req.user.user_id;
 
     if (!amount || parseFloat(amount) <= 0) {
@@ -78,6 +117,27 @@ const payInController = async (req, res) => {
       case 'OKPAY':
         notifyUrl = `${host}/api/payments/okpay/payin-callback`;
         break;
+      case 'GHPAY':
+        notifyUrl = `${host}/api/payments/ghpay/payin-callback`;
+        break;
+      case 'WOWPAY':
+        notifyUrl = `${host}/api/payments/wowpay/payin-callback`;
+        break;
+      case 'PPAYPRO':
+        notifyUrl = `${host}/api/payments/ppaypro/payin-callback`;
+        break;
+      case 'SOLPAY':
+        notifyUrl = `${host}/api/payments/solpay/payin-callback`;
+        break;
+      case 'LPAY':
+        result = await createLPayCollectionOrder(
+          userId,
+          orderId,
+          amount,
+          notifyUrl,
+          paymentGateway.gateway_id // or returnUrl if needed
+        );
+        break;
       default:
         notifyUrl = `${host}/api/payments/okpay/payin-callback`;
         break;
@@ -90,19 +150,75 @@ const payInController = async (req, res) => {
     // Choose the appropriate payment gateway
     switch (gateway) {
       case 'WEPAY':
-        // Use WePay payment gateway
         result = await createWePayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
         break;
       case 'MXPAY':
-        // Use MxPay payment gateway
         result = await createMxPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
         break;
       case 'OKPAY':
-        // Use OKPAY payment gateway (our new implementation)
         result = await createOkPayCollectionOrder(userId, orderId, pay_type, amount, notifyUrl, paymentGateway.gateway_id);
         break;
+      case 'GHPAY':
+        result = await createGhPayDepositOrder(
+          userId,
+          orderId,
+          {
+            paymentType: paymentType || '1001',
+            gold: amount,
+            channel: channel || 0,
+            feeType: feeType || 0,
+            optionalFields
+          },
+          notifyUrl,
+          paymentGateway.gateway_id
+        );
+        break;
+      case 'WOWPAY':
+        result = await createWowPayDepositOrder(
+          userId,
+          orderId,
+          {
+            amount: amount.toFixed(2),
+            ...optionalFields
+          },
+          notifyUrl,
+          paymentGateway.gateway_id
+        );
+        break;
+      case 'PPAYPRO':
+        result = await createPpayProDepositOrder(
+          userId,
+          orderId,
+          {
+            amount: parseInt(amount, 10), // PPAYPRO expects integer (smallest unit)
+            ...optionalFields
+          },
+          notifyUrl,
+          paymentGateway.gateway_id
+        );
+        break;
+      case 'SOLPAY':
+        result = await createSolPayDepositOrder(
+          userId,
+          orderId,
+          {
+            amount: amount.toFixed(2),
+            ...optionalFields
+          },
+          notifyUrl,
+          paymentGateway.gateway_id
+        );
+        break;
+      case 'LPAY':
+        result = await createLPayCollectionOrder(
+          userId,
+          orderId,
+          amount,
+          notifyUrl,
+          paymentGateway.gateway_id // or returnUrl if needed
+        );
+        break;
       default:
-        // Default to OKPAY payment gateway
         result = await createOkPayCollectionOrder(userId, orderId, pay_type, amount, notifyUrl, paymentGateway.gateway_id);
         break;
     }
@@ -121,7 +237,7 @@ const payInController = async (req, res) => {
   }
 };
 
-// Update the processWithdrawalAdminAction function to support MxPay
+// Update the processWithdrawalAdminAction function to support PPAYPRO
 const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes = '') => {
   const t = await sequelize.transaction();
 
@@ -209,6 +325,64 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
         case 'MXPAY':
           notifyUrl = `${host}/api/payments/mxpay/transfer-callback`;
           transferResult = await processMxPayTransfer(withdrawalId, notifyUrl);
+          break;
+        case 'GHPAY':
+          notifyUrl = `${host}/api/payments/ghpay/payout-callback`;
+          transferResult = await processGhPayWithdrawal(withdrawalId, notifyUrl);
+          break;
+        case 'WOWPAY':
+          notifyUrl = `${host}/api/payments/wowpay/payout-callback`;
+          transferResult = await createWowPayWithdrawalOrder(
+            withdrawal.user_id,
+            withdrawal.order_id,
+            {
+              amount: withdrawal.amount.toFixed(2),
+              trade_account: withdrawal.account_holder,
+              trade_number: withdrawal.account_number,
+              // Add more fields as needed from withdrawal/bank account
+            },
+            notifyUrl,
+            withdrawal.payment_gateway_id
+          );
+          break;
+        case 'PPAYPRO':
+          notifyUrl = `${host}/api/payments/ppaypro/payout-callback`;
+          transferResult = await createPpayProWithdrawalOrder(
+            withdrawal.user_id,
+            withdrawal.order_id,
+            {
+              amount: parseInt(withdrawal.amount, 10),
+              entryType: withdrawal.withdrawal_type, // e.g., 'IMPS', 'UPI', etc.
+              accountNo: withdrawal.account_number,
+              accountCode: withdrawal.ifsc_code, // or other code as needed
+              accountName: withdrawal.account_holder,
+              accountEmail: withdrawal.account_email,
+              accountPhone: withdrawal.account_phone,
+              // Add more fields as needed from withdrawal/bank account
+            },
+            notifyUrl,
+            withdrawal.payment_gateway_id
+          );
+          break;
+        case 'SOLPAY':
+          notifyUrl = `${host}/api/payments/solpay/payout-callback`;
+          transferResult = await createSolPayWithdrawalOrder(
+            withdrawal.user_id,
+            withdrawal.order_id,
+            {
+              amount: withdrawal.amount,
+              name: withdrawal.account_holder,
+              bankName: withdrawal.bank_name,
+              bankAccount: withdrawal.account_number,
+              ifscCode: withdrawal.ifsc_code,
+              email: withdrawal.account_email,
+              phone: withdrawal.account_phone,
+              feeType: withdrawal.fee_type || '0',
+              description: withdrawal.remark || 'Withdrawal'
+            },
+            notifyUrl,
+            withdrawal.payment_gateway_id
+          );
           break;
         default: // OKPAY or any other
           notifyUrl = `${host}/api/payments/okpay/payout-callback`;
@@ -436,6 +610,25 @@ const okPayCallbackController = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Server error processing OKPAY callback'
+    });
+  }
+};
+
+// Add GH Pay-specific callback handler
+const ghPayCallbackController = async (req, res) => {
+  try {
+    console.log('GHPAY Callback Received:', req.body);
+    const result = await processGhPayCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('success');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing GHPAY callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing GHPAY callback'
     });
   }
 };
@@ -680,10 +873,147 @@ const getWithdrawalHistory = async (req, res) => {
     }
 };
 
-// REMOVED PROBLEMATIC CODE:
-// This was causing the error:
-// const attendanceResult = await autoProcessRechargeForAttendance(userId, rechargeAmount);
-// console.log('Attendance processed for recharge:', attendanceResult);
+// Add WOWPAY withdrawal callback handler
+const wowPayWithdrawalCallbackController = async (req, res) => {
+  try {
+    console.log('WOWPAY Withdrawal Callback Received:', req.body);
+    const result = await processWowPayWithdrawalCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('success');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing WOWPAY withdrawal callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing WOWPAY withdrawal callback'
+    });
+  }
+};
+
+// Add PPAYPRO deposit callback handler
+const ppayProDepositCallbackController = async (req, res) => {
+  try {
+    console.log('PPayPro Deposit Callback Received:', req.body);
+    const result = await processPpayProDepositCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('success');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing PPayPro deposit callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing PPayPro deposit callback'
+    });
+  }
+};
+
+// Add PPAYPRO withdrawal callback handler
+const ppayProWithdrawalCallbackController = async (req, res) => {
+  try {
+    console.log('PPayPro Withdrawal Callback Received:', req.body);
+    const result = await processPpayProWithdrawalCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('success');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing PPayPro withdrawal callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing PPayPro withdrawal callback'
+    });
+  }
+};
+
+// Add SOLPAY deposit callback handler
+const solPayDepositCallbackController = async (req, res) => {
+  try {
+    console.log('SOLPAY Deposit Callback Received:', req.body);
+    const result = await processSolPayDepositCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('SUCCESS');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing SOLPAY deposit callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing SOLPAY deposit callback'
+    });
+  }
+};
+
+// Add SOLPAY withdrawal callback handler
+const solPayWithdrawalCallbackController = async (req, res) => {
+  try {
+    console.log('SOLPAY Withdrawal Callback Received:', req.body);
+    const result = await processSolPayWithdrawalCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('SUCCESS');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing SOLPAY withdrawal callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing SOLPAY withdrawal callback'
+    });
+  }
+};
+
+// Add WOWPAY deposit callback handler
+const wowPayDepositCallbackController = async (req, res) => {
+  try {
+    console.log('WOWPAY Deposit Callback Received:', req.body);
+    const result = await processWowPayDepositCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('success');
+    } else {
+      return res.status(200).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing WOWPAY deposit callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing WOWPAY deposit callback'
+    });
+  }
+};
+
+// Add LPay deposit callback controller
+const lPayDepositCallbackController = async (req, res) => {
+  try {
+    const result = await processLPayCollectionCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('ok');
+    } else {
+      return res.status(400).json(result);
+    }
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Add LPay withdrawal callback controller
+const lPayWithdrawalCallbackController = async (req, res) => {
+  try {
+    const result = await processLPayWithdrawalCallback(req.body);
+    if (result.success) {
+      return res.status(200).send('ok');
+    } else {
+      return res.status(400).json(result);
+    }
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 module.exports = {
   payInController,
@@ -696,7 +1026,16 @@ module.exports = {
   wePayTransferCallbackController,
   getPaymentStatusController,
   okPayCallbackController,
+  ghPayCallbackController,
   initiateDeposit,
   getDepositHistory,
-  getWithdrawalHistory
+  getWithdrawalHistory,
+  wowPayWithdrawalCallbackController,
+  ppayProDepositCallbackController,
+  ppayProWithdrawalCallbackController,
+  solPayDepositCallbackController,
+  solPayWithdrawalCallbackController,
+  wowPayDepositCallbackController,
+  lPayDepositCallbackController,
+  lPayWithdrawalCallbackController,
 };

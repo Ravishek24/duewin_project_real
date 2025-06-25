@@ -23,10 +23,18 @@ const initializeModel = async (modelFile, modelName, sequelize) => {
         // Handle different model types
         if (typeof model === 'function') {
             if (model.prototype && model.prototype.constructor.name === modelName) {
-                // Class-based model
-                const initializedModel = model.init(sequelize);
-                verifyModelMethods(initializedModel, modelName);
-                return initializedModel;
+                // Class-based model with static init method
+                if (typeof model.init === 'function') {
+                    // Call the static init method on the class
+                    const initializedModel = model.init(sequelize);
+                    verifyModelMethods(initializedModel, modelName);
+                    return initializedModel;
+                } else {
+                    // Class-based model without static init - call as constructor
+                    const initializedModel = new model();
+                    verifyModelMethods(initializedModel, modelName);
+                    return initializedModel;
+                }
             } else {
                 // Function-based model (module.exports = (sequelize, DataTypes) => { ... })
                 const initializedModel = model(sequelize, sequelize.constructor.DataTypes);
@@ -75,10 +83,13 @@ const initializeModels = async () => {
             console.log('🔄 Initializing models...');
 
             // Import sequelize AFTER database connection is established
-            const { sequelize, waitForDatabase } = require('../config/db');
+            const { getSequelizeInstance, waitForDatabase } = require('../config/db');
 
             // Wait for database to be ready
             await waitForDatabase();
+
+            // Get the sequelize instance
+            const sequelize = await getSequelizeInstance();
 
             // Import all model files
             const modelFiles = [

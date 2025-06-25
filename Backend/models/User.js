@@ -100,6 +100,11 @@ class User extends Model {
                 type: DataTypes.INTEGER,
                 defaultValue: 0
             },
+            valid_referral_count: {
+                type: DataTypes.INTEGER,
+                defaultValue: 0,
+                comment: 'Number of valid referrals (users who have recharged at least ₹300)'
+            },
             referral_level: {
                 type: DataTypes.INTEGER,
                 defaultValue: 0
@@ -194,8 +199,8 @@ class User extends Model {
                             'password', 'referral_code', 'referring_code', 'wallet_balance',
                             'is_admin', 'is_phone_verified', 'is_blocked', 'block_reason',
                             'blocked_at', 'current_ip', 'registration_ip', 'phone_otp_session_id',
-                            'vip_exp', 'vip_level', 'direct_referral_count', 'referral_level',
-                            'reset_token', 'reset_token_expiry', 'actual_deposit_amount',
+                            'vip_exp', 'vip_level', 'direct_referral_count', 'valid_referral_count',
+                            'referral_level', 'reset_token', 'reset_token_expiry', 'actual_deposit_amount',
                             'bonus_amount', 'total_bet_amount', 'has_received_first_bonus',
                             'spribe_token', 'spribe_token_created_at', 'spribe_token_expires_at',
                             'created_at', 'updated_at', 'is_active', 'is_email_verified',

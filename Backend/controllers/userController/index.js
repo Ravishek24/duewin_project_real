@@ -4,6 +4,7 @@ const { validateTokenController, resetPasswordController } = require('./resetPas
 const { verifyEmailController, resendVerificationController } = require('./emailVerificationController');
 const { getProfileController, updateProfileController } = require('./profileController');
 const forgotPasswordController = require('./forgotPasswordController');
+const { getInHouseGamesStatsController, getGameBetHistoryController } = require('./inHouseGamesStatsController');
 const { User } = require('../../models');
 const { Op } = require('sequelize');
 const { 
@@ -476,9 +477,6 @@ const getUserTransactionHistory = async (req, res) => {
         const transactions = await Transaction.findAll({
             where: {
                 user_id,
-                type: {
-                    [Op.in]: ['deposit', 'withdrawal', 'admin_credit', 'admin_debit']
-                },
                 ...dateFilter
             },
             include: [
@@ -506,16 +504,12 @@ const getUserTransactionHistory = async (req, res) => {
             let method = 'Unknown';
             
             // Determine method based on transaction type and related data
-            if (transaction.type === 'deposit' && transaction.paymentGateway) {
+            if (transaction.paymentGateway) {
                 method = transaction.paymentGateway.name;
-            } else if (transaction.type === 'withdrawal') {
-                if (transaction.bankAccount) {
-                    method = `${transaction.bankAccount.bank_name} (${transaction.bankAccount.account_number})`;
-                } else if (transaction.usdtAccount) {
-                    method = `USDT (${transaction.usdtAccount.network})`;
-                }
-            } else if (transaction.type === 'admin_credit' || transaction.type === 'admin_debit') {
-                method = 'Admin';
+            } else if (transaction.bankAccount) {
+                method = `${transaction.bankAccount.bank_name} (${transaction.bankAccount.account_number})`;
+            } else if (transaction.usdtAccount) {
+                method = `USDT (${transaction.usdtAccount.network})`;
             }
 
             return {
@@ -876,5 +870,7 @@ module.exports = {
     getUserTransactionHistory,
     getUserTeamSummary,
     getUserRebateEarnings,
-    getUserDetails
+    getUserDetails,
+    getInHouseGamesStatsController,
+    getGameBetHistoryController
 };

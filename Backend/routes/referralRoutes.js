@@ -106,7 +106,7 @@ router.get('/attendance/unclaimed', auth, requirePhoneVerification, async (req, 
     }
 });
 
-router.post('/attendance/claim', auth, requirePhoneVerification, async (req, res) => {
+router.post('/attendance/claim', auth,  async (req, res) => {
     try {
         console.log('📅 DEBUG: Claim attendance route hit');
         const userId = req.user.user_id;
@@ -136,7 +136,7 @@ router.post('/attendance/claim', auth, requirePhoneVerification, async (req, res
     }
 });
 
-router.get('/invitation/status', auth, requirePhoneVerification, async (req, res) => {
+router.get('/invitation/status', auth,  async (req, res) => {
     try {
         console.log('🎁 DEBUG: Invitation status route hit');
         const userId = req.user.user_id;

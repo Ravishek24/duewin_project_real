@@ -127,7 +127,7 @@ const getFirstBonusStatusController = async (req, res) => {
 const initiateWithdrawalController = async (req, res) => {
     try {
         const userId = req.user.user_id;
-        const { amount, bank_account_id, withdrawal_type = 'BANK' } = req.body;
+        const { amount, bank_account_id, usdt_account_id, withdrawal_type = 'BANK' } = req.body;
 
         if (!amount || parseFloat(amount) <= 0) {
             return res.status(400).json({
@@ -136,10 +136,24 @@ const initiateWithdrawalController = async (req, res) => {
             });
         }
 
-        if (!bank_account_id) {
+        if (withdrawal_type === 'BANK') {
+            if (!bank_account_id) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Bank account ID is required'
+                });
+            }
+        } else if (withdrawal_type === 'USDT') {
+            if (!usdt_account_id) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'USDT account ID is required'
+                });
+            }
+        } else {
             return res.status(400).json({
                 success: false,
-                message: 'Bank account ID is required'
+                message: 'Invalid withdrawal type'
             });
         }
 
@@ -153,7 +167,9 @@ const initiateWithdrawalController = async (req, res) => {
             orderId, 
             transactionId, 
             'OKPAY', // Default payment gateway
-            withdrawal_type
+            withdrawal_type,
+            bank_account_id,
+            usdt_account_id
         );
 
         if (result.success) {

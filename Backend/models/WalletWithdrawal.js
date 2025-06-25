@@ -21,6 +21,11 @@ class WalletWithdrawal extends Model {
                 type: DataTypes.DECIMAL(10, 2),
                 allowNull: false
             },
+            withdrawal_type: {
+                type: DataTypes.STRING(20),
+                allowNull: true,
+                defaultValue: 'BANK'
+            },
             payment_gateway_id: {
                 type: DataTypes.INTEGER,
                 allowNull: false,

@@ -1,0 +1,1185 @@
+# Signature generation rules for data validation
+
+:::highlight blue 📌
+**API Address：**
+https://api.ghpay.vip
+:::
+
+:::highlight blue 📌
+**Secret key：**
+Go to Back-end system => System Management => Key Management
+:::
+
+
+:::highlight blue 📌
+**Signing rules:
+Required fields are sorted in ascending order according to the ASCII code table, after sorting, join them by key-value pairs, using & to concatenate, e.g. key1=val1&key2=val2... The string is then MD5-encoded and converted to lowercase, and the resulting 32-bit lowercase encoding is assigned to the channel.**
+:::
+
+:::highlight red 💡
+**It is recommended to filter and remove unnecessary fields before signing, otherwise the signature verification will fail.**
+:::
+Reference code (JAVA)：
+
+```
+   ArrayList keys = new ArrayList(map.keySet());
+    Collections.sort(keys);//sort fields in ascending order
+    StringBuffer stb=new StringBuffer();
+    for (Object s : keys) {
+        String o = map.get(s).toString();
+    if (o==null||"".equals(o)){
+        break;
+    }
+    stb.append(s+"="+ o+"&");//key-value combination
+
+    }
+
+    stb.append("key="+key);//append key
+
+    MD5.md5(stb.toString());//lowercase MD5 value
+    
+```
+```md5
+    
+public static String md5(String input) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes());
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : digest) {
+                hexString.append(String.format("%02x", b));
+            }
+            return hexString.toString();
+        } catch (Exception e) {
+            throw new RuntimeException("MD5 hashing failed", e);
+        }
+    }
+```
+
+
+
+Reference code（Ts）：
+
+```
+   let sortedKeys = Object.keys(params).sort();
+   let queryString = sortedKeys.map(key => `${key}=${params[key]}`).join('&');
+   let stringToSign = `${queryString}&key=${secretKey}`;
+   let signature = crypto.createHash('md5').update(stringToSign).digest('hex');
+   return signature.toLowerCase();
+```
+
+Reference code（PHP）：
+
+```
+<?php
+function generateSignature($params, $secretKey) {
+    // Fetch and sort the search parameter keys.
+    $sortedKeys = array_keys($params);
+    sort($sortedKeys);
+    
+    // Create a string for search parameters.
+    $queryStringParts = [];
+    foreach ($sortedKeys as $key) {
+        $queryStringParts[] = $key . '=' . $params[$key];
+    }
+    $queryString = implode('&', $queryStringParts);
+    
+    // Concatenate key and secretKey
+    $stringToSign = $queryString . '&key=' . $secretKey;
+    
+    // Calculate the MD5 hash and convert it to lowercase.
+    $signature = md5($stringToSign);
+    
+    return strtolower($signature); // Returns lowercase signature.
+}
+
+// Sample data
+$params = [
+    'merchant' => 'merchant number',
+    'paymentType' => 'channel',
+    'gold' => amount of money,
+    'channel' => 0,
+    'notify_url' => 'reply address',
+    'feeType' => 0
+];
+
+$secretKey = 'secretKey';
+
+// Create signature
+$signature = generateSignature($params, $secretKey);
+
+echo "Generated Signature: " . $signature;
+?>
+
+```
+# Example of creating a signature
+
+### Signature for deposit
+
+* Test key: 9867f0ed7a31467eaedfbf58b65717b8
+
+```js
+{
+    "merchant": "xiaochijie",
+    "paymentType": "1001",
+    "gold": 2000,
+    "channel": 0,
+    "notify_url": "http://www.baidu.cim",
+    "feeType": 0
+}
+Signature result: b8c8228d45e3b6230b9471f539a8aa41
+```
+
+### Signature for withdrawal
+
+```js
+{
+    "paymentType": "2001",
+    "merchant": "xiaochijie",
+    "gold": 60,
+    "channel": 0,
+   "notify_url":"http://www.baidu.cim",
+    "feeType": 0,
+    "transferAccount": "123456",
+    "name": "123456",
+    "phone": "123456",
+}
+
+Signature result：cea73a5de828448d6190ff300390ab8e
+```
+### Response signature
+
+```js
+ Order Notification Information
+ {
+  merchant: 'xiaochijie',
+  orderId: '8b770271de424ec3be5409a9aa65ae9e',
+  order_no: '12025021564c0350e62594c11abfe463ec50fb1e0',
+  gold: 500,
+  pay_amount: 501,
+  trade_amount: 492.48,
+  orderStatus: 1,
+  statusMsg: 'Successful',
+  paymentType: '1001',
+  fee: 51,
+  completeTime: '2025-02-25 19:19:34',
+  sign: '082f68aee66169e6a00b835a4d7dc25c'
+ }
+```
+
+
+### Get information about the store's channels
+- Secret key for testing e0e83fc0b26f4420a86b18542b0ea5bc
+
+```js
+{
+merchant:demoss,
+noncestr:sddssd,
+timestamp:1742966937232,
+sign:2a8a7b2e6f7382df3fb34da230e0449a
+}
+```
+
+
+
+# Check the channels that the store can use.
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /api/MerchantAisle:
+    post:
+      Summary: Check out the channels available to your store.
+      deprecated: false
+      description: >-
+        paymentType Specifies the payment method，1 means deposit，2
+        It means withdrawing money.
+
+        businessType Payment method ，QR
+        Refers to scanning with QR code, transfer
+        It means transferring money with account number, real-qr
+        Scan QR code for identity verification (Username and sender name must match)
+
+        status 1 has been released 2 has been released
+
+        The interval is a long term period.
+      tags:
+        - System connection documents
+      parameters: []
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            Schema:
+              type: object
+              properties:
+                Merchant:
+                  description: store number
+                  example: demoss
+                  type: string
+                noncestr:
+                  description: Random string of up to 13 digits.
+                  example: sddssd
+                  type: string
+                Timestamp:
+                  description: time stamp
+                  example: '1742966937232'
+                  type: string
+                sign:
+                  description: 'Encryption result'
+                  example: 2a8a7b2e6f7382df3fb34da230e0449a
+                  type: string
+              Required:
+                - merchant
+                - noncestr
+                - timestamp
+                - sign
+      Responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              Schema:
+                type: object
+                properties: {}
+              example:
+                code: 0
+                data:
+                  data:
+                    - paymentType: '1001'
+                      status: 1
+                      addTime: '2025-02-12 05:01:28'
+                      updateTime: '2025-02-12 08:40:07'
+                      type: 1
+                      code: THB
+                      interval:
+                        - 50
+                        - 50000
+                      currencyCode: THA
+                      successRate: '100.00'
+                      configuration:
+                        - 500
+                        - 800
+                        - 1200
+                        - 2000
+                        - 2600
+                        - 2800
+                        - 3200
+                        - 3600
+                        - 10000
+                      dfee: 0
+                      drate: 0.02
+                    - paymentType: '2001'
+                      status: 1
+                      addTime: '2025-02-12 05:01:28'
+                      updateTime: '2025-02-12 05:04:08'
+                      type: 2
+                      code: THB
+                      interval:
+                        - 50
+                        - 49999
+                      currencyCode: THA
+                      successRate: '100.00'
+                      configuration:
+                        - 500
+                        - 800
+                        - 1200
+                        - 2000
+                        - 2600
+                        - 2800
+                        - 3200
+                        - 3600
+                        - 10000
+                      dfee: 0
+                      drate: 0.05
+                  count: 2
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: System integration documentation
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/5798243/apis/api-291012971-run
+components:
+  Schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
+
+```
+
+# Check the bank code of the payment channel.
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /api/QueryDictionaryByCode:
+    post:
+      Summary: Check the bank code of the payment channel.
+      deprecated: false
+      description: >-
+        You must first retrieve the available channels, then search through the bankCode field.
+        In accessible channels
+      tags:
+        - System connection documents
+      parameters: []
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            Schema:
+              type: object
+              properties:
+                Merchant:
+                  description: store number
+                  example: demoss
+                  type: string
+                noncestr:
+                  description: Random string of up to 13 digits.
+                  example: sddssd
+                  type: string
+                Timestamp:
+                  description: time stamp
+                  example: '1742966937232'
+                  type: string
+                sign:
+                  description: Result of encryption
+                  example: 2a8a7b2e6f7382df3fb34da230e0449a
+                  type: string
+                bankCode:
+                  description: >-
+                    The bankCode field searched in the available channels
+                    Will not be added to sign
+                  example: KBank
+                  type: string
+              Required:
+                - merchant
+                - noncestr
+                - timestamp
+                - sign
+                - bankCode
+            examples: {}
+      Responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              Schema:
+                type: object
+                properties: {}
+              example:
+                code: 0
+                data:
+                  - label: KASIKORNBANK
+                    value: KBank
+                  - label: BANGKOK BANK
+                    value: BBL
+                  - label: KRUNG THAI BANK
+                    value: KTB
+                  - label: TMBThanachart Bank PCL
+                    value: TMBThanachart
+                  - label: Siam Commercial Bank
+                    value: SCB
+                  - label: Standard Chartered Bank (Thai)
+                    value: SCBT
+                  - label: United Overseas Bank (Thai)
+                    value: UOB
+                  - label: BANK OF AYUDHYA
+                    value: Krungsri
+                  - label: CIMB Bank
+                    value: CIMB
+                  - label: Land and Houses Bank
+                    value: LH Bank
+                  - label: Government Savings Bank
+                    value: GSB
+                  - label: KIATNAKIN PHATRA BANK PUBLIC COMPANY LIMITED
+                    value: KKP
+                  - label: Citibank NA
+                    value: Citibank NA
+                  - label: Government Housing Bank
+                    value: GHBA
+                  - label: Bank for Agriculture and Agricultural Cooperatives
+                    value: BAAC
+                  - label: Mizuho Bank Bangkok Branch
+                    value: MHCB
+                  - label: Islamic Bank Of Thailand
+                    value: ibank
+                  - label: Tisco Bank Public Company Limited
+                    value: Tisco
+                  - label: ICBC Thai
+                    value: ICBC Thai
+                  - label: Thai Credit Retail Bank Public Company Limited
+                    value: Thai Credit
+                  - label: SUMITOMO MITSUI BANKING
+                    value: SMBC
+                  - label: HONGKONG AND SHANGHAI BANKING
+                    value: HSBC
+                  - label: BNP PARIBAS, BANGKOK BRANCH
+                    value: BNPP
+                  - label: DEUTSCHE BANK AG
+                    value: DEUTSCHE BANK AG
+                  - label: Bank of China
+                    value: Bank of China
+                  - label: INDIAN OVERSEAS BANK
+                    value: INDIAN OVERSEAS BANK
+                  - label: SMALL AND MEDIUM ENTERPRISE DEVELOPMENT BANK OF TH
+                    value: SME
+                message: I love you
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: System integration documentation
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/5798243/apis/api-291012972-run
+components:
+  Schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
+
+```
+# ช่องทางฝากเงิน
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /api/payIn:
+    post:
+      summary: ช่องทางฝากเงิน
+      deprecated: false
+      description: ''
+      tags:
+        - เอกสารเชื่อมต่อระบบ
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                paymentType:
+                  type: string
+                  description: ช่องทางการชำระเงิน
+                merchant:
+                  type: string
+                  description: บัญชีร้านค้า
+                gold:
+                  type: integer
+                  description: จำนวนเงิน
+                channel:
+                  type: integer
+                  description: วิธีการชำระเงิน 0- สแกนคิวอาร์, 1- โอนเงิน
+                orderId:
+                  type: string
+                  description: หมายเลขคำสั่งซื้อที่ส่งมา
+                notify_url:
+                  type: string
+                  description: ที่อยู่สำหรับการแจ้งเตือน
+                order_attach:
+                  type: string
+                  description: เพิ่มพารามิเตอร์
+                feeType:
+                  type: integer
+                  description: ค่าคงที่ = 0, ค่าธรรมเนียมจะหักจากจำนวนเงินคำสั่งซื้อ
+                sign:
+                  type: string
+                  description: ลายเซ็น
+                transferAccount:
+                  type: string
+                  description: เลขบัญชี พารามิเตอร์ยืนยันตัวตน
+                name:
+                  type: string
+                  description: ชื่อผู้ใช้ พารามิเตอร์ยืนยันตัวตน
+                phone:
+                  type: string
+                  description: หมายเลขโทรศัพท์ พารามิเตอร์ยืนยันตัวตน
+                bankCode:
+                  type: string
+                  description: พารามิเตอร์ยืนยันตัวตนจากค่า value ที่ค้นหาจากพจนานุกรม
+                cert:
+                  type: string
+                  description: |+
+                    การเติมเงินแบบยืนยันตัวตนของบราซิล พร้อมหลักฐาน
+
+                cardNo:
+                  type: string
+                  description: |+
+                    หมายเลขบัตรเติมเงิน
+
+                cardSeri:
+                  type: string
+                  description: |+
+                    รหัสบัตรเติมเงิน
+
+                cardType:
+                  type: string
+                  description: |+
+                    ประเภทบัตรเติมเงิน (VTT, VMS, VNP, VNM, VNG)
+
+              required:
+                - paymentType
+                - merchant
+                - gold
+                - channel
+                - notify_url
+                - feeType
+                - sign
+              x-apifox-orders:
+                - paymentType
+                - merchant
+                - gold
+                - channel
+                - orderId
+                - notify_url
+                - order_attach
+                - feeType
+                - sign
+                - transferAccount
+                - name
+                - phone
+                - bankCode
+                - cert
+                - cardNo
+                - cardSeri
+                - cardType
+            example:
+              paymentType: '1001'
+              merchant: test
+              gold: 50
+              channel: 0
+              orderId: ''
+              notify_url: http://www.baidu.com
+              order_attach: '123213'
+              feeType: 0
+              sign: bbc8a3ec17efeda03ad7cf05e253b53c
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    description: 0 - สำเร็จ, อื่นๆคือล้มเหลว
+                  data:
+                    type: object
+                    properties:
+                      order_on:
+                        type: string
+                        description: หมายเลขคำสั่งซื้อ
+                      payUrl:
+                        type: string
+                        description: ที่อยู่สำหรับการชำระเงิน
+                    required:
+                      - order_on
+                      - payUrl
+                    x-apifox-orders:
+                      - order_on
+                      - payUrl
+                  message:
+                    type: string
+                    description: คำอธิบายสาเหตุของความล้มเหลว
+                required:
+                  - code
+                x-apifox-orders:
+                  - code
+                  - message
+                  - data
+              example:
+                code: 0
+                msg: ''
+                data:
+                  order_on: ''
+                  payUrl: ''
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: เอกสารเชื่อมต่อระบบ
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/5798243/apis/api-291012973-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
+
+```
+
+
+# ช่องทางถอนเงิน
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /api/payOut:
+    post:
+      summary: ช่องทางถอนเงิน
+      deprecated: false
+      description: |+
+
+      tags:
+        - เอกสารเชื่อมต่อระบบ
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                paymentType:
+                  description: ช่องทางการชำระเงิน
+                  type: string
+                merchant:
+                  description: บัญชีร้านค้า
+                  type: string
+                gold:
+                  description: จำนวนเงิน
+                  type: integer
+                channel:
+                  description: วิธีการชำระเงิน 0 - สแกนคิวอาร์, 1 - โอนเงิน
+                  type: integer
+                orderId:
+                  description: หมายเลขคำสั่งซื้อที่ส่งมา
+                  type: string
+                notify_url:
+                  description: ที่อยู่สำหรับการแจ้งเตือน
+                  type: string
+                order_attach:
+                  description: เพิ่มพารามิเตอร์
+                  type: string
+                feeType:
+                  description: >-
+                    การชำระเงิน, ค่าคงที่ = 1,
+                    ค่าธรรมเนียมจะหักจากยอดคงเหลือของร้านค้า
+                  type: integer
+                transferAccount:
+                  description: บัญชีโอนเงิน
+                  type: string
+                name:
+                  description: ชื่อผู้ใช้
+                  type: string
+                phone:
+                  description: หมายเลขโทรศัพท์/IFSC
+                  type: string
+                bankCode:
+                  description: |-
+                    ชื่อธนาคาร / ประเภท PIX, กรุณาส่งข้อมูลให้ครบถ้วน
+                    ประเภท PIX ในบราซิล - CPF / โทรศัพท์ / CNPJ / RANDOM
+                  type: string
+                idCard:
+                  description: หมายเลขบัตรประชาชนของผู้รับเงิน
+                  type: string
+                sign:
+                  type: string
+                cert:
+                  type: string
+                  description: |-
+                    เอกสารบัญชีโอนเงิน, ต้องกรอกในช่องทางบราซิล
+                    บราซิล - CPF ของผู้ใช้, ความยาว: 11 หลัก
+              required:
+                - paymentType
+                - merchant
+                - gold
+                - channel
+                - notify_url
+                - transferAccount
+                - name
+                - phone
+                - sign
+                - feeType
+              x-apifox-orders:
+                - paymentType
+                - merchant
+                - gold
+                - channel
+                - notify_url
+                - transferAccount
+                - cert
+                - name
+                - phone
+                - orderId
+                - order_attach
+                - bankCode
+                - idCard
+                - feeType
+                - sign
+            example:
+              paymentType: '2001'
+              merchant: test
+              gold: 50
+              channel: 0
+              orderId: ''
+              notify_url: http://www.baidu.com
+              order_attach: '123213'
+              feeType: 0
+              transferAccount: '1992367357'
+              name: ธีรศักดิ์ พูลเลิศ
+              phone: '0942750713'
+              bankCode: ''
+              idCard: ''
+              sign: 1609a3191a5202e2f67df481b5b9fb15
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    description: 0 - สำเร็จ, อื่น ๆ - ล้มเหลว
+                  data:
+                    type: object
+                    properties:
+                      order_on:
+                        type: string
+                        description: หมายเลขคำสั่งซื้อ
+                    required:
+                      - order_on
+                    x-apifox-orders:
+                      - order_on
+                  message:
+                    type: string
+                    description: คำอธิบายสาเหตุของความล้มเหลว
+                required:
+                  - code
+                x-apifox-orders:
+                  - code
+                  - message
+                  - data
+              example:
+                code: 0
+                msg: ''
+                data:
+                  order_on: ''
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: เอกสารเชื่อมต่อระบบ
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/5798243/apis/api-291012974-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
+
+```
+
+
+
+
+# Order Notification (Withdrawal/Deposit Channel)
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /代付/代收接口提交的回调地(notify_url):
+    post:
+      Summary: Order Notification (Withdrawal/Deposit Channel)
+      deprecated: false
+      description: |-
+        Response after successful completion "SUCCESS"
+
+         gold trade_amount pay_amount trade_amount trade_amount trade_amount trade_amount trade_amount  
+      tags:
+        - System connection documents
+      parameters: []
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            Schema:
+              type: object
+              properties:
+                Merchant:
+                  description: Store account (add sign)
+                  example: ''
+                  type: string
+                order_no:
+                  description: System order number (add sign)
+                  example: ''
+                  type: string
+                orderId:
+                  description: Order number sent by the store (add sign)
+                  example: ''
+                  type: string
+                gold:
+                  type: integer
+                  description: Order amount (add sign)
+                  example: 0
+                pay_amount:
+                  description: Payment amount (add sign)
+                  example: ''
+                  type: string
+                trade_amount:
+                  type: integer
+                  description: Actual transaction amount (add sign)
+                  example: 0
+                orderStatus:
+                  type: integer
+                  description: >-
+                    Order status, 0 - in progress, 1 - completed, 2 -
+                    Failed or cancelled (add sign)
+                  example: 0
+                statusMsg:
+                  description: >-
+                    Order status (in progress, completed, failed) (add
+                    Sign)
+                  example: ''
+                  type: string
+                paymentType:
+                  description: Channel code (add sign)
+                  example: ''
+                  type: string
+                fee:
+                  type: integer
+                  description: Fee (add sign)
+                  example: 0
+                ' completeTime':
+                  description: completion time (add sign in desired format)
+                  example: ''
+                  type: string
+                sign:
+                  description: signature
+                  example: ''
+                  type: string
+                order_attach:
+                  description: Add parameters (not add sign)
+                  example: ''
+                  type: string
+              Required:
+                - merchant
+                - order_no
+                - orderId
+                - gold
+                - pay_amount
+                - trade_amount
+                - orderStatus
+                - statusMsg
+                - paymentType
+                - fee
+                - ' completeTime'
+                - sign
+            example:
+              merchant: ''
+              orderId: ''
+              order_no: ''
+              gold: 100
+              trade_amount: 98
+              paymentType: '1001'
+              fee: 2
+              orderStatus: 0
+      Responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              Schema:
+                type: object
+                properties: {}
+                x-apifox-orders: []
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: System integration documentation
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/5798243/apis/api-291012975-run
+components:
+  Schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
+
+```
+
+
+# Order Verification (Withdrawal/Deposit Channel)
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /api/orderQuery:
+    post:
+      Summary: Order Verification (Withdrawal/Deposit Channels)
+      deprecated: false
+      description: ''
+      tags:
+        - System connection documents
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            Schema:
+              type: object
+              properties:
+                Merchant:
+                  type: string
+                  description: merchant account
+                order_no:
+                  type: string
+                  description: Order number
+                sign:
+                  type: string
+                  description: signature
+              Required:
+                - merchant
+                - order_no
+                - sign
+              x-apifox-orders:
+                - merchant
+                - order_no
+                - sign
+            example:
+              merchant: ''
+              order_no: ''
+              sign: ''
+      Responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              Schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    description: 0-successful
+                  data:
+                    type: object
+                    properties:
+                      unit:
+                        type: string
+                        description: Currency unit
+                      orderType:
+                        type: integer
+                        description: 'Order Type: 1 - Deposit, 2 - Withdrawal'
+                      orderId:
+                        type: string
+                        description: Order number sent by the merchant.
+                      channel:
+                        type: integer
+                        description: 'Payment type: 0 - Scan to pay, 1 - Transfer'
+                      gold:
+                        type: integer
+                        description: Order amount
+                      pay_amount:
+                        type: number
+                        description: Amount paid
+                      order_no:
+                        type: string
+                        description: System order number
+                      Merchant:
+                        type: string
+                        description: merchant account
+                      paymentType:
+                        type: string
+                        description: Payment channel code
+                      fee:
+                        type: integer
+                        description: fee
+                      statusMsg:
+                        type: string
+                        description: Status details
+                      bankCode:
+                        type: 'null'
+                        description: Bank code
+                      notify_url:
+                        type: string
+                        description: Success notification address
+                      orderStatus:
+                        type: integer
+                        description: >-
+                          Order status: 0 - In progress, 1 - Completed, 2 -
+                          Failed or cancelled
+                      order_attach:
+                        type: string
+                        description: Additional parameters
+                      creTime:
+                        type: string
+                        description: Order creation time
+                      completeTime:
+                        type: 'null'
+                        description: Order end time
+                      notify:
+                        type: object
+                        properties:
+                          url:
+                            type: string
+                          status:
+                            type: integer
+                          num:
+                            type: integer
+                          msg:
+                            type: string
+                          time:
+                            type: 'null'
+                          extra:
+                            type: string
+                        Required:
+                          - url
+                          - status
+                          - num
+                          - msg
+                          - time
+                          - extra
+                        x-apifox-orders:
+                          - url
+                          - status
+                          - num
+                          - msg
+                          - time
+                          - extra
+                        description: Order notification information
+                      income_amount:
+                        type: number
+                        description: Actual transaction amount
+                      transferAccount:
+                        type: string
+                        description: Payment- Receiving account number
+                      name:
+                        type: string
+                        description: Payment - Receiving Account Name
+                      phone:
+                        type: string
+                        description: Payment- Receiving account phone number
+                      idCard:
+                        type: string
+                        description: National ID card number
+                    Required:
+                      - unit
+                      - orderType
+                      - orderId
+                      - channel
+                      - gold
+                      - pay_amount
+                      - order_no
+                      - merchant
+                      - paymentType
+                      - fee
+                      - statusMsg
+                      - bankCode
+                      - notify_url
+                      - orderStatus
+                      - order_attach
+                      - creTime
+                      - completeTime
+                      - income_amount
+                      - transferAccount
+                      - name
+                      - phone
+                      - idCard
+                    x-apifox-orders:
+                      - unit
+                      - orderType
+                      - orderId
+                      - channel
+                      - gold
+                      - pay_amount
+                      - income_amount
+                      - fee
+                      - order_no
+                      - paymentType
+                      - statusMsg
+                      - notify_url
+                      - orderStatus
+                      - order_attach
+                      - creTime
+                      - completeTime
+                      - notify
+                      - merchant
+                      - transferAccount
+                      - name
+                      - phone
+                      - bankCode
+                      - idCard
+                  message:
+                    type: string
+                    description: Failure cause
+                Required:
+                  - code
+                  - data
+                x-apifox-orders:
+                  - code
+                  - message
+                  - data
+              example:
+                code: 0
+                data:
+                  unit: THB
+                  orderType: 1
+                  orderId: 09c4c41555e64cf081673af381beff5f
+                  channel: 0
+                  gold: 50
+                  pay_amount: 50.04
+                  trade_amount: 49.04
+                  order_no: 120241219226064e99dc847d2a853dbc0957e263e
+                  merchant: test
+                  paymentType: '1001'
+                  fee: 30
+                  statusMsg: ''
+                  bankCode: null
+                  notify_url: http://www.baidu.com
+                  orderStatus: 0
+                  order_attach: '123213'
+                  creTime: '2024-12-19 00:06:02'
+                  completeTime: null
+                  notify:
+                    url: http://127.0.0.1/api/azdsCallback
+                    status: 0
+                    num: 0
+                    msg: ''
+                    time: null
+                    extra: '123213'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: System integration documentation
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/5798243/apis/api-291012976-run
+components:
+  Schemas: {}
+  securitySchemes: {}
+servers: []
+security: []
+
+```
+
+
+
+

@@ -37,7 +37,25 @@ class ActivityReward extends Model {
             claimed_milestones: {
                 type: DataTypes.JSON,
                 allowNull: true,
-                comment: 'JSON object storing claimed milestones'
+                comment: 'JSON object storing claimed milestones',
+                get() {
+                    const value = this.getDataValue('claimed_milestones');
+                    if (typeof value === 'string') {
+                        try {
+                            return JSON.parse(value);
+                        } catch (e) {
+                            return {};
+                        }
+                    }
+                    return value || {};
+                },
+                set(value) {
+                    if (typeof value === 'object' && value !== null) {
+                        this.setDataValue('claimed_milestones', JSON.stringify(value));
+                    } else {
+                        this.setDataValue('claimed_milestones', value);
+                    }
+                }
             },
             total_rewards: {
                 type: DataTypes.DECIMAL(20, 2),

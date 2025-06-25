@@ -431,18 +431,52 @@ router.post('/:gameType/:duration/bet',
 router.get('/:gameType/:duration/my-bets', async (req, res) => {
   try {
     const { gameType, duration } = req.params;
-    const { page = 1, limit = 10, periodId, status } = req.query;
+    const { page = 1, limit = 10, periodId, status, startDate, endDate } = req.query;
     const userId = req.user.user_id;
 
     const gameTypeLower = gameType.toLowerCase();
     const mappedGameType = gameTypeLower === '5d' ? 'fiveD' : gameTypeLower;
+    
+    // Validate date parameters if provided
+    let dateFilter = {};
+    if (startDate || endDate) {
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid date format. Use YYYY-MM-DD or ISO date format'
+          });
+        }
+        
+        if (start > end) {
+          return res.status(400).json({
+            success: false,
+            message: 'Start date cannot be after end date'
+          });
+        }
+        
+        dateFilter = {
+          startDate: start,
+          endDate: end
+        };
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Both startDate and endDate are required when using date filtering'
+        });
+      }
+    }
     
     // Get user's bets using the proper implementation
     const result = await gameLogicService.getUserBetHistory(userId, mappedGameType, parseInt(duration), {
       page: parseInt(page),
       limit: parseInt(limit),
       periodId,
-      status
+      status,
+      ...dateFilter
     });
 
     if (!result.success) {

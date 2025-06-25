@@ -1,0 +1,335 @@
+Of course. Here is the provided documentation consolidated and formatted into a clean, English-only TXT file.
+
+````text
+==================================================
+ PPayPro PAYMENT GATEWAY INTEGRATION DOCUMENTATION
+==================================================
+
+1. GETTING STARTED (MERCHANT SYSTEM)
+--------------------------------------
+
+1.1. Merchant Account Application
+To apply for a merchant account, please contact the platform directly.
+
+1.2. Merchant System Website
+https://merchant.ppaypro.com/
+
+1.3. Merchant System Login
+- Account: Your registered mobile phone number or login name.
+- Initial Password: PP321123
+
+NOTE: Remember to change the initial password after your first login!
+NOTE: Remember to change the initial password after your first login!
+NOTE: Remember to change the initial password after your first login!
+
+1.4. How to Find Your Merchant Number (mchNo)
+After logging into the merchant backend, you can find your Merchant Number on the home page.
+
+1.5. How to Find Your Application ID (appId) and Private Key
+After logging in, you can query your App ID and Private Key. When you first integrate, a private key will be randomly generated. You must save the plain text of this private key for it to take effect. Once saved, any previous private key becomes invalid.
+(Note: Each time a new private key is randomly generated and saved, the previous one becomes invalid.)
+
+1.6. Change Login Password
+You can modify your login password within the merchant system settings.
+
+
+2. GENERAL API INFORMATION
+----------------------------
+
+2.1. API Domain Name
+https://pay.ppaypros.com
+
+2.2. Platform Server IP
+3.1.16.96
+
+2.3. Unified Response Parameter Description
+All API responses follow this general structure.
+
+| Parameter   | Name | Required | Type       | Example Value                      | Description                                                  |
+|-------------|------|----------|------------|------------------------------------|--------------------------------------------------------------|
+| Return Code | code | Yes      | int        | 0                                  | 0: Success. Others: Failure. See Error Codes for details.    |
+| Message     | msg  | No       | String(128)| "Signature failed"                 | Specific reason for the error.                               |
+| Signature   | sign | No       | String(32) | "1F0A241B0349894B0C8D68BE0CB40EE1" | A signature of the `data` object. Not present if `data` is empty.|
+| Data        | data | No       | JSON String| {}                                 | The specific data payload of the response, in JSON format.   |
+
+2.4. Basic Error Codes
+| Code | Message   | Description                                    |
+|------|-----------|------------------------------------------------|
+| 0    | success   | The operation was successful.                  |
+| 9999 | abnormal  | An error occurred. See the `msg` field for details.|
+
+
+3. PROTOCOL AND SIGNATURE RULES
+---------------------------------
+
+3.1. Protocol
+- Transmission Method: HTTPS
+- Submission Method:   POST or GET
+- Content-Type:        application/json
+- Character Encoding:  UTF-8
+- Signature Algorithm: MD5
+
+3.2. Parameter Specifications
+- Transaction Amount: The default currency is the Indian Rupee (INR). The amount unit is "Paisa" (1/100th of a Rupee), expressed as an integer.
+  - Example: To charge 100 Rupees, the `amount` parameter should be `10000`. The value cannot contain decimals.
+
+3.3. Signature Algorithm (MD5)
+- Step 1: Assemble all non-empty request or response parameters. Sort them alphabetically by parameter name (ASCII order, A-Z). Concatenate them into a single string using URL key-value pair format (`key1=value1&key2=value2...`). This is `stringA`.
+
+- IMPORTANT RULES:
+  - Parameter names are sorted by ASCII value.
+  - Parameters with empty or null values are NOT included in the signature string.
+  - Parameter names are case-sensitive.
+  - The `sign` parameter itself is NEVER included when creating or verifying a signature.
+  - Your verification logic must support new fields being added to the API response in the future.
+
+- Step 2: Append your private key to the end of `stringA`. The format is `stringA + "&key=" + privateKey`. Perform an MD5 hash on this new string. Convert the entire resulting hash to uppercase. This is your final `sign` value.
+
+- NOTE FOR CALLBACKS: Do not use a hard-coded list of parameters to build the signature for verification. Due to system updates, parameters may be added or removed. Always dynamically sort all received parameters before creating the signature for comparison.
+
+3.4. Signature Example
+- Request Parameters:
+  ```json
+  {
+      "mchNo": "M1678608801",
+      "appId": "640d89a158b4461f100cca20",
+      "mchOrderNo": "20230313142102367372",
+      "amount": "50000",
+      "customerName": "Joey",
+      "customerEmail": "13800138000@gmail.com",
+      "customerPhone": "13800138000",
+      "notifyUrl": "[https://ppaypro.ccom/pay](https://ppaypro.ccom/pay)"
+  }
+````
+
+  - String to be Signed (stringA + \&key=...):
+    `amount=50000&appId=640d89a158b4461f100cca20&customerEmail=13800138000@gmail.com&customerName=Joey&customerPhone=13800138000&mchNo=M123454545&mchOrderNo=20230313142102367372&notifyUrl=https://3qpay.cc/pay/notify&key=FYSxjzOpagk3sFJJ2rCK7cLUCdpXElMoHX4U1rzgcfLeDl1FmE7l26fTMY1eYilOGbtxlGsrPqHzapD0Dz0gttK4bb4jeoWCBaF3heSX3NNViN2dtQMgULp6c4yGrNir`
+
+  - Final Signature (`sign`):
+    `5B9B18CECEF621EF221ABE687DA904B0`
+
+<!-- end list -->
+
+4.  PAYMENT TYPE CODES (`wayCode`)
+
+-----
+
+| Code | Payment Type                |
+|------|-----------------------------|
+| 801  | India - UPI                 |
+| 802  | India - PAYTM               |
+| 803  | Malaysia - Online Banking   |
+| 804  | Malaysia - Wallet QR Scan   |
+| 805  | Brazil - PIX                |
+| 806  | Philippines - Gcash         |
+| 807  | Philippines - MAYA          |
+| 808  | Indonesia - Online Banking  |
+| 809  | Indonesia - E-wallet        |
+| 810  | Thailand - Online Banking   |
+| 811  | Thailand - QR Scan          |
+| 812  | Nigeria - Online Banking    |
+| 813  | Mexico - Clabe              |
+| 814  | South Africa - Online Banking|
+| 815  | Egypt - Wallet              |
+| 816  | Philippines - Gcash QR Scan |
+| 817  | Türkiye - Collection        |
+| 818  | Argentina - Collection      |
+| 819  | Brazil - PIX QR Code        |
+| 820  | Vietnam - ZALO              |
+| 821  | Vietnam - MOMO              |
+| 822  | Vietnam - VT                |
+| 823  | Vietnam - Scratch Card      |
+| 824  | Vietnam - Online Banking    |
+| 825  | Colombia - Collection       |
+| 826  | US - Credit Cards           |
+| 827  | Bangladesh - Bkash          |
+| 828  | Bangladesh - Nagad          |
+| 829  | Bangladesh - Rocket         |
+| 830  | Bangladesh - Upay           |
+| 831  | Kenya - Wallet              |
+| 832  | Ghana - Online Banking      |
+| 833  | Peru - Online Banking       |
+| 834  | Pakistan - Online Banking   |
+| 835  | Ethiopia - Online Banking   |
+| 836  | Tanzania - Collection       |
+| 837  | Cote d'Ivoire - Collection  |
+
+5.  API ENDPOINTS
+
+-----
+
+### 5.1. Create Payment Order
+
+  - **Description**: Initiates a payment collection order.
+  - **URL**: `https://pay.ppaypros.com/api/pay/pay`
+  - **Method**: POST
+  - **Request Parameters**:
+    | Name          | Required | Type        | Description                                                                                                                                                                                                                                                         |
+    |---------------|----------|-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+    | mchNo         | Yes      | String(32)  | Your merchant number.                                                                                                                                                                                                                                               |
+    | appId         | Yes      | String(32)  | Your application ID.                                                                                                                                                                                                                                                |
+    | mchOrderNo    | Yes      | String(32)  | Your unique order number.                                                                                                                                                                                                                                           |
+    | amount        | Yes      | int         | Payment amount in the smallest currency unit (e.g., Paisa for INR).                                                                                                                                                                                                 |
+    | customerName  | Yes      | String(64)  | Customer's name. For Thailand, this must be the real player account name.                                                                                                                                                                                           |
+    | customerEmail | Yes      | String(64)  | Customer's email address.                                                                                                                                                                                                                                           |
+    | customerPhone | Yes      | String(64)  | Customer's mobile number. Egypt: Must be 11 digits starting with 01. Kenya/Tanzania: Fill in payment account.                                                                                                                                                      |
+    | wayCode       | No       | String(32)  | Use this to force a specific payment type (e.g., `804` for Malaysia QR). If omitted, a selection page may be shown.                                                                                                                                                   |
+    | extParam      | No       | String(32)  | Extra parameters for specific channels. Ghana: `mtn`, `telecel`, `airteltigo`. Peru: `documentType#documentNumber`. Cote d'Ivoire: Must be 10-digit payment account starting with 0.                                                                                   |
+    | notifyUrl     | No       | String(128) | Your URL for asynchronous payment result notifications. A callback is only sent if this is provided.                                                                                                                                                              |
+    | returnUrl     | No       | String(128) | The URL to redirect the user to after payment completion.                                                                                                                                                                                                           |
+    | sign          | Yes      | String(32)  | The uppercase MD5 signature.                                                                                                                                                                                                                                        |
+  - **Response `data` Format**:
+    | Name        | Required | Type   | Description                                                                                                                                                                   |
+    |-------------|----------|--------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+    | payOrderId  | Yes      | String | The order ID generated by the payment system.                                                                                                                                 |
+    | mchOrderNo  | Yes      | String | Your original order number.                                                                                                                                                   |
+    | orderState  | Yes      | int    | 0:Generated, 1:Paying, 2:Success, 3:Failed, 4:Cancelled, 5:Refunded, 6:Closed.                                                                                               |
+    | payDataType | Yes      | String | `payUrl` (redirect link), `form` (HTML form), `codeUrl` (QR code link), `codeImgUrl` (QR code image), `none`.                                                                  |
+    | payData     | No       | String | The data needed to continue the payment (e.g., the redirect URL).                                                                                                             |
+    | errCode     | No       | String | Upstream channel's error code.                                                                                                                                                |
+    | errMsg      | No       | String | Upstream channel's error description.                                                                                                                                         |
+
+### 5.2. Query Payment Order
+
+  - **Description**: Retrieves the status of a payment order.
+  - **URL**: `https://pay.ppaypros.com/api/pay/query`
+  - **Method**: POST
+  - **Request Parameters**:
+    | Name       | Required | Type        | Description                                                                     |
+    |------------|----------|-------------|---------------------------------------------------------------------------------|
+    | mchNo      | Yes      | String(32)  | Your merchant number.                                                           |
+    | appId      | Yes      | String(32)  | Your application ID.                                                            |
+    | payOrderId | Yes      | String(32)  | The system's payment order ID. Provide this OR `mchOrderNo`.                      |
+    | mchOrderNo | Yes      | String(32)  | Your merchant order number. Provide this OR `payOrderId`.                         |
+    | sign       | Yes      | String(32)  | The uppercase MD5 signature.                                                    |
+  - **Response `data` Format**:
+    | Name        | Required | Type        | Description                                                                     |
+    |-------------|----------|-------------|---------------------------------------------------------------------------------|
+    | payOrderId  | Yes      | String      | The system's payment order ID.                                                  |
+    | mchNo       | Yes      | String      | Your merchant number.                                                           |
+    | appId       | Yes      | String      | Your application ID.                                                            |
+    | mchOrderNo  | Yes      | String      | Your original order number.                                                     |
+    | amount      | Yes      | int         | Payment amount.                                                                 |
+    | currency    | Yes      | String(3)   | Currency code (e.g., `INR`, `BRL`).                                             |
+    | state       | Yes      | int         | 1:Paying, 2:Success, 3:Failed, 6:Closed, 7:Pending Settlement.                  |
+    | createdAt   | Yes      | long        | Order creation time (13-digit timestamp).                                       |
+    | successTime | No       | long        | Order success time (13-digit timestamp).                                        |
+
+### 5.3. Create Payout Order
+
+  - **Description**: Initiates a transfer (payout) to a beneficiary.
+  - **URL**: `https://pay.ppaypros.com/api/payout/pay`
+  - **Method**: POST
+  - **Request Parameters**:
+    | Name         | Required | Type        | Description                                                                                                                                                                                                                                                         |
+    |--------------|----------|-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+    | mchNo        | Yes      | String(32)  | Your merchant number.                                                                                                                                                                                                                                               |
+    | appId        | Yes      | String(32)  | Your application ID.                                                                                                                                                                                                                                                |
+    | mchOrderNo   | Yes      | String(32)  | Your unique order number for the payout.                                                                                                                                                                                                                            |
+    | amount       | Yes      | int         | Payout amount in the smallest currency unit.                                                                                                                                                                                                                        |
+    | entryType    | Yes      | String(10)  | Payout method. India:`IMPS`/`UPI`. Brazil:`EVP`/`CPF`/`CNPJ`/`PHONE`/`EMAIL`. Philippines:`GCASH`. Others:`BANK_CARD`.                                                                                                                                                 |
+    | accountNo    | Yes      | String(64)  | Beneficiary's account number, UPI ID, or GCash number. For Brazil phone, include country code +55.                                                                                                                                                                   |
+    | accountCode  | Yes      | String(64)  | Bank code or other identifier. India (IMPS): 11-digit IFSC. Brazil: CPF/CNPJ value.                                                                                                                                                                                 |
+    | bankName     | No       | String(64)  | Bank name. Required for certain banks/countries.                                                                                                                                                                                                                    |
+    | accountName  | Yes      | String(64)  | Beneficiary's full name.                                                                                                                                                                                                                                            |
+    | accountEmail | Yes      | String(64)  | Beneficiary's email.                                                                                                                                                                                                                                                |
+    | accountPhone | Yes      | String(16)  | Beneficiary's phone number.                                                                                                                                                                                                                                         |
+    | channelExtra | No       | String(512) | Extra parameters for specific channels. Peru: `CustomerIDType#CustomerID#BankAccountType`. Pakistan: Must transmit ID number.                                                                                                                                       |
+    | notifyUrl    | No       | String(128) | Your URL for asynchronous payout result notifications.                                                                                                                                                                                                              |
+    | sign         | Yes      | String(32)  | The uppercase MD5 signature.                                                                                                                                                                                                                                        |
+  - **Response `data` Format**:
+    | Name       | Required | Type   | Description                                                            |
+    |------------|----------|--------|------------------------------------------------------------------------|
+    | transferId | Yes      | String | The payout order ID generated by the system.                           |
+    | mchOrderNo | Yes      | String | Your original payout order number.                                     |
+    | state      | Yes      | int    | 0:Generated, 1:In Progress, 2:Success, 3:Failed, 4:Closed.             |
+
+### 5.4. Query Payout Order
+
+  - **Description**: Retrieves the status of a payout order.
+  - **URL**: `https://pay.ppaypros.com/api/payout/query`
+  - **Method**: POST
+  - **Request Parameters**:
+    | Name       | Required | Type        | Description                                                                     |
+    |------------|----------|-------------|---------------------------------------------------------------------------------|
+    | mchNo      | Yes      | String(32)  | Your merchant number.                                                           |
+    | appId      | Yes      | String(32)  | Your application ID.                                                            |
+    | transferId | Yes      | String(32)  | The system's payout order ID. Provide this OR `mchOrderNo`.                       |
+    | mchOrderNo | Yes      | String(32)  | Your merchant payout order number. Provide this OR `transferId`.                  |
+    | sign       | Yes      | String(32)  | The uppercase MD5 signature.                                                    |
+  - **Response `data` Format**:
+    | Name       | Required | Type        | Description                                                                     |
+    |------------|----------|-------------|---------------------------------------------------------------------------------|
+    | transferId | Yes      | String      | The system's payout order ID.                                                   |
+    | mchOrderNo | Yes      | String      | Your payout order number.                                                       |
+    | amount     | Yes      | int         | Net amount received by beneficiary.                                             |
+    | mchFeeAmount| Yes      | int         | The transfer fee charged.                                                       |
+    | amountTo   | Yes      | int         | Total transaction amount (amount + fee).                                        |
+    | state      | Yes      | int         | 0:Generated, 1:In Progress, 2:Success, 3:Failed, 4:Closed.                      |
+    | voucher    | No       | String      | Payment voucher. India: UTR. Brazil: Voucher link.                              |
+
+### 5.5. Query Balance
+
+  - **Description**: Checks your merchant account balances.
+  - **URL**: `https://pay.ppaypros.com/api/payout/balance`
+  - **Method**: POST
+  - **Request Parameters**:
+    | Name  | Required | Type        | Description                  |
+    |-------|----------|-------------|------------------------------|
+    | mchNo | Yes      | String(32)  | Your merchant number.        |
+    | appId | Yes      | String(32)  | Your application ID.         |
+    | sign  | Yes      | String(32)  | The uppercase MD5 signature. |
+  - **Response `data` Format**:
+    | Name          | Required | Type | Description                               |
+    |---------------|----------|------|-------------------------------------------|
+    | balance       | Yes      | int  | Your collection account balance.          |
+    | payoutBalance | Yes      | int  | Your payout account balance.              |
+    | agentBalance  | Yes      | int  | Your frozen account balance.              |
+
+<!-- end list -->
+
+6.  ASYNCHRONOUS CALLBACK NOTIFICATIONS
+
+-----
+
+6.1. Payment Callback
+
+  - **Description**: Sent to your `notifyUrl` when a payment order status changes.
+  - **Method**: POST
+  - **Content-Type**: `application/x-www-form-urlencoded` (Parameters are in the request body).
+  - **Callback Parameters**:
+    | Name     | Required | Type   | Description                                                |
+    |----------|----------|--------|------------------------------------------------------------|
+    | payOrderId| Yes      | String | The system's payment order ID.                             |
+    | mchOrderNo| Yes      | String | Your original order number.                                |
+    | amount   | Yes      | int    | Payment amount.                                            |
+    | state    | Yes      | int    | 2: Success/Settled, 3: Failed.                             |
+    | ...      | Yes      | ...    | Other relevant parameters will also be sent.               |
+    | sign     | Yes      | String | Signature of all received parameters.                      |
+  - **Required Merchant Response**:
+    Your server MUST respond with the plain text string `success` (lowercase, no spaces). If any other response is received, the platform will retry the notification.
+  - **Retry Schedule**: 0s, 30s, 60s, 90s, 120s, 150s after the initial attempt.
+
+6.2. Payout Callback
+
+  - **Description**: Sent to your `notifyUrl` when a payout order status changes.
+  - **Method**: POST
+  - **Content-Type**: `application/x-www-form-urlencoded`
+  - **Callback Parameters**:
+    | Name     | Required | Type   | Description                                                |
+    |----------|----------|--------|------------------------------------------------------------|
+    | transferId| Yes      | String | The system's payout order ID.                              |
+    | mchOrderNo| Yes      | String | Your original payout order number.                         |
+    | amount   | Yes      | int    | Net payout amount.                                         |
+    | state    | Yes      | int    | 2: Success, 3: Failed.                                     |
+    | voucher  | No       | String | India: UTR.                                                |
+    | ...      | Yes      | ...    | Other relevant parameters will also be sent.               |
+    | sign     | Yes      | String | Signature of all received parameters.                      |
+  - **Required Merchant Response**:
+    Your server MUST respond with the plain text string `success` (lowercase, no spaces).
+  - **Retry Schedule**: 0s, 30s, 60s, 90s, 120s, 150s.
+
+<!-- end list -->
+
+```
+```

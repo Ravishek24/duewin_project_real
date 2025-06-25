@@ -1,0 +1,1279 @@
+# Signature Rules
+
+Encryption rules
+
+1. Sort all the fields that need to be signed from small to large according to the ASCII code, and concatenate the string in the format of k=v&k=v, and concatenate the merchant's private key after the string with &key=x to generate the queryString string to be signed.
+2. Perform MD5 signature on the generated queryString string to obtain an uppercase signature string.
+3. Whether the field participates in the signature, please refer to the corresponding document; Required parameters participate
+Encryption Example
+- The order of the strings before encryption is as follows:
+callbackurl=https://admin.mx-pay.cn/nihao&datetime=1700653202123&memberCode=202310001¬ifyurl=https://admin.mx-pay.cn/he llo&orderAmount=1024&orderNo=20231026173012345699&passageInCode=TD01&productName=Test product&key=b17f24ff026d40949c85a24f4f375d42
+
+- Encryption result:
+79975639F38B9ECD61635E0CAE690BFA
+
+//java example code
+
+```js
+
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.TreeMap;
+
+public void test1() {
+    Map<String, String> map = new HashMap<>();
+    //Fields to be encrypted
+    String secret = "b17f24ff026d40949c85a24f4f375d42"; //Key
+    map.put("orderNo", "20231026173012345699"); //Order number
+    map.put("memberCode", "202310001"); //Merchant number
+    map.put("passageInCode", "TD01"); //passage number
+    map.put("orderAmount", "1024"); //Amount
+    map.put("notifyurl", "https://admin.mx-pay.cn/hello"); //callback address
+    map.put("callbackurl", "https://admin.mx-pay.cn/nihao");  
+    map.put("productName", "Test product");//Product name  
+    map.put("datetime", "1700653202123");
+    TreeMap<String, String> sortedData = new TreeMap<>(map);  
+    String datetime = map.get("datetime");  
+
+    // Build the string to be signed  
+    StringBuilder stringA = new StringBuilder();  
+    for (Map.Entry<String, String> entry : sortedData.entrySet()) {  
+        String key = entry.getKey();  
+        String value = entry.getValue();  
+        if (value != null && !value.isEmpty()) {  
+            stringA.append(key).append("=").append(value).append("&");  
+        }  
+    }  
+
+    // Concatenate keys and perform MD5 calculation  
+    String stringSignTemp = stringA.append("key=").append(secret).toString();  
+    String signValue = md5Hash(stringSignTemp).toUpperCase();  
+    System.err.println(signValue);  
+}  
+  //Encryption example
+private static String md5Hash(String data) {  
+    try {  
+        MessageDigest md = MessageDigest.getInstance("MD5");  
+        byte\[\] hashBytes = md.digest(data.getBytes());  
+
+        StringBuilder hexString = new StringBuilder();  
+        for (byte hashByte : hashBytes) {  
+            String hex = Integer.toHexString(0xFF & hashByte);  
+            if (hex.length() == 1) {  
+                hexString.append('0');  
+            }  
+            hexString.append(hex);  
+        }  
+
+        return hexString.toString();  
+    } catch (NoSuchAlgorithmException e) {  
+        e.printStackTrace();  
+    }  
+    return "";  
+}
+```
+
+# Callback description
+
+**illustrate**:
+1. After the asynchronous notification is successfully processed, it needs to return "ok" to the platform. After the platform receives ok, it will not send notifications again.
+2. There may be a reversal of the order (a successful order then fails) or a correction (an order fails then succeeds), whichever is the last callback.
+3. Signature Reference Signature Rules
+4. The request body is json
+-
+
+| Parameters| Parameter name| Type| Description|
+| --- | --- |--- |---|
+|returncode | Order status |String |00: Payment successful11: Processing33: Payment failed |
+|memberCode | Merchant Number |String | |
+|orderNo | Merchant order number |String | |
+|amount | Transaction amount |String |Actual amount |
+|datetime | Order time |String | |
+|transactionNo| Platform payment order number |String | |
+|attach |Additional information (error information) |String |Do not participate in signing|
+|sign |Signature|String |Do not participate in signing|
+
+
+//java callback example
+```
+@RequestMapping(value = "/nootify")
+public String paymentCallback(HttpServletRequest request) {
+    String content = ServletUtil.getBody(request).trim();
+    System.err.println(content);
+    return "ok";
+}
+
+//jar package reference
+<dependency>
+    <groupId>cn.hutool</groupId>
+    <artifactId>hutool-all</artifactId>
+    <version>5.8.19</version>
+</dependency>
+```
+
+# 新建代付（印度）
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/outorder/addOutOrder:
+    post:
+      summary: 新建代付（印度）
+      deprecated: false
+      description: ''
+      tags:
+        - 代付
+      parameters:
+        - name: sign
+          in: header
+          description: 签名
+          required: true
+          example: 087B28944019823FA56523F3346B9401
+          schema:
+            type: string
+        - name: Content-Type
+          in: header
+          description: ''
+          required: false
+          example: application/json
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                memberCode:
+                  type: string
+                  title: 商户编码
+                orderCardNo:
+                  type: string
+                  title: 卡号/UPI号
+                orderUsername:
+                  type: string
+                  title: 用户姓名
+                memberOrderNo:
+                  type: string
+                  title: 商户订单号
+                passageOutCode:
+                  type: string
+                  title: 平台分配通道号
+                bankCode:
+                  type: string
+                  description: 银行列表获取
+                  title: 转账类型
+                orderAmount:
+                  type: string
+                  title: 金额
+                notifyurl:
+                  type: string
+                  title: 回调地址
+                orderRemark:
+                  type: string
+                  title: 手机号码
+                  description: （不参与验签）
+                datetime:
+                  type: string
+                  title: 下单时间
+                attach:
+                  type: string
+                  title: IFSC码
+                  description: （不参与验签）
+              required:
+                - memberCode
+                - orderCardNo
+                - orderUsername
+                - memberOrderNo
+                - passageOutCode
+                - bankCode
+                - orderAmount
+                - notifyurl
+                - datetime
+                - attach
+                - orderRemark
+              x-apifox-orders:
+                - memberCode
+                - orderCardNo
+                - orderUsername
+                - memberOrderNo
+                - passageOutCode
+                - bankCode
+                - orderAmount
+                - notifyurl
+                - orderRemark
+                - datetime
+                - attach
+            example:
+              memberCode: '202310018'
+              orderCardNo: '7035269326'
+              orderUsername: tom
+              memberOrderNo: '70352693260010'
+              passageOutCode: moonpay001
+              bankCode: IDPT0001
+              orderAmount: '100'
+              notifyurl: https://www.baidu.com/nihao
+              orderRemark: '889977654'
+              datetime: '1700653762123'
+              attach: '12340567890'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 0失败1成功
+                  ok:
+                    type: boolean
+                    title: 返回状态
+                    description: true成功
+                  msg:
+                    type: string
+                    title: 附带信息
+                  data:
+                    type: object
+                    properties:
+                      memberOrderNo:
+                        type: string
+                        title: 商户订单编码
+                      orderNo:
+                        type: string
+                        title: 平台订单编码
+                    required:
+                      - memberOrderNo
+                      - orderNo
+                    x-apifox-orders:
+                      - memberOrderNo
+                      - orderNo
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: 操作成功
+                data:
+                  memberOrderNo: '6257364936'
+                  orderNo: '17019292050198912456'
+                time: '2023-11-22 19:50:20'
+                traceId: '1727293433422286849'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 代付
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-146008254-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+
+# 代收签名测试
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/inorder/makeSign:
+    post:
+      summary: 代收签名测试
+      deprecated: false
+      description: ''
+      tags:
+        - 代收
+      parameters:
+        - name: Content-Type
+          in: header
+          description: ''
+          required: false
+          example: application/json
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                orderNo:
+                  type: string
+                  title: 商户订单编码
+                  description: 商户订单编码
+                memberCode:
+                  type: string
+                  title: 商户编码
+                  description: 平台分配唯一商户号
+                passageInCode:
+                  type: string
+                  title: 通道编码
+                  description: 平台分配通道编码
+                orderAmount:
+                  type: string
+                  title: 订单金额
+                notifyurl:
+                  type: string
+                  title: 回调地址
+                callbackurl:
+                  type: string
+                  title: 跳转地址
+                productName:
+                  type: string
+                  title: 商品名称
+                datetime:
+                  type: string
+                  title: 请求时间
+                attach:
+                  type: string
+                  title: 附带参数
+                  description: 不参与验签
+                key:
+                  type: string
+                  title: 用户秘钥
+              required:
+                - orderNo
+                - memberCode
+                - passageInCode
+                - orderAmount
+                - notifyurl
+                - callbackurl
+                - productName
+                - datetime
+                - key
+              x-apifox-orders:
+                - orderNo
+                - memberCode
+                - passageInCode
+                - orderAmount
+                - notifyurl
+                - callbackurl
+                - productName
+                - datetime
+                - attach
+                - key
+            example:
+              orderNo: '20231026173012345633'
+              memberCode: '172526208687443'
+              passageInCode: paystack001
+              orderAmount: '1270'
+              notifyurl: https://www.baidu.com/hello
+              callbackurl: https://www.baidu.com/nihao
+              productName: 测试商品
+              datetime: '1700653762123'
+              attach: ceshi
+              key: 434888c80f483t6f8b85d87541a567356
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 1成功
+                  ok:
+                    type: boolean
+                    title: 返回状态
+                    description: true成功
+                  msg:
+                    type: string
+                    description: 附带信息
+                    title: 信息
+                  data:
+                    type: object
+                    properties:
+                      sign:
+                        type: string
+                        title: 签名
+                      md5Str:
+                        type: string
+                        title: md5加密串
+                    required:
+                      - md5Str
+                      - sign
+                    x-apifox-orders:
+                      - md5Str
+                      - sign
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: success
+                data:
+                  md5Str: >-
+                    bankCode=IDPT0001&datetime=1700653762123&memberCode=172526208687443&memberOrderNo=70352693260010&notifyurl=https://www.baidu.com/nihao&orderAmount=100&orderCardNo=7035269326&orderUsername=tom&passageOutCode=pay001&key=434888c80f483t6f8b85d87541a567356
+                  sign: 2DFD6BFCD82A335A1E6EB8F75515B72A
+                time: '2024-02-26 14:49:24'
+                traceId: '1762006935530500097'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 代收
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-149950428-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+# 代收订单查询
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/inorder/status:
+    get:
+      summary: 代收订单查询
+      deprecated: false
+      description: ''
+      tags:
+        - 代收
+      parameters:
+        - name: orderNo
+          in: query
+          description: 平台唯一订单号
+          required: false
+          example: '170565504656808925'
+          schema:
+            type: string
+        - name: sign
+          in: header
+          description: 签名
+          required: true
+          example: 087B28944019823FA56523F3346B9401
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 1为成功 0为失败
+                  ok:
+                    type: boolean
+                    title: 返回状态
+                    description: true为成功
+                  msg:
+                    type: string
+                    title: 附带信息
+                  data:
+                    type: object
+                    properties:
+                      memberCode:
+                        type: string
+                        title: 商户编码
+                      amount:
+                        type: string
+                        title: 金额
+                        description: 实际支付金额
+                      datetime:
+                        type: string
+                      orderNo:
+                        type: string
+                        title: 商户订单编码
+                      returncode:
+                        type: string
+                        title: 订单状态
+                        description: 00为成功 33为失败
+                      transactionNo:
+                        type: string
+                        title: 平台订单编码
+                      sign:
+                        type: string
+                        title: 签名
+                        description: 只有data里的信息参与签名
+                    required:
+                      - memberCode
+                      - amount
+                      - datetime
+                      - orderNo
+                      - returncode
+                      - transactionNo
+                      - sign
+                    x-apifox-orders:
+                      - memberCode
+                      - amount
+                      - datetime
+                      - orderNo
+                      - returncode
+                      - transactionNo
+                      - sign
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: 查询成功
+                data:
+                  memberCode: '170160506991235'
+                  amount: '1034.0000'
+                  datetime: '20240109163400'
+                  orderNo: '6257898042'
+                  returncode: '00'
+                  transactionNo: '17047892402060912456'
+                  sign: 143E19557784BE21DDCE81CCD5E7BD7D
+                time: '2024-01-10 19:39:17'
+                traceId: '1745047656813596673'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 代收
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-146008257-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+# 代收订单查询 (商户单号)
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/inorder/memberStatus:
+    get:
+      summary: 代收订单查询 (商户单号)
+      deprecated: false
+      description: ''
+      tags:
+        - 代收
+      parameters:
+        - name: orderNo
+          in: query
+          description: 平台唯一订单号
+          required: false
+          example: '170565504656808925'
+          schema:
+            type: string
+        - name: memberCode
+          in: query
+          description: ''
+          required: false
+          example: '1705655046568'
+          schema:
+            type: string
+        - name: sign
+          in: header
+          description: 签名
+          required: true
+          example: 087B28944019823FA56523F3346B9401
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 1为成功 0为失败
+                  ok:
+                    type: boolean
+                    title: 返回状态
+                    description: true为成功
+                  msg:
+                    type: string
+                    title: 附带信息
+                  data:
+                    type: object
+                    properties:
+                      memberCode:
+                        type: string
+                        title: 商户编码
+                      amount:
+                        type: string
+                        title: 金额
+                        description: 实际支付金额
+                      datetime:
+                        type: string
+                      orderNo:
+                        type: string
+                        title: 商户订单编码
+                      returncode:
+                        type: string
+                        title: 订单状态
+                        description: 00为成功 33为失败
+                      transactionNo:
+                        type: string
+                        title: 平台订单编码
+                      sign:
+                        type: string
+                        title: 签名
+                        description: 只有data里的信息参与签名
+                    required:
+                      - memberCode
+                      - amount
+                      - datetime
+                      - orderNo
+                      - returncode
+                      - transactionNo
+                      - sign
+                    x-apifox-orders:
+                      - memberCode
+                      - amount
+                      - datetime
+                      - orderNo
+                      - returncode
+                      - transactionNo
+                      - sign
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: 查询成功
+                data:
+                  memberCode: '170160506991235'
+                  amount: '1034.0000'
+                  datetime: '20240109163400'
+                  orderNo: '6257898042'
+                  returncode: '00'
+                  transactionNo: '17047892402060912456'
+                  sign: 143E19557784BE21DDCE81CCD5E7BD7D
+                time: '2024-01-10 19:39:17'
+                traceId: '1745047656813596673'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 代收
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-166947987-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+# 银行流水查单(墨西哥)
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/inorder/getByBankNo:
+    get:
+      summary: 银行流水查单(墨西哥)
+      deprecated: false
+      description: ''
+      tags:
+        - 代收
+      parameters:
+        - name: bankNo
+          in: query
+          description: 银行流水号
+          required: false
+          example: '170565504656808925'
+          schema:
+            type: string
+        - name: sign
+          in: header
+          description: 签名
+          required: true
+          example: 087B28944019823FA56523F3346B9401
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 1为成功 0为失败
+                  ok:
+                    type: boolean
+                    title: 返回状态
+                    description: true为成功
+                  msg:
+                    type: string
+                    title: 附带信息
+                  data:
+                    type: object
+                    properties:
+                      orderNo:
+                        type: string
+                        title: 商户订单编码
+                        description: 流水号绑定的订单号
+                      transactionNo:
+                        type: string
+                        title: 平台订单编码
+                        description: 流水号绑定的平台订单号
+                      result:
+                        type: string
+                        title: 是否可补单
+                        description: ok为可补单no为不可补单
+                      msg:
+                        type: string
+                        title: 信息说明
+                        description: 信息说明
+                    required:
+                      - result
+                      - orderNo
+                      - msg
+                      - transactionNo
+                    x-apifox-orders:
+                      - result
+                      - orderNo
+                      - msg
+                      - transactionNo
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: ''
+                data:
+                  result: 'no'
+                  orderNo: '6257898042'
+                  transactionNo: '17047892402060912456'
+                  msg: 银行流水号已被单号为17047892402060912456(6257898042)的订单使用
+                time: '2024-01-10 19:39:17'
+                traceId: '1745047656813596673'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: 代收
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-287045270-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+# 商户补单
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/inorder/updateByBankNoMember:
+    get:
+      summary: 商户补单
+      deprecated: false
+      description: ''
+      tags: []
+      parameters:
+        - name: memberCode
+          in: query
+          description: 平台商户唯一编码
+          required: false
+          example: '170522208687003'
+          schema:
+            type: string
+        - name: orderNo
+          in: query
+          description: ''
+          required: false
+          example: S170522208687003
+          schema:
+            type: string
+        - name: bankNo
+          in: query
+          description: 印度地区为UTR
+          required: false
+          example: '17052220868'
+          schema:
+            type: string
+        - name: sign
+          in: header
+          description: 签名
+          required: true
+          example: 5B0B841B280537E885F0C3404F96F962
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 0失败1成功
+                  ok:
+                    type: boolean
+                    title: 返回状态
+                    description: 'true'
+                  msg:
+                    type: string
+                    title: 附带信息
+                  data:
+                    type: object
+                    properties:
+                      result:
+                        type: string
+                        title: 补单状态
+                        description: ok为补单成功，no为补单失败
+                      msg:
+                        type: string
+                        title: 附带信息
+                        description: 补单情况说明
+                    required:
+                      - result
+                      - msg
+                    x-apifox-orders:
+                      - result
+                      - msg
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: 查询成功
+                data:
+                  result: ok
+                  msg: 补单成功
+                time: '2024-01-10 19:52:26'
+                traceId: '1745050957584044033'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: ''
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-187177858-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+# 商户余额查询
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/member/amount:
+    get:
+      summary: 商户余额查询
+      deprecated: false
+      description: ''
+      tags: []
+      parameters:
+        - name: memberCode
+          in: query
+          description: 平台商户唯一编码
+          required: false
+          example: '170522208687003'
+          schema:
+            type: string
+        - name: sign
+          in: header
+          description: 签名
+          required: true
+          example: 5B0B841B280537E885F0C3404F96F962
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 0失败1成功
+                  ok:
+                    type: boolean
+                    title: 返回状态
+                    description: 'true'
+                  msg:
+                    type: string
+                    title: 附带信息
+                  data:
+                    type: object
+                    properties:
+                      memberCode:
+                        type: string
+                        title: 商户编码
+                      amount:
+                        type: string
+                        title: 余额
+                      sign:
+                        type: string
+                        title: 签名
+                        description: 只有data参数参与签名
+                      memberName:
+                        type: string
+                        title: 商户名称
+                      runAmount:
+                        type: string
+                        title: 在途资金
+                      frozenAmount:
+                        type: string
+                        title: 冻结资金
+                    required:
+                      - memberCode
+                      - amount
+                      - sign
+                      - memberName
+                      - runAmount
+                      - frozenAmount
+                    x-apifox-orders:
+                      - memberCode
+                      - amount
+                      - sign
+                      - memberName
+                      - runAmount
+                      - frozenAmount
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: 查询成功
+                data:
+                  memberCode: '170160506991235'
+                  amount: '100.2150'
+                  sign: 6DCE93ADB88753B01DB46A17CA220600
+                  memberName: qepay
+                  runAmount: '0.0000'
+                  frozenAmount: '0.0000'
+                time: '2024-01-10 19:52:26'
+                traceId: '1745050957584044033'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: ''
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-146008251-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+
+# 银行列表
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /v1/outorder/bankList:
+    get:
+      summary: 银行列表
+      deprecated: false
+      description: ''
+      tags: []
+      parameters:
+        - name: memberCode
+          in: query
+          description: 用户编码 平台分配唯一
+          required: false
+          example: '170566001701323'
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: integer
+                    title: 返回编码
+                    description: 1成功0失败
+                  ok:
+                    type: boolean
+                  msg:
+                    type: string
+                    description: 附带信息
+                  data:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      list:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            bankName:
+                              type: string
+                              description: 银行展示名称
+                              title: 银行名称
+                            bankCode:
+                              type: string
+                              title: 银行编码
+                              description: 代付用的编码
+                          required:
+                            - bankName
+                            - bankCode
+                          x-apifox-orders:
+                            - bankName
+                            - bankCode
+                    required:
+                      - total
+                      - list
+                    x-apifox-orders:
+                      - total
+                      - list
+                  time:
+                    type: string
+                  traceId:
+                    type: string
+                required:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+                x-apifox-orders:
+                  - code
+                  - ok
+                  - msg
+                  - data
+                  - time
+                  - traceId
+              example:
+                code: 1
+                ok: true
+                msg: 获取数据成功
+                data:
+                  total: 5
+                  list:
+                    - bankName: 银行名称
+                      bankCode: 银行编码
+                    - bankName: 银行名称1
+                      bankCode: 银行编码1
+                time: '2024-01-22 20:05:30'
+                traceId: '1749402905495072769'
+          headers: {}
+          x-apifox-name: 成功
+      security: []
+      x-apifox-folder: ''
+      x-apifox-status: released
+      x-run-in-apifox: https://app.apifox.com/web/project/3987585/apis/api-146008252-run
+components:
+  schemas: {}
+  securitySchemes: {}
+servers:
+  - url: https://admin.tpaycloud.com
+    description: tpay环境
+security: []
+
+```
+
+
+
+
+
+
+
+
+
+

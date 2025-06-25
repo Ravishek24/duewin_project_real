@@ -598,10 +598,11 @@ const getGameLaunchUrl = async (gameId, userId, req = null) => {
     
     if (!walletResult.success || walletResult.balance <= 0) {
       return {
-        success: true,
-        url: null,
-        sessionId: null,
-        warningMessage: 'Insufficient funds to play'
+        success: false,
+        message: 'No funds available in third-party wallet',
+        suggestion: 'Please transfer funds from your main wallet to third-party wallet first',
+        endpoint: '/api/third-party-wallets/transfer-to-third-party',
+        mainWalletBalance: user.wallet_balance || 0
       };
     }
 
@@ -965,7 +966,13 @@ const handleWithdraw = async (withdrawData) => {
         message: walletResult.message || 'Failed to update wallet'
       };
     }
-    
+
+    // Update total_bet_amount
+    await User.increment('total_bet_amount', {
+      by: parsedAmount,
+      where: { user_id: user_id }
+    });
+
     // 🔥 CRITICAL: Process the bet transaction in SpribeTransaction model
     const result = await processBetTransaction({
       user_id,
@@ -1013,7 +1020,7 @@ const handleWithdraw = async (withdrawData) => {
 
     // Process activity reward
     try {
-      const { processBetForActivityReward } = require('./activityRewardService');
+      const { processBetForActivityReward } = require('./activityRewardsService');
       await processBetForActivityReward(user_id, parsedAmount, 'spribe');
     } catch (activityError) {
       console.warn('⚠️ Activity reward processing failed:', activityError.message);

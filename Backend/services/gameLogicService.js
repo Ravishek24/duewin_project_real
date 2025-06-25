@@ -1,5 +1,5 @@
 // Backend/services/gameLogicService.js
-const { sequelize, DataTypes } = require('../config/db');
+const { sequelize, DataTypes, Op } = require('../config/db');
 const redisClient = require('../config/redis');
 const periodService = require('./periodService');
 const tronHashService = require('./tronHashService');
@@ -9,7 +9,7 @@ const logger = require('../utils/logger');
 const crypto = require('crypto');
 const { recordVipExperience } = require('../services/autoVipService');
 const { processSelfRebate } = require('../services/selfRebateService');
-const { processBetForActivityReward } = require('../services/activityRewardService');
+const { processBetForActivityReward } = require('../services/activityRewardsService');
 // CONSTANTS - Add to top of file
 const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
 const ENHANCED_USER_THRESHOLD = 100; // New minimum user threshold
@@ -6328,6 +6328,13 @@ const processBet = async (betData) => {
                 transaction: t
             });
 
+            // Update total_bet_amount
+            await models.User.increment('total_bet_amount', {
+                by: grossBetAmount,
+                where: { user_id: userId },
+                transaction: t
+            });
+
             // Store bet in appropriate database table with fee structure
             let betRecord;
             const betTypeFormatted = `${betType}:${betValue}`;
@@ -6686,7 +6693,9 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
             page = 1,
             limit = 10,
             periodId = null,
-            status = null
+            status = null,
+            startDate = null,
+            endDate = null
         } = options;
 
         const offset = (page - 1) * limit;
@@ -6698,7 +6707,9 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
             page,
             limit,
             periodId,
-            status
+            status,
+            startDate,
+            endDate
         });
 
         // Build where clause
@@ -6717,6 +6728,13 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
         // Add duration filter if the model supports it
         if (duration) {
             whereClause.duration = duration;
+        }
+
+        // Add date filtering if provided
+        if (startDate && endDate) {
+            whereClause.created_at = {
+                [Op.between]: [startDate, endDate]
+            };
         }
 
         let bets = [];
@@ -6816,6 +6834,14 @@ const getUserBetHistory = async (userId, gameType, duration, options = {}) => {
                     offset: offset,
                     hasMore: offset + limit < totalCount,
                     totalPages: Math.ceil(totalCount / limit)
+                },
+                filters: {
+                    gameType,
+                    duration,
+                    periodId,
+                    status,
+                    startDate,
+                    endDate
                 }
             }
         };

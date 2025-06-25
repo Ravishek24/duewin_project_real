@@ -15,13 +15,16 @@ const {
     getUserTransactionHistory,
     getUserTeamSummary,
     getUserRebateEarnings,
-    getUserDetails
+    getUserDetails,
+    getInHouseGamesStatsController,
+    getGameBetHistoryController
 } = require('../controllers/userController/index');
 const { auth, isAdmin, requirePhoneVerification } = require('../middlewares/authMiddleware');
 const validationRules = require('../middleware/inputValidator');
 const { authenticateToken } = require('../middleware/auth');
-const { verifyEmailController } = require('../controllers/userController/profileController');
+const { verifyEmailController } = require('../controllers/userController/emailVerificationController');
 const { getUserProfilePicture, updateProfilePicture } = require('../services/userProfileService');
+const { getModels } = require('../models');
 
 const router = express.Router();
 
@@ -96,7 +99,55 @@ router.get('/admin/users/:user_id/transaction-history', auth, isAdmin, getUserTr
 router.get('/admin/users/:user_id/team-summary', auth, isAdmin, getUserTeamSummary);
 router.get('/admin/users/:user_id/rebate-earnings', auth, isAdmin, getUserRebateEarnings);
 
+// User details route
+router.get('/details', auth, getUserDetails);
+
 // Public routes
-router.get('/verify-email', verifyEmailController);
+//router.get('/verify-email', verifyEmailController);
+
+// Get betting requirement status
+router.get('/betting-requirement', auth, async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const models = await getModels();
+        const User = models.User;
+
+        const user = await User.findByPk(userId, {
+            attributes: ['actual_deposit_amount', 'total_bet_amount']
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        const actualDeposit = parseFloat(user.actual_deposit_amount || 0);
+        const totalBet = parseFloat(user.total_bet_amount || 0);
+        const remainingRequirement = Math.max(0, actualDeposit - totalBet);
+
+        res.json({
+            success: true,
+            data: {
+                actual_deposit_amount: actualDeposit,
+                total_bet_amount: totalBet,
+                remaining_requirement: remainingRequirement,
+                requirement_met: totalBet >= actualDeposit
+            }
+        });
+
+    } catch (error) {
+        console.error('Error getting betting requirement:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+});
+
+// In-house games statistics routes
+router.get('/in-house-games/stats', auth, getInHouseGamesStatsController);
+router.get('/in-house-games/:gameType/history', auth, getGameBetHistoryController);
 
 module.exports = router;

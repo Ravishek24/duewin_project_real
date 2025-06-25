@@ -8,6 +8,7 @@ const { startDiagnostic, performManualCheck } = require('./utils/websocketDiagno
 const { redis, isConnected } = require('./config/redisConfig');
 const { initializeModels } = require('./models');
 const { getSequelizeInstance } = require('./config/db');
+const securityMiddleware = require('./middleware/securityMiddleware');
 
 
 // Load environment variables first
@@ -36,9 +37,7 @@ const corsOptions = {
         
         // Your allowed origins
         const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(',') || [
-            'https://diuwin-final.vercel.app',
             'http://localhost:3000',
-            'http://localhost:3001'
         ]);
         
         // Check if origin is allowed or if it's from SPRIBE
@@ -62,13 +61,27 @@ const corsOptions = {
         'X-Spribe-Client-TS', 
         'X-Spribe-Client-Signature'
     ],
+    exposedHeaders: [
+        // 🔒 SECURITY: Expose security headers for external tools
+        'Content-Security-Policy',
+        'X-Frame-Options',
+        'X-Content-Type-Options',
+        'Referrer-Policy',
+        'Permissions-Policy',
+        'Strict-Transport-Security',
+        'X-XSS-Protection',
+        'X-Permitted-Cross-Domain-Policies',
+        'Cross-Origin-Opener-Policy',
+        'Cross-Origin-Embedder-Policy'
+    ],
     credentials: true,
     optionsSuccessStatus: 200 // For legacy browser support
 };
 
 app.use(cors(corsOptions));
 
-
+// 🔒 SECURITY: Apply comprehensive security middleware
+securityMiddleware(app);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -80,6 +93,22 @@ app.get('/health', (req, res) => {
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         message: 'Server is running'
+    });
+});
+
+// Security test endpoint
+app.get('/security-test', (req, res) => {
+    res.json({ 
+        status: 'security-test',
+        timestamp: new Date().toISOString(),
+        message: 'Security headers test endpoint',
+        headers: {
+            'Content-Security-Policy': res.getHeader('Content-Security-Policy'),
+            'X-Frame-Options': res.getHeader('X-Frame-Options'),
+            'X-Content-Type-Options': res.getHeader('X-Content-Type-Options'),
+            'Referrer-Policy': res.getHeader('Referrer-Policy'),
+            'Permissions-Policy': res.getHeader('Permissions-Policy')
+        }
     });
 });
 

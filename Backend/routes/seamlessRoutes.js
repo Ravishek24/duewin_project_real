@@ -131,4 +131,33 @@ router.get('/debug/routes', (req, res) => {
   });
 });
 
+// === HOT GAMES ENDPOINT ===
+const hotGameIds = [
+  "163330", "162656", "159435", "165104", "165102", "165122", "156612", "156980", "157346",
+  "163030", "164558", "159200", "169812", "167124", "133151", "114603", "160689", "165040",
+  "164150", "170768", "162424", "169658"
+];
+const hotGameHashes = [
+  "spribe_mines", "upgaming_dice", "spribe_dice", "spribe_plinko", "upgaming_plinko",
+  "spribe_hilo", "upgaming_hilo", "spribe_keno", "upgaming_keno"
+];
+
+router.get('/hot-games', auth, async (req, res) => {
+  try {
+    const seamlessService = require('../services/seamlessService');
+    const result = await seamlessService.getGamesList({ limit: 50000 });
+    const allGames = result.games || [];
+    const hotGames = allGames.filter(
+      game => hotGameIds.includes(game.id) || hotGameHashes.includes(game.id_hash)
+    );
+    res.json({
+      success: true,
+      games: hotGames,
+      count: hotGames.length
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;

@@ -21,7 +21,7 @@ router.get('/withdrawal-history', auth, getWithdrawalHistoryController);
 router.get('/first-bonus-status', auth, getFirstBonusStatusController);
 
 // Initiate withdrawal - only define this route once
-router.post('/withdraw', auth, requirePhoneVerification, initiateWithdrawalController);
+router.post('/withdraw', auth, initiateWithdrawalController);
 
 // Get all wallet balances (main and third-party)
 router.get('/balances', auth, getAllWalletBalances);

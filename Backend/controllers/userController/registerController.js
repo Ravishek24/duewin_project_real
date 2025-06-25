@@ -3,6 +3,8 @@ const { generateToken, generateRefreshToken } = require('../../utils/jwt');
 const { Op } = require('sequelize');
 const crypto = require('crypto');
 const { autoRecordReferral } = require('../../services/referralService'); // Fixed path
+const referralCodeGenerator = require('../../utils/referralCodeGenerator');
+const registrationQueue = require('../../queues/registrationQueue');
 
 // Fallback function to generate referral code if utility is not available
 const generateReferringCode = () => {
@@ -92,11 +94,11 @@ const registerController = async (req, res) => {
             });
         }
 
-        // Start transaction
+        // Start transaction for user creation only
         const transaction = await User.sequelize.transaction();
 
         try {
-            // Check if user already exists
+            // Check if user already exists (optimized query)
             const existingUser = await User.findOne({
                 where: {
                     [Op.or]: [
@@ -105,7 +107,8 @@ const registerController = async (req, res) => {
                         ...(user_name ? [{ user_name }] : [])
                     ]
                 },
-                transaction
+                transaction,
+                attributes: ['user_id'] // Only fetch what we need
             });
 
             if (existingUser) {
@@ -116,31 +119,8 @@ const registerController = async (req, res) => {
                 });
             }
 
-            // Generate unique referring code
-            let referring_code;
-            let isUnique = false;
-            let attempts = 0;
-            const maxAttempts = 5;
-
-            while (!isUnique && attempts < maxAttempts) {
-                referring_code = generateReferringCode();
-                const existingCode = await User.findOne({ 
-                    where: { referring_code },
-                    transaction
-                });
-                if (!existingCode) {
-                    isUnique = true;
-                }
-                attempts++;
-            }
-
-            if (!isUnique) {
-                await transaction.rollback();
-                return res.status(500).json({
-                    success: false,
-                    message: 'Failed to generate unique referring code'
-                });
-            }
+            // Generate unique referring code (optimized)
+            const referring_code = await referralCodeGenerator.generateUniqueCode(User, transaction);
 
             // Generate username if not provided
             const auto_username = user_name || `user_${Date.now().toString().slice(-8)}`;
@@ -159,24 +139,37 @@ const registerController = async (req, res) => {
                 last_login_ip: req.ip || req.connection.remoteAddress
             }, { transaction });
 
-            // Apply registration bonus
-            try {
-                await applyRegistrationBonus(user.user_id, transaction);
-            } catch (bonusError) {
-                console.warn('Registration bonus failed:', bonusError.message);
-                // Don't fail registration if bonus fails
-            }
-
-            // Commit transaction
+            // Commit transaction immediately after user creation
             await transaction.commit();
 
             // Generate tokens
             const accessToken = generateToken(user);
             const refreshToken = generateRefreshToken(user);
 
+            // Enqueue background jobs (non-blocking)
+            try {
+                // Enqueue registration bonus job
+                registrationQueue.add('applyBonus', {
+                    type: 'applyBonus',
+                    data: { userId: user.user_id }
+                }).catch(console.error);
+
+                // Enqueue referral recording job
+                if (referred_by) {
+                    registrationQueue.add('recordReferral', {
+                        type: 'recordReferral',
+                        data: { userId: user.user_id, referredBy: referred_by }
+                    }).catch(console.error);
+                }
+            } catch (queueError) {
+                console.error('Failed to enqueue background jobs:', queueError);
+                // Don't fail registration if queue fails
+            }
+
             // Set security headers
             setSecurityHeaders(res);
 
+            // Respond immediately
             res.status(201).json({
                 success: true,
                 message: 'User registered successfully',
@@ -197,6 +190,7 @@ const registerController = async (req, res) => {
                     }
                 }
             });
+
         } catch (error) {
             await transaction.rollback();
             throw error;
