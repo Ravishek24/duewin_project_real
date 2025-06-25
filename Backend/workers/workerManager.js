@@ -123,6 +123,16 @@ initializeWorkerModels().then(() => {
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   
+  // Periodic memory usage logging
+  setInterval(() => {
+    const used = process.memoryUsage();
+    console.log('🧠 Memory Usage:', {
+      rss: Math.round(used.rss / 1024 / 1024 * 100) / 100 + ' MB',
+      heapTotal: Math.round(used.heapTotal / 1024 / 1024 * 100) / 100 + ' MB',
+      heapUsed: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100 + ' MB'
+    });
+  }, 30000);
+  
   console.log('✅ Enhanced Worker Manager Started Successfully!');
   console.log('💡 Press Ctrl+C to stop all workers gracefully');
   console.log('==================================================');

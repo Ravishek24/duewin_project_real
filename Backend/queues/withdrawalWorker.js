@@ -1,6 +1,7 @@
-const { Worker } = require('bullmq');
+const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
 const queueConnections = require('../config/queueConfig');
+const redis = require('../config/redisConfig').redis;
 
 const worker = new Worker('withdrawals', async job => {
   const { type, data } = job.data;
@@ -61,113 +62,125 @@ const worker = new Worker('withdrawals', async job => {
 // Enhanced withdrawal processing with validation
 async function processWithdrawalWithRetry(data, models, maxRetries = 3) {
   const { userId, amount, orderId, withdrawalType, bankAccountId, usdtAccountId } = data;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const transaction = await models.User.sequelize.transaction({
-      isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
-    });
-    
-    try {
-      // Use FOR UPDATE to prevent race conditions
-      const user = await models.User.findByPk(userId, {
-        lock: transaction.LOCK.UPDATE,
-        transaction
+  const lockKey = `withdrawal:${orderId}:lock`;
+  const lockValue = Date.now().toString();
+  // Try to acquire lock (5 min expiry)
+  const acquired = await redis.set(lockKey, lockValue, 'EX', 300, 'NX');
+  if (!acquired) {
+    throw new Error('Withdrawal already processing or processed');
+  }
+  try {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const transaction = await models.User.sequelize.transaction({
+        isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
       });
       
-      if (!user) {
-        throw new Error(`User ${userId} not found`);
-      }
-      
-      // Check if withdrawal already processed
-      const existingWithdrawal = await models.WalletWithdrawal.findOne({
-        where: {
-          order_id: orderId,
-          status: { [models.Sequelize.Op.in]: ['completed', 'processing'] }
-        },
-        transaction
-      });
-      
-      if (existingWithdrawal) {
-        console.log(`Withdrawal already processed for order ${orderId}`);
-        await transaction.commit();
-        return { success: true, message: 'Withdrawal already processed' };
-      }
-      
-      // Validate withdrawal amount
-      if (parseFloat(user.wallet_balance) < parseFloat(amount)) {
-        throw new Error('Insufficient wallet balance');
-      }
-      
-      // Check withdrawal limits
-      if (parseFloat(amount) > parseFloat(user.actual_deposit_amount)) {
-        throw new Error('Withdrawal amount cannot exceed actual deposit amount');
-      }
-      
-      // Check betting requirement
-      if (parseFloat(user.total_bet_amount) < parseFloat(user.actual_deposit_amount)) {
-        throw new Error('Must bet actual deposit amount before withdrawal');
-      }
-      
-      // Create withdrawal record
-      const withdrawalData = {
-        user_id: userId,
-        amount: amount,
-        order_id: orderId,
-        status: 'pending',
-        withdrawal_type: withdrawalType,
-        created_at: new Date(),
-        updated_at: new Date()
-      };
-      
-      if (withdrawalType === 'BANK' && bankAccountId) {
-        withdrawalData.bank_account_id = bankAccountId;
-      } else if (withdrawalType === 'USDT' && usdtAccountId) {
-        withdrawalData.usdt_account_id = usdtAccountId;
-      }
-      
-      const withdrawal = await models.WalletWithdrawal.create(withdrawalData, { transaction });
-      
-      // Deduct amount from wallet
-      const newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
-      await models.User.update({
-        wallet_balance: newBalance
-      }, {
-        where: { user_id: userId },
-        transaction
-      });
-      
-      // Create transaction record
-      await models.Transaction.create({
-        user_id: userId,
-        type: 'withdrawal',
-        amount: -parseFloat(amount), // Negative for withdrawal
-        status: 'pending',
-        description: `Withdrawal request - ${withdrawalType}`,
-        reference_id: orderId,
-        metadata: {
-          withdrawal_type: withdrawalType,
-          withdrawal_id: withdrawal.id
+      try {
+        // Use FOR UPDATE to prevent race conditions
+        const user = await models.User.findByPk(userId, {
+          lock: transaction.LOCK.UPDATE,
+          transaction
+        });
+        
+        if (!user) {
+          throw new Error(`User ${userId} not found`);
         }
-      }, { transaction });
-      
-      await transaction.commit();
-      console.log(`✅ Withdrawal processed for user ${userId}: ${amount}`);
-      return { success: true, withdrawalId: withdrawal.id, newBalance };
-      
-    } catch (error) {
-      await transaction.rollback();
-      
-      // Check if it's a deadlock error
-      if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
-        console.warn(`Deadlock detected for withdrawal ${orderId}, retrying (${attempt}/${maxRetries})`);
-        // Exponential backoff
-        await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
-        continue;
+        
+        // Check if withdrawal already processed
+        const existingWithdrawal = await models.WalletWithdrawal.findOne({
+          where: {
+            order_id: orderId,
+            status: { [models.Sequelize.Op.in]: ['completed', 'processing'] }
+          },
+          transaction
+        });
+        
+        if (existingWithdrawal) {
+          console.log(`Withdrawal already processed for order ${orderId}`);
+          await transaction.commit();
+          return { success: true, message: 'Withdrawal already processed' };
+        }
+        
+        // Validate withdrawal amount
+        if (parseFloat(user.wallet_balance) < parseFloat(amount)) {
+          throw new Error('Insufficient wallet balance');
+        }
+        
+        // Check withdrawal limits
+        if (parseFloat(amount) > parseFloat(user.actual_deposit_amount)) {
+          throw new Error('Withdrawal amount cannot exceed actual deposit amount');
+        }
+        
+        // Check betting requirement
+        if (parseFloat(user.total_bet_amount) < parseFloat(user.actual_deposit_amount)) {
+          throw new Error('Must bet actual deposit amount before withdrawal');
+        }
+        
+        // Create withdrawal record
+        const withdrawalData = {
+          user_id: userId,
+          amount: amount,
+          order_id: orderId,
+          status: 'pending',
+          withdrawal_type: withdrawalType,
+          created_at: new Date(),
+          updated_at: new Date()
+        };
+        
+        if (withdrawalType === 'BANK' && bankAccountId) {
+          withdrawalData.bank_account_id = bankAccountId;
+        } else if (withdrawalType === 'USDT' && usdtAccountId) {
+          withdrawalData.usdt_account_id = usdtAccountId;
+        }
+        
+        const withdrawal = await models.WalletWithdrawal.create(withdrawalData, { transaction });
+        
+        // Deduct amount from wallet
+        const newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
+        await models.User.update({
+          wallet_balance: newBalance
+        }, {
+          where: { user_id: userId },
+          transaction
+        });
+        
+        // Create transaction record
+        await models.Transaction.create({
+          user_id: userId,
+          type: 'withdrawal',
+          amount: -parseFloat(amount), // Negative for withdrawal
+          status: 'pending',
+          description: `Withdrawal request - ${withdrawalType}`,
+          reference_id: orderId,
+          metadata: {
+            withdrawal_type: withdrawalType,
+            withdrawal_id: withdrawal.id
+          }
+        }, { transaction });
+        
+        await transaction.commit();
+        console.log(`✅ Withdrawal processed for user ${userId}: ${amount}`);
+        return { success: true, withdrawalId: withdrawal.id, newBalance };
+        
+      } catch (error) {
+        await transaction.rollback();
+        
+        // Check if it's a deadlock error
+        if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
+          console.warn(`Deadlock detected for withdrawal ${orderId}, retrying (${attempt}/${maxRetries})`);
+          // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
+          continue;
+        }
+        
+        console.error(`Failed to process withdrawal for order ${orderId} (attempt ${attempt}):`, error);
+        throw error;
       }
-      
-      console.error(`Failed to process withdrawal for order ${orderId} (attempt ${attempt}):`, error);
-      throw error;
     }
+  } finally {
+    // Only release lock if we still own it
+    const script = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`;
+    await redis.eval(script, 1, lockKey, lockValue);
   }
 }
 
@@ -498,6 +511,19 @@ worker.on('completed', job => {
 
 worker.on('failed', (job, err) => {
   console.error(`[BullMQ] Withdrawal job failed:`, job.id, err.message);
+  if (err.name === 'SequelizeDeadlockError') {
+    console.error('🚨 DEADLOCK DETECTED in withdrawal worker:', {
+      job: job.data,
+      timestamp: new Date().toISOString(),
+      stack: err.stack
+    });
+  }
 });
+
+const withdrawalQueue = new Queue('withdrawals', { connection: queueConnections.withdrawals });
+setInterval(() => {
+  withdrawalQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
+  withdrawalQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});
+}, 6 * 60 * 60 * 1000); // Every 6 hours
 
 module.exports = worker; 

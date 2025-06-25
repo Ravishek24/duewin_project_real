@@ -1,4 +1,4 @@
-const { Worker } = require('bullmq');
+const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
 const queueConnections = require('../config/queueConfig');
 
@@ -421,6 +421,19 @@ worker.on('completed', job => {
 
 worker.on('failed', (job, err) => {
   console.error(`[BullMQ] Payment job failed:`, job.id, err.message);
+  if (err.name === 'SequelizeDeadlockError') {
+    console.error('🚨 DEADLOCK DETECTED in payment worker:', {
+      job: job.data,
+      timestamp: new Date().toISOString(),
+      stack: err.stack
+    });
+  }
 });
+
+const paymentQueue = new Queue('payments', { connection: queueConnections.payments });
+setInterval(() => {
+  paymentQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
+  paymentQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});
+}, 6 * 60 * 60 * 1000); // Every 6 hours
 
 module.exports = worker; 

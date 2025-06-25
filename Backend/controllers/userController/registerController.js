@@ -146,30 +146,33 @@ const registerController = async (req, res) => {
             const registrationQueue = require('../../queues/registrationQueue');
             
             // Job 1: Apply bonus (higher priority)
-            registrationQueue.add('applyBonus', {
+            const bonusJobId = `bonus-${user.user_id}`;
+            await registrationQueue.add('applyBonus', {
                 type: 'applyBonus',
                 data: { userId: user.user_id }
             }, {
+                jobId: bonusJobId,
                 priority: 10,
                 removeOnComplete: 5,
                 removeOnFail: 10,
                 attempts: 3,
                 backoff: { type: 'exponential', delay: 2000 }
-            }).catch(console.error);
+            });
             
-            // Job 2: Record referral (lower priority, runs after bonus)
+            // Job 2: Record referral (waits for bonus job)
             if (referred_by) {
-                registrationQueue.add('recordReferral', {
+                await registrationQueue.add('recordReferral', {
                     type: 'recordReferral',
                     data: { userId: user.user_id, referredBy: referred_by }
                 }, {
+                    waitFor: [bonusJobId],
                     priority: 5,
                     delay: 2000, // Delay to ensure bonus is processed first
                     removeOnComplete: 5,
                     removeOnFail: 10,
                     attempts: 3,
                     backoff: { type: 'exponential', delay: 2000 }
-                }).catch(console.error);
+                });
             }
 
             // Generate tokens

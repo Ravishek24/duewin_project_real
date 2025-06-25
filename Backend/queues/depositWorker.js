@@ -322,6 +322,13 @@ worker.on('completed', job => {
 
 worker.on('failed', (job, err) => {
   console.error(`[BullMQ] Deposit job failed:`, job.id, err.message);
+  if (err.name === 'SequelizeDeadlockError') {
+    console.error('🚨 DEADLOCK DETECTED in deposit worker:', {
+      job: job.data,
+      timestamp: new Date().toISOString(),
+      stack: err.stack
+    });
+  }
 });
 
 module.exports = worker; 
