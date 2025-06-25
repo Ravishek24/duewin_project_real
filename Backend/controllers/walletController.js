@@ -159,24 +159,54 @@ const initiateWithdrawalController = async (req, res) => {
 
         // Generate unique order ID
         const orderId = `WD${Date.now()}${userId}`;
-        const transactionId = `TXN${Date.now()}${userId}`;
 
-        const result = await processWithdrawal(
-            userId, 
-            amount, 
-            orderId, 
-            transactionId, 
-            'OKPAY', // Default payment gateway
-            withdrawal_type,
-            bank_account_id,
-            usdt_account_id
-        );
+        // Add background withdrawal processing job
+        const withdrawalQueue = require('../queues/withdrawalQueue');
+        
+        // Job 1: Process withdrawal (immediate validation and processing)
+        withdrawalQueue.add('processWithdrawal', {
+            userId: userId,
+            amount: amount,
+            orderId: orderId,
+            withdrawalType: withdrawal_type,
+            bankAccountId: bank_account_id,
+            usdtAccountId: usdt_account_id
+        }, {
+            priority: 10,
+            removeOnComplete: 5,
+            removeOnFail: 10,
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 }
+        }).catch(console.error);
+        
+        // Job 2: Send admin notification (delayed)
+        const adminQueue = require('../queues/adminQueue');
+        adminQueue.add('notifyAdmin', {
+            type: 'withdrawal_request',
+            userId: userId,
+            amount: amount,
+            withdrawalType: withdrawal_type,
+            orderId: orderId
+        }, {
+            delay: 5000, // Notify admin after 5 seconds
+            priority: 5,
+            attempts: 2
+        }).catch(console.error);
 
-        if (result.success) {
-            return res.status(200).json(result);
-        } else {
-            return res.status(400).json(result);
-        }
+        // Return immediate response
+        return res.status(200).json({
+            success: true,
+            message: 'Withdrawal request submitted successfully',
+            data: {
+                orderId: orderId,
+                amount: amount,
+                status: 'pending',
+                withdrawalType: withdrawal_type,
+                estimatedProcessingTime: '24-48 hours',
+                note: 'Your withdrawal request has been submitted and is pending admin approval.'
+            }
+        });
+
     } catch (error) {
         console.error('Error initiating withdrawal:', error);
         return res.status(500).json({

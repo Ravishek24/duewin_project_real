@@ -690,13 +690,13 @@ const initiateDeposit = async (req, res) => {
         let result;
         switch (payment_method) {
             case 'WEPAY':
-                result = await createWePayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
+                result = await createWePayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl);
                 break;
             case 'MXPAY':
-                result = await createMxPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl, paymentGateway.gateway_id);
+                result = await createMxPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl);
                 break;
             case 'OKPAY':
-                result = await createOkPayCollectionOrder(userId, orderId, 'UPI', amount, notifyUrl, paymentGateway.gateway_id);
+                result = await createOkPayCollectionOrder(userId, orderId, amount, notifyUrl, returnUrl);
                 break;
             default:
                 return res.status(400).json({
@@ -706,18 +706,52 @@ const initiateDeposit = async (req, res) => {
         }
 
         if (result.success) {
-            // FIXED: Handle attendance processing after successful deposit initiation
-            try {
-                const attendanceResult = await autoProcessRechargeForAttendance(userId, parseFloat(amount));
-                console.log('Attendance processed for deposit:', attendanceResult);
-            } catch (attendanceError) {
-                console.error('Failed to process attendance for deposit:', attendanceError.message);
-                // Don't fail the deposit if attendance processing fails
-            }
+            // Add background deposit processing job
+            const depositQueue = require('../queues/depositQueue');
             
-            return res.status(200).json(result);
+            // Job 1: Create initial deposit record (immediate)
+            depositQueue.add('updateDepositStatus', {
+                orderId: orderId,
+                status: 'pending',
+                userId: userId,
+                amount: amount,
+                paymentGateway: payment_method
+            }, {
+                priority: 15,
+                removeOnComplete: 5,
+                removeOnFail: 10,
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 2000 }
+            }).catch(console.error);
+            
+            // Job 2: Check payment status after 30 seconds
+            const paymentQueue = require('../queues/paymentQueue');
+            paymentQueue.add('checkPaymentStatus', {
+                orderId: orderId,
+                gateway: payment_method,
+                type: 'deposit'
+            }, {
+                delay: 30000, // Check after 30 seconds
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 2000 }
+            }).catch(console.error);
+
+            return res.status(200).json({
+                success: true,
+                message: 'Deposit initiated successfully',
+                data: {
+                    orderId: orderId,
+                    paymentUrl: result.paymentUrl,
+                    amount: amount,
+                    status: 'pending',
+                    estimatedProcessingTime: '2-5 minutes'
+                }
+            });
         } else {
-            return res.status(400).json(result);
+            return res.status(400).json({
+                success: false,
+                message: result.message || 'Failed to create deposit order'
+            });
         }
     } catch (error) {
         console.error('Error initiating deposit:', error);

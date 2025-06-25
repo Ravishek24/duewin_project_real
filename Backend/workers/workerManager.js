@@ -8,25 +8,40 @@ console.log('==================================================');
 initializeWorkerModels().then(() => {
   console.log('✅ Worker models initialized');
   
-  // Now start workers
+  // Now start all workers
   const attendanceWorker = require('../queues/attendanceWorker');
   const registrationWorker = require('../queues/registrationWorker');
+  const depositWorker = require('../queues/depositWorker');
+  const withdrawalWorker = require('../queues/withdrawalWorker');
+  const paymentWorker = require('../queues/paymentWorker');
+  const adminWorker = require('../queues/adminWorker');
   
   const workers = {
     attendance: attendanceWorker,
-    registration: registrationWorker
+    registration: registrationWorker,
+    deposits: depositWorker,
+    withdrawals: withdrawalWorker,
+    payments: paymentWorker,
+    admin: adminWorker
   };
   
   console.log('📋 Active Workers:');
   console.log('   - Attendance Worker');
   console.log('   - Registration Worker');
+  console.log('   - Deposit Worker');
+  console.log('   - Withdrawal Worker');
+  console.log('   - Payment Worker');
+  console.log('   - Admin Worker');
   console.log('');
   
-  // Health monitoring
+  // Enhanced health monitoring
   const monitorWorkerHealth = () => {
     setInterval(async () => {
       try {
         const { Queue } = require('bullmq');
+        
+        console.log('📊 Queue Health Status:');
+        console.log('=======================');
         
         for (const [name, connection] of Object.entries(queueConnections)) {
           if (name === 'notifications' || name === 'deadLetter') continue; // Skip unused queues
@@ -40,7 +55,8 @@ initializeWorkerModels().then(() => {
             queue.getFailed(0, 0)
           ]);
           
-          console.log(`📊 ${name} Queue: ${waiting.length} waiting, ${active.length} active, ${completed.length} completed, ${failed.length} failed`);
+          const status = waiting.length > 50 ? '🚨' : waiting.length > 20 ? '⚠️' : '✅';
+          console.log(`${status} ${name}: ${waiting.length} waiting, ${active.length} active, ${completed.length} completed, ${failed.length} failed`);
           
           // Alert on backlog
           if (waiting.length > 50) {
@@ -51,7 +67,15 @@ initializeWorkerModels().then(() => {
           if (failed.length > completed.length * 0.1) {
             console.error(`🚨 HIGH FAILURE RATE: ${name} queue has ${failed.length} failed jobs`);
           }
+          
+          // Alert on stalled jobs
+          if (active.length > 0) {
+            console.warn(`⚠️ ${name} queue has ${active.length} active jobs`);
+          }
         }
+        
+        console.log('=======================');
+        
       } catch (error) {
         console.error('Health monitoring failed:', error);
       }
@@ -60,7 +84,7 @@ initializeWorkerModels().then(() => {
   
   // Start health monitoring after 10 seconds
   setTimeout(() => {
-    console.log('🔍 Starting queue health monitoring...');
+    console.log('🔍 Starting enhanced queue health monitoring...');
     monitorWorkerHealth();
   }, 10000);
   

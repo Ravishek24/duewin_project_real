@@ -34,6 +34,43 @@ const queueConnections = {
     retryDelayOnFailover: 100,
     lazyConnect: true,
     family: 4
+  },
+  
+  // NEW: Payment-related queues
+  deposits: {
+    host: '127.0.0.1',
+    port: 6379,
+    db: 5,  // Dedicated database for deposit processing
+    retryDelayOnFailover: 100,
+    lazyConnect: true,
+    family: 4
+  },
+  
+  withdrawals: {
+    host: '127.0.0.1',
+    port: 6379,
+    db: 6,  // Dedicated database for withdrawal processing
+    retryDelayOnFailover: 100,
+    lazyConnect: true,
+    family: 4
+  },
+  
+  payments: {
+    host: '127.0.0.1',
+    port: 6379,
+    db: 7,  // Dedicated database for payment gateway processing
+    retryDelayOnFailover: 100,
+    lazyConnect: true,
+    family: 4
+  },
+  
+  admin: {
+    host: '127.0.0.1',
+    port: 6379,
+    db: 8,  // Dedicated database for admin operations
+    retryDelayOnFailover: 100,
+    lazyConnect: true,
+    family: 4
   }
 };
 
