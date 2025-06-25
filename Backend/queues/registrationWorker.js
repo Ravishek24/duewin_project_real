@@ -79,11 +79,14 @@ async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
       // Apply bonus atomically
       const BONUS_AMOUNT = 25.00;
       
-      await models.User.increment('wallet_balance', {
-        by: BONUS_AMOUNT,
-        where: { user_id: userId },
-        transaction
-      });
+      // If registration bonus is to be applied, use atomic increment
+      if (BONUS_AMOUNT && BONUS_AMOUNT > 0) {
+        await models.User.increment('wallet_balance', {
+          by: BONUS_AMOUNT,
+          where: { user_id: userId },
+          transaction
+        });
+      }
       
       await models.Transaction.create({
         user_id: userId,
@@ -122,35 +125,29 @@ async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
   }
 }
 
-// Enhanced referral recording with deadlock prevention
+// Enhanced referral recording with deadlock prevention and consistent lock ordering
 async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 3) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const transaction = await models.User.sequelize.transaction({
       isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
     });
-    
     try {
-      // Always acquire locks in consistent order: Users first, then Referrals
-      const [referrer, newUser] = await Promise.all([
-        models.User.findOne({
-          where: { referring_code: referredBy },
-          lock: transaction.LOCK.UPDATE,
-          transaction
-        }),
-        models.User.findByPk(userId, {
-          lock: transaction.LOCK.UPDATE,
-          transaction
-        })
-      ]);
-      
-      if (!referrer) {
-        throw new Error(`Invalid referral code: ${referredBy}`);
-      }
-      
-      if (!newUser) {
-        throw new Error(`User ${userId} not found`);
-      }
-      
+      // Find referrer and new user IDs first
+      const referrer = await models.User.findOne({
+        where: { referring_code: referredBy },
+        attributes: ['user_id']
+      });
+      const newUser = await models.User.findByPk(userId, { attributes: ['user_id'] });
+      if (!referrer) throw new Error(`Invalid referral code: ${referredBy}`);
+      if (!newUser) throw new Error(`User ${userId} not found`);
+      // Always lock in ascending order
+      const userIds = [referrer.user_id, newUser.user_id].sort((a, b) => a - b);
+      const users = await models.User.findAll({
+        where: { user_id: userIds },
+        lock: transaction.LOCK.UPDATE,
+        order: [['user_id', 'ASC']],
+        transaction
+      });
       // Check if referral already recorded
       const existingReferral = await models.ReferralTree.findOne({
         where: {
@@ -159,13 +156,11 @@ async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 
         },
         transaction
       });
-      
       if (existingReferral) {
         console.log(`Referral already recorded for user ${userId}`);
         await transaction.commit();
         return { success: true, message: 'Referral already recorded' };
       }
-      
       // Create referral record
       await models.ReferralTree.create({
         referrer_id: referrer.user_id,
@@ -174,27 +169,22 @@ async function recordReferralWithRetry(userId, referredBy, models, maxRetries = 
         status: 'active',
         created_at: new Date()
       }, { transaction });
-      
-      // Update referrer's referral count
+      // Update referrer's referral count (atomic increment)
       await models.User.increment('direct_referral_count', {
         by: 1,
         where: { user_id: referrer.user_id },
         transaction
       });
-      
       await transaction.commit();
       console.log(`✅ Referral recorded: ${referrer.user_id} -> ${userId}`);
       return { success: true };
-      
     } catch (error) {
       await transaction.rollback();
-      
       if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
         console.warn(`Deadlock detected for referral ${userId}, retrying (${attempt}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
         continue;
       }
-      
       throw error;
     }
   }

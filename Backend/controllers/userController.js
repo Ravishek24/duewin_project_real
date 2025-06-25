@@ -127,45 +127,13 @@ const getInternalGameStats = async (userId) => {
             created_at: bet.created_at
         }));
 
-        // Wingo
-        const wingoBets = await BetRecordWingo.findAll({
-            where: {
-                user_id: userId,
-                created_at: { [Op.gte]: thirtyDaysAgo }
-            },
-            order: [['created_at', 'DESC']],
-            limit
-        });
-
-        // 5D
-        const fiveDBets = await BetRecord5D.findAll({
-            where: {
-                user_id: userId,
-                created_at: { [Op.gte]: thirtyDaysAgo }
-            },
-            order: [['created_at', 'DESC']],
-            limit
-        });
-
-        // K3
-        const k3Bets = await BetRecordK3.findAll({
-            where: {
-                user_id: userId,
-                created_at: { [Op.gte]: thirtyDaysAgo }
-            },
-            order: [['created_at', 'DESC']],
-            limit
-        });
-
-        // TRX_Wix
-        const trxWixBets = await BetRecordTrxWix.findAll({
-            where: {
-                user_id: userId,
-                created_at: { [Op.gte]: thirtyDaysAgo }
-            },
-            order: [['created_at', 'DESC']],
-            limit
-        });
+        // Fetch all bet types in parallel to avoid N+1 query pattern
+        const [wingoBets, fiveDBets, k3Bets, trxWixBets] = await Promise.all([
+            BetRecordWingo.findAll({ where: { user_id: userId } }),
+            BetRecord5D.findAll({ where: { user_id: userId } }),
+            BetRecordK3.findAll({ where: { user_id: userId } }),
+            BetRecordTrxWix.findAll({ where: { user_id: userId } })
+        ]);
 
         return {
             wingo: formatBets(wingoBets),

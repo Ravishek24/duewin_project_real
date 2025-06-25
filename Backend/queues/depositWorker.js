@@ -54,87 +54,67 @@ const worker = new Worker('deposits', async job => {
   }
 });
 
-// Enhanced deposit processing with deadlock prevention
+// Enhanced deposit processing with consistent lock ordering and atomic operations
 async function processDepositWithRetry(data, models, maxRetries = 3) {
-  const { userId, amount, orderId, transactionId, paymentGateway, bonusAmount = 0 } = data;
-  
+  const { userId, amount, orderId, paymentStatus, bonusAmount } = data;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const transaction = await models.User.sequelize.transaction({
       isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
     });
-    
     try {
-      // Use FOR UPDATE to prevent race conditions
+      // Lock user only once
       const user = await models.User.findByPk(userId, {
         lock: transaction.LOCK.UPDATE,
         transaction
       });
-      
-      if (!user) {
-        throw new Error(`User ${userId} not found`);
-      }
-      
+      if (!user) throw new Error(`User ${userId} not found`);
       // Check if deposit already processed
       const existingDeposit = await models.WalletRecharge.findOne({
-        where: {
-          order_id: orderId,
-          payment_status: true
-        },
+        where: { order_id: orderId, payment_status: 'completed' },
         transaction
       });
-      
       if (existingDeposit) {
-        console.log(`Deposit already processed for order ${orderId}`);
         await transaction.commit();
         return { success: true, message: 'Deposit already processed' };
       }
-      
-      // Create recharge record
-      const recharge = await models.WalletRecharge.create({
+      // Create deposit record
+      const deposit = await models.WalletRecharge.create({
         user_id: userId,
         amount: amount,
         order_id: orderId,
-        transaction_id: transactionId,
-        payment_gateway: paymentGateway,
-        payment_status: true,
-        status: 'completed',
-        time_of_success: new Date(),
-        bonus_amount: bonusAmount
+        payment_status: paymentStatus,
+        bonus_amount: bonusAmount,
+        created_at: new Date(),
+        updated_at: new Date()
       }, { transaction });
-      
-      // Update user's wallet balance and deposit amounts
-      const updateData = {
-        wallet_balance: parseFloat(user.wallet_balance) + parseFloat(amount) + parseFloat(bonusAmount),
-        actual_deposit_amount: parseFloat(user.actual_deposit_amount) + parseFloat(amount)
-      };
-      
-      // Update bonus-related fields if this is first deposit
-      if (parseFloat(user.actual_deposit_amount) === 0 && bonusAmount > 0) {
-        updateData.bonus_amount = parseFloat(user.bonus_amount) + parseFloat(bonusAmount);
-        updateData.has_received_first_bonus = true;
-      }
-      
-      await models.User.update(updateData, {
+      // Use atomic increment for wallet balance and bonus
+      await models.User.increment({
+        wallet_balance: parseFloat(amount) + parseFloat(bonusAmount || 0),
+        actual_deposit_amount: parseFloat(amount),
+        bonus_amount: parseFloat(bonusAmount || 0),
+        has_received_first_bonus: bonusAmount ? true : false
+      }, {
         where: { user_id: userId },
         transaction
       });
-      
+      // Create transaction record
+      await models.Transaction.create({
+        user_id: userId,
+        type: 'deposit',
+        amount: parseFloat(amount),
+        status: paymentStatus,
+        description: 'Deposit processed',
+        reference_id: orderId,
+        metadata: { deposit_id: deposit.id, bonus: bonusAmount }
+      }, { transaction });
       await transaction.commit();
-      console.log(`✅ Deposit processed for user ${userId}: ${amount} + ${bonusAmount} bonus`);
-      return { success: true, amount, bonusAmount };
-      
+      return { success: true, depositId: deposit.id };
     } catch (error) {
       await transaction.rollback();
-      
-      // Check if it's a deadlock error
       if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
-        console.warn(`Deadlock detected for deposit ${orderId}, retrying (${attempt}/${maxRetries})`);
-        // Exponential backoff
         await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
         continue;
       }
-      
-      console.error(`Failed to process deposit for order ${orderId} (attempt ${attempt}):`, error);
       throw error;
     }
   }
