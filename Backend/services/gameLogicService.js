@@ -699,8 +699,22 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
         const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
         const { betType, betValue, netBetAmount, odds } = bet;
 
-        // Calculate exposure (potential payout)
-        const exposure = netBetAmount * odds;
+        // Calculate exposure (potential payout) - convert to integer for Redis
+        const exposure = Math.round(netBetAmount * odds * 100); // Convert to cents
+        
+        // Ensure exposure is a valid integer
+        if (isNaN(exposure) || exposure < 0) {
+            console.error('❌ Invalid exposure calculation:', { netBetAmount, odds, exposure });
+            throw new Error('Invalid exposure calculation');
+        }
+
+        console.log('💰 Exposure update debug:', {
+            gameType, duration, periodId,
+            bet: { betType, betValue, netBetAmount, odds },
+            exposure: exposure,
+            exposureInRupees: exposure / 100,
+            exposureKey: exposureKey
+        });
 
         // Update exposure based on game type
         switch (gameType.toLowerCase()) {
@@ -709,25 +723,53 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
                 // For number bets, update specific number
                 if (betType === 'NUMBER') {
                     await redisClient.hincrby(exposureKey, `number:${betValue}`, exposure);
+                    console.log(`📊 Updated number exposure: number:${betValue} += ${exposure}`);
                 }
                 // For other bets, update all matching numbers
                 else {
+                    const updatedNumbers = [];
+                    
+                    // Ensure combinations are initialized
+                    if (!global.wingoCombinatons) {
+                        console.log('⚠️ Wingo combinations not initialized, initializing now...');
+                        await initializeGameCombinations();
+                    }
+                    
                     for (let num = 0; num <= 9; num++) {
                         const combo = global.wingoCombinatons[num];
-                        if (checkWinCondition(combo, betType, betValue)) {
-                            await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
+                        if (combo && checkWinCondition(combo, betType, betValue)) {
+                            console.log(`📊 Updating exposure for number ${num}: ${exposure} cents (type: ${typeof exposure})`);
+                            try {
+                                const result = await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
+                                console.log(`📊 Redis HINCRBY result for number ${num}:`, result);
+                                updatedNumbers.push(num);
+                            } catch (redisError) {
+                                console.error(`❌ Redis HINCRBY failed for number ${num}:`, redisError);
+                                throw redisError;
+                            }
                         }
                     }
+                    console.log(`📊 Updated color/size/parity exposure for numbers [${updatedNumbers.join(',')}] += ${exposure}`);
                 }
                 break;
 
             case 'k3':
                 // Update all combinations that would win
+                const updatedK3Combos = [];
+                
+                // Ensure combinations are initialized
+                if (!global.k3Combinations) {
+                    console.log('⚠️ K3 combinations not initialized, initializing now...');
+                    await initializeGameCombinations();
+                }
+                
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
-                    if (checkK3WinCondition(combo, betType, betValue)) {
+                    if (combo && checkK3WinCondition(combo, betType, betValue)) {
                         await redisClient.hincrby(exposureKey, `dice:${key}`, exposure);
+                        updatedK3Combos.push(key);
                     }
                 }
+                console.log(`📊 Updated K3 exposure for combinations [${updatedK3Combos.join(',')}] += ${exposure}`);
                 break;
 
             case 'fived':
@@ -736,14 +778,27 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
                 // Store bet-level exposure for later calculation
                 const betKey = `${betType}:${betValue}`;
                 await redisClient.hincrby(exposureKey, `bet:${betKey}`, exposure);
+                console.log(`📊 Updated 5D bet exposure: bet:${betKey} += ${exposure}`);
                 break;
         }
 
         // Set expiry
         await redisClient.expire(exposureKey, duration + 300);
 
+        // Verify exposure was updated
+        const currentExposures = await redisClient.hgetall(exposureKey);
+        
+        // Convert cents to rupees for display
+        const exposuresInRupees = {};
+        for (const [key, value] of Object.entries(currentExposures)) {
+            exposuresInRupees[key] = `${(parseInt(value) / 100).toFixed(2)}₹`;
+        }
+        
+        console.log('✅ Current exposures after update (in rupees):', exposuresInRupees);
+
     } catch (error) {
         logger.error('Error updating bet exposure', { error: error.message, gameType, periodId });
+        console.error('❌ Exposure update failed:', error);
     }
 }
 
@@ -790,13 +845,19 @@ async function getOptimalResultByExposure(gameType, duration, periodId) {
 
                 // Check each number
                 for (let num = 0; num <= 9; num++) {
-                    const exposure = parseInt(wingoExposures[`number:${num}`] || 0);
+                    const exposure = parseInt(wingoExposures[`number:${num}`] || 0) / 100; // Convert from cents to rupees
                     if (exposure < minExposure) {
                         minExposure = exposure;
                         optimalNumber = num;
                     }
                 }
 
+                // Ensure combinations are initialized
+                if (!global.wingoCombinatons) {
+                    console.log('⚠️ Wingo combinations not initialized, initializing now...');
+                    await initializeGameCombinations();
+                }
+                
                 return global.wingoCombinatons[optimalNumber];
 
             case 'k3':
@@ -814,6 +875,12 @@ async function getOptimalResultByExposure(gameType, duration, periodId) {
                     }
                 }
 
+                // Ensure combinations are initialized
+                if (!global.k3Combinations) {
+                    console.log('⚠️ K3 combinations not initialized, initializing now...');
+                    await initializeGameCombinations();
+                }
+                
                 return global.k3Combinations[optimalKey];
 
             case 'fived':
@@ -2217,28 +2284,73 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
-                // Find zero exposure number
+                // Find zero exposure numbers
+                console.log('🔍 Checking exposures for key:', exposureKey);
                 const wingoExposures = await redisClient.hgetall(exposureKey);
+                console.log('🔍 Raw exposures from Redis:', wingoExposures);
+                const zeroExposureNumbers = [];
+                
                 for (let num = 0; num <= 9; num++) {
                     const exposure = parseInt(wingoExposures[`number:${num}`] || 0);
                     if (exposure === 0) {
-                        console.log(`🛡️ Protected: Using zero-exposure number ${num}`);
-                        return global.wingoCombinatons[num];
+                        zeroExposureNumbers.push(num);
                     }
                 }
+                
+                // Log exposure analysis for debugging
+                const exposureAnalysis = {};
+                for (let num = 0; num <= 9; num++) {
+                    const exposure = parseInt(wingoExposures[`number:${num}`] || 0);
+                    exposureAnalysis[`number:${num}`] = `${(exposure / 100).toFixed(2)}₹`;
+                }
+                console.log('🔍 Exposure analysis for protection mode:', exposureAnalysis);
+                
+                // Randomly select from zero-exposure numbers
+                if (zeroExposureNumbers.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * zeroExposureNumbers.length);
+                    const selectedNumber = zeroExposureNumbers[randomIndex];
+                    console.log(`🛡️ Protected: Using random zero-exposure number ${selectedNumber} from [${zeroExposureNumbers.join(',')}]`);
+                    
+                    // Ensure combinations are initialized
+                    if (!global.wingoCombinatons) {
+                        console.log('⚠️ Wingo combinations not initialized, initializing now...');
+                        await initializeGameCombinations();
+                    }
+                    
+                    return global.wingoCombinatons[selectedNumber];
+                }
+                
                 // Fallback to minimum exposure
+                console.log(`🔄 No zero-exposure numbers found, using minimum exposure`);
                 return await getOptimalResultByExposure(gameType, duration, periodId);
 
             case 'k3':
                 // Find zero exposure combination
                 const k3Exposures = await redisClient.hgetall(exposureKey);
+                const zeroExposureK3 = [];
+                
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
                     const exposure = parseInt(k3Exposures[`dice:${key}`] || 0);
                     if (exposure === 0) {
-                        console.log(`🛡️ Protected: Using zero-exposure K3 ${key}`);
-                        return combo;
+                        zeroExposureK3.push({ key, combo });
                     }
                 }
+                
+                // Randomly select from zero-exposure combinations
+                if (zeroExposureK3.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * zeroExposureK3.length);
+                    const selected = zeroExposureK3[randomIndex];
+                    console.log(`🛡️ Protected: Using random zero-exposure K3 ${selected.key}`);
+                    
+                    // Ensure combinations are initialized
+                    if (!global.k3Combinations) {
+                        console.log('⚠️ K3 combinations not initialized, initializing now...');
+                        await initializeGameCombinations();
+                    }
+                    
+                    return selected.combo;
+                }
+                
                 // Fallback to minimum exposure
                 return await getOptimalResultByExposure(gameType, duration, periodId);
 
@@ -2530,7 +2642,9 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
             timeline,
             uniqueUserCount: uniqueUsers.size,
             totalBetKeys: betKeys.length,
-            threshold: ENHANCED_USER_THRESHOLD
+            threshold: ENHANCED_USER_THRESHOLD,
+            uniqueUsers: Array.from(uniqueUsers),
+            betKeys: betKeys.slice(0, 5) // Show first 5 keys for debugging
         });
 
         return uniqueUsers.size;
@@ -3375,7 +3489,7 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
  * @param {string} gameType - Game type
  * @returns {boolean} - Whether bet is a winner
  */
-const checkBetWin = (bet, result, gameType) => {
+const checkBetWin = async (bet, result, gameType) => {
     try {
         const [betType, betValue] = bet.bet_type.split(':');
 
@@ -3383,6 +3497,11 @@ const checkBetWin = (bet, result, gameType) => {
             case 'wingo':
             case 'trx_wix':
                 // Use in-memory combinations
+                if (!global.wingoCombinatons) {
+                    console.log('⚠️ Wingo combinations not initialized, initializing now...');
+                    await initializeGameCombinations();
+                }
+                
                 const wingoCombo = global.wingoCombinatons[result.number];
                 if (!wingoCombo) return false;
                 
