@@ -34,7 +34,7 @@ const securityConfig = {
     firewall: {
         enabled: true,
         whitelist: process.env.IP_WHITELIST ? process.env.IP_WHITELIST.split(',') : [],
-        blacklist: process.env.IP_BLACKLIST ? process.env.IP_BLACKLIST.split(',') : [],
+        blacklist: process.env.IP_BLACKLIST ? process.env.IP_BLACKLIST.split(',') : ['185.177.72.14'], // Add known attackers
         maxConnections: 1000,
         connectionTimeout: 30000
     },
@@ -45,6 +45,36 @@ const securityConfig = {
         burst: 10,
         limit: 100,
         testMode: process.env.NODE_ENV === 'development'
+    },
+
+    // Attack Detection
+    attackDetection: {
+        enabled: false,
+        suspiciousPatterns: [
+            /\.git/i,
+            /\.env/i,
+            /\.config/i,
+            /\.ini/i,
+            /\.log/i,
+            /\.sql/i,
+            /\.bak/i,
+            /\.backup/i,
+            /\.old/i,
+            /\.tmp/i,
+            /\.temp/i,
+            /\/\./i,
+            /wp-content/i,
+            /wp-admin/i,
+            /phpmyadmin/i,
+            /adminer/i,
+            /\.\./i, // Path traversal
+            /union.*select/i,
+            /script.*alert/i,
+            /<script/i
+        ],
+        maxAttemptsPerIP: 100,
+        blockDuration: 3600, // 1 hour
+        autoBlock: true
     },
 
     // Backup Strategy
@@ -117,6 +147,12 @@ const securityConfig = {
         connection: {
             maxPerUser: 3,
             maxPerIP: 5
+        },
+        // Enhanced rate limiting for suspicious activities
+        suspicious: {
+            points: 3,
+            duration: 60, // 3 attempts per minute
+            burst: 1
         }
     },
 

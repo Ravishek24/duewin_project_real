@@ -215,6 +215,41 @@ class User extends Model {
                     }
                 }
             },
+            indexes: [
+                // OPTIMIZATION: Add composite indexes for common query patterns
+                {
+                    fields: ['referral_code'],
+                    name: 'idx_users_referral_code'
+                },
+                {
+                    fields: ['referring_code'],
+                    name: 'idx_users_referring_code'
+                },
+                {
+                    fields: ['email'],
+                    name: 'idx_users_email'
+                },
+                {
+                    fields: ['phone_no'],
+                    name: 'idx_users_phone'
+                },
+                {
+                    fields: ['vip_level', 'created_at'],
+                    name: 'idx_users_vip_created'
+                },
+                {
+                    fields: ['is_active', 'created_at'],
+                    name: 'idx_users_active_created'
+                },
+                {
+                    fields: ['referring_code', 'created_at'],
+                    name: 'idx_users_referring_created'
+                },
+                {
+                    fields: ['wallet_balance', 'created_at'],
+                    name: 'idx_users_balance_created'
+                }
+            ],
             hooks: {
                 beforeCreate: async (user) => {
                     if (user.password) {

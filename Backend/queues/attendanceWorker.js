@@ -37,10 +37,19 @@ async function processAttendanceWithDeduplication(userId, models) {
   // Use Redis-based deduplication to prevent duplicate processing
   const redis = require('../config/redisConfig').redis;
   const deduplicationKey = `attendance:${userId}:${today}`;
+  const cronDeduplicationKey = `attendance_cron:${userId}:${today}`;
   
+  // Check if already processed by this worker
   const isAlreadyProcessed = await redis.get(deduplicationKey);
   if (isAlreadyProcessed) {
     console.log(`Attendance already processed for user ${userId} on ${today}`);
+    return;
+  }
+  
+  // Check if cron job is processing this user
+  const isCronProcessing = await redis.get(cronDeduplicationKey);
+  if (isCronProcessing) {
+    console.log(`Cron job is processing attendance for user ${userId} on ${today}, skipping...`);
     return;
   }
   

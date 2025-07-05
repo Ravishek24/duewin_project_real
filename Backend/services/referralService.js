@@ -1,5 +1,5 @@
 // services/referralService.js - COMPLETE FIXED VERSION
-const { sequelize } = require('../config/db');
+const { sequelize, getSequelizeInstance } = require('../config/db');
 const { Op } = require('sequelize');
 const moment = require('moment-timezone');
 
@@ -125,26 +125,28 @@ const createReferralTree = async (userId, referralCode) => {
  * @returns {Object} - Processing result
  */
 const processRebateCommission = async (gameType) => {
-    const t = await sequelize.transaction();
-
+    let t;
+    
     try {
-        // Generate a unique batch ID for this distribution run
-        const batchId = `${gameType}-${Date.now()}`;
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+        
+        t = await sequelizeInstance.transaction();
 
-        // Get yesterday's date range
+        const batchId = `${gameType}-${Date.now()}`;
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
         yesterday.setHours(0, 0, 0, 0);
-
         const endOfYesterday = new Date(yesterday);
         endOfYesterday.setHours(23, 59, 59, 999);
 
         let betRecords;
 
-        // Get bet records based on game type
         if (gameType === 'lottery') {
-            // Aggregate internal game bets (Wingo, 5D, K3)
-            betRecords = await sequelize.query(`
+            betRecords = await sequelizeInstance.query(`
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
                     SELECT user_id, bet_amount FROM bet_record_wingo 
@@ -159,94 +161,103 @@ const processRebateCommission = async (gameType) => {
                 GROUP BY user_id
             `, {
                 replacements: { start: yesterday, end: endOfYesterday },
-                type: sequelize.QueryTypes.SELECT,
+                type: sequelizeInstance.QueryTypes.SELECT,
                 transaction: t
             });
         } else if (gameType === 'casino') {
-            // Get external casino game bets
-            betRecords = await sequelize.query(`
+            betRecords = await sequelizeInstance.query(`
                 SELECT user_id, SUM(amount) as total_bet_amount
                 FROM game_transactions
                 WHERE type = 'bet' AND created_at BETWEEN :start AND :end
                 GROUP BY user_id
             `, {
                 replacements: { start: yesterday, end: endOfYesterday },
-                type: sequelize.QueryTypes.SELECT,
+                type: sequelizeInstance.QueryTypes.SELECT,
                 transaction: t
             });
         }
 
-        // Process each user's bets and distribute commission to referrers
-        for (const record of betRecords) {
-            const userId = record.user_id;
-            const betAmount = parseFloat(record.total_bet_amount);
+        // OPTIMIZATION: Batch load all users and referrers
+        const userIds = betRecords.map(record => record.user_id);
+        const users = await User.findAll({
+            where: { user_id: { [Op.in]: userIds } },
+            attributes: ['user_id', 'user_name', 'referral_code'],
+            transaction: t
+        });
 
-            // Find the user
-            const user = await User.findByPk(userId, { transaction: t });
-            if (!user) continue;
+        const userMap = new Map(users.map(user => [user.user_id, user]));
+        const referralCodes = [...new Set(users.map(user => user.referral_code).filter(Boolean))];
+        
+        const referrers = await User.findAll({
+            where: { referring_code: { [Op.in]: referralCodes } },
+            attributes: ['user_id', 'user_name', 'referring_code'],
+            include: UserRebateLevel ? [{
+                model: UserRebateLevel,
+                required: false,
+                attributes: ['rebate_level']
+            }] : [],
+            transaction: t
+        });
 
-            // Find user's referrer
-            if (!user.referral_code) continue;
+        const referrerMap = new Map(referrers.map(ref => [ref.referring_code, ref]));
+        
+        const rebateLevels = await RebateLevel.findAll({
+            attributes: ['level', 'lottery_l1_rebate', 'casino_l1_rebate'],
+            transaction: t
+        });
 
-            const referrer = await User.findOne({
-                where: { referring_code: user.referral_code },
-                include: UserRebateLevel ? [
-                    {
-                        model: UserRebateLevel,
-                        required: false
-                    }
-                ] : [],
-                transaction: t
-            });
+        const rebateLevelMap = new Map(rebateLevels.map(level => [level.level, level]));
 
-            if (!referrer) continue;
+        // Process in batches
+        const BATCH_SIZE = 50;
+        let processedCommissions = 0;
+        let totalCommissionAmount = 0;
 
-            // Calculate and award commission (simplified if models don't exist)
-            if (ReferralCommission && RebateLevel) {
-                // Full rebate logic
+        for (let i = 0; i < betRecords.length; i += BATCH_SIZE) {
+            const batch = betRecords.slice(i, i + BATCH_SIZE);
+            
+            for (const record of batch) {
+                const userId = record.user_id;
+                const betAmount = parseFloat(record.total_bet_amount);
+
+                const user = userMap.get(userId);
+                if (!user || !user.referral_code) continue;
+
+                const referrer = referrerMap.get(user.referral_code);
+                if (!referrer) continue;
+
                 const rebateLevel = referrer.UserRebateLevel?.rebate_level || 'L0';
-                const rebateLevelDetails = await RebateLevel.findOne({
-                    where: { level: rebateLevel },
-                    transaction: t
-                });
+                const rebateLevelDetails = rebateLevelMap.get(rebateLevel);
 
-                if (rebateLevelDetails) {
-                    const level1Rate = gameType === 'lottery' ?
-                        rebateLevelDetails.lottery_l1_rebate :
-                        rebateLevelDetails.casino_l1_rebate;
+                if (!rebateLevelDetails) continue;
 
-                    const level1Commission = betAmount * parseFloat(level1Rate);
+                const level1Rate = gameType === 'lottery' ? 
+                    parseFloat(rebateLevelDetails.lottery_l1_rebate) / 100 : 
+                    parseFloat(rebateLevelDetails.casino_l1_rebate) / 100;
 
-                    if (level1Commission > 0) {
-                        await ReferralCommission.create({
-                            user_id: referrer.user_id,
-                            referred_user_id: userId,
-                            level: 1,
-                            amount: level1Commission,
-                            type: 'bet',
-                            rebate_type: gameType,
-                            distribution_batch_id: batchId,
-                            created_at: new Date()
-                        }, { transaction: t });
+                const level1Commission = betAmount * level1Rate;
 
-                        await updateWalletBalance(
-                            referrer.user_id,
-                            level1Commission,
-                            'add',
-                            t
-                        );
-                    }
-                }
-            } else {
-                // Simplified commission (5% of bet amount)
-                const commission = betAmount * 0.05;
-                if (commission > 0) {
+                if (level1Commission > 0) {
+                    await ReferralCommission.create({
+                        user_id: referrer.user_id,
+                        referred_user_id: userId,
+                        level: 1,
+                        amount: level1Commission,
+                        type: 'bet',
+                        rebate_type: gameType,
+                        distribution_batch_id: batchId,
+                        created_at: new Date()
+                    }, { transaction: t });
+
                     await updateWalletBalance(
                         referrer.user_id,
-                        commission,
+                        level1Commission,
                         'add',
                         t
                     );
+
+                    processedCommissions++;
+                    totalCommissionAmount += level1Commission;
                 }
             }
         }
@@ -254,10 +265,14 @@ const processRebateCommission = async (gameType) => {
         await t.commit();
         return {
             success: true,
-            message: 'Rebate commission processed successfully'
+            message: 'Rebate commission processed successfully',
+            processedCommissions,
+            totalCommissionAmount
         };
     } catch (error) {
-        await t.rollback();
+        if (t) {
+            await t.rollback();
+        }
         console.error('Error processing rebate commission:', error);
         return {
             success: false,
@@ -327,7 +342,7 @@ const getDirectReferrals = async (userId, dateFilter = null) => {
                         user_id: userId,
                         referred_user_id: referral.user_id
                     },
-                    attributes: ['amount']
+                    attributes: ['id', 'user_id', 'referred_user_id', 'level', 'amount', 'type', 'rebate_type', 'distribution_batch_id', 'status', 'created_at', 'updated_at']
                 });
                 
                 userCommission = commissionRecords.reduce(
@@ -1170,9 +1185,17 @@ const autoProcessRechargeForAttendance = async (userId, rechargeAmount) => {
  * @returns {Object} - Operation result
  */
 const processDirectInvitationBonus = async (userId) => {
-    const t = await sequelize.transaction();
-
+    let t;
+    
     try {
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+        
+        t = await sequelizeInstance.transaction();
+
         const user = await User.findByPk(userId, {
             transaction: t
         });
@@ -1232,6 +1255,7 @@ const processDirectInvitationBonus = async (userId) => {
                     type: 'direct_bonus',
                     amount: highestEligibleTier.amount
                 },
+                attributes: ['id', 'user_id', 'referred_user_id', 'level', 'amount', 'type', 'rebate_type', 'distribution_batch_id', 'status', 'created_at', 'updated_at'],
                 transaction: t
             });
 
@@ -1296,9 +1320,17 @@ const processDirectInvitationBonus = async (userId) => {
  * @returns {Object} - Operation result
  */
 const processFirstRechargeBonus = async (userId, rechargeAmount) => {
-    const t = await sequelize.transaction();
-
+    let t;
+    
     try {
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+        
+        t = await sequelizeInstance.transaction();
+
         // Check if this is the first recharge
         const previousRecharges = await WalletRecharge.findAll({
             where: {
@@ -1357,7 +1389,9 @@ const processFirstRechargeBonus = async (userId, rechargeAmount) => {
             bonusAmount: applicableTier.bonus
         };
     } catch (error) {
-        await t.rollback();
+        if (t) {
+            await t.rollback();
+        }
         console.error('Error processing first recharge bonus:', error);
         return {
             success: false,
@@ -1373,9 +1407,17 @@ const processFirstRechargeBonus = async (userId, rechargeAmount) => {
  * @returns {Object} - Processing result
  */
 const processRechargeForAttendance = async (userId, rechargeAmount) => {
-    const t = await sequelize.transaction();
-
+    let t;
+    
     try {
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+        
+        t = await sequelizeInstance.transaction();
+
         // If AttendanceRecord doesn't exist, return simple response
         if (!AttendanceRecord) {
             await t.commit();
@@ -1476,7 +1518,9 @@ const processRechargeForAttendance = async (userId, rechargeAmount) => {
             isEligible: true
         };
     } catch (error) {
-        await t.rollback();
+        if (t) {
+            await t.rollback();
+        }
         console.error('Error processing recharge for attendance:', error);
         return {
             success: false,
@@ -1492,10 +1536,18 @@ const processRechargeForAttendance = async (userId, rechargeAmount) => {
  * @returns {Object} - Operation result
  */
 const updateReferralOnRecharge = async (userId, rechargeAmount) => {
-    const t = await sequelize.transaction();
-
+    let t;
+    
     try {
         console.log(`🔄 Updating referral status for user ${userId} with recharge amount ${rechargeAmount}`);
+        
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+        
+        t = await sequelizeInstance.transaction();
         
         const user = await User.findByPk(userId, {
             transaction: t
@@ -1596,7 +1648,9 @@ const updateReferralOnRecharge = async (userId, rechargeAmount) => {
             message: 'Referral status updated successfully'
         };
     } catch (error) {
-        await t.rollback();
+        if (t) {
+            await t.rollback();
+        }
         console.error('Error updating referral on recharge:', error);
         return {
             success: false,
@@ -1613,10 +1667,21 @@ const updateReferralOnRecharge = async (userId, rechargeAmount) => {
  * @returns {Object} - Operation result
  */
 const updateInvitationTier = async (userId, validReferralCount = null, transaction = null) => {
-    const t = transaction || await sequelize.transaction();
-
+    let t;
+    
     try {
         console.log('🔄 Updating invitation tier for user:', userId);
+        
+        if (transaction) {
+            t = transaction;
+        } else {
+            // Get properly initialized sequelize instance
+            const sequelizeInstance = await getSequelizeInstance();
+            if (!sequelizeInstance) {
+                throw new Error('Database connection not available');
+            }
+            t = await sequelizeInstance.transaction();
+        }
         
         if (validReferralCount === null) {
             const user = await User.findByPk(userId, {
@@ -1719,10 +1784,18 @@ const updateInvitationTier = async (userId, validReferralCount = null, transacti
  * @returns {Object} - Result of claim operation
  */
 const claimInvitationBonus = async (userId) => {
-    const t = await sequelize.transaction();
-
+    let t;
+    
     try {
         console.log('🎁 Claiming invitation bonus for user:', userId);
+        
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+        
+        t = await sequelizeInstance.transaction();
         
         // Get user with both direct and valid referral counts
         const user = await User.findByPk(userId, {
@@ -1798,6 +1871,7 @@ const claimInvitationBonus = async (userId) => {
                     type: 'direct_bonus',
                     amount: eligibleTier.amount
                 },
+                attributes: ['id', 'user_id', 'referred_user_id', 'level', 'amount', 'type', 'rebate_type', 'distribution_batch_id', 'status', 'created_at', 'updated_at'],
                 transaction: t
             });
 
@@ -1845,7 +1919,9 @@ const claimInvitationBonus = async (userId) => {
             }
         };
     } catch (error) {
-        await t.rollback();
+        if (t) {
+            await t.rollback();
+        }
         console.error('💥 Error claiming invitation bonus:', error);
         return {
             success: false,
@@ -1893,7 +1969,7 @@ const getInvitationBonusStatus = async (userId) => {
                         user_id: userId,
                         type: 'direct_bonus'
                     },
-                    attributes: ['amount', 'created_at']
+                    attributes: ['id', 'user_id', 'referred_user_id', 'level', 'amount', 'type', 'rebate_type', 'distribution_batch_id', 'status', 'created_at', 'updated_at']
                 });
                 console.log('💰 Found claimed bonuses:', claimedBonuses.length);
             } catch (error) {
@@ -2012,8 +2088,14 @@ const processReferrals = async () => {
             };
         }
 
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+
         // Use raw SQL query to avoid Sequelize's automatic join behavior
-        const referralTrees = await sequelize.query(`
+        const referralTrees = await sequelizeInstance.query(`
             SELECT 
                 rt.id, rt.user_id, rt.referrer_id, 
                 rt.level_1, rt.level_2, rt.level_3, rt.level_4, rt.level_5, rt.level_6,
@@ -2025,7 +2107,7 @@ const processReferrals = async () => {
             LEFT JOIN users u1 ON rt.user_id = u1.user_id
             LEFT JOIN users u2 ON rt.referrer_id = u2.user_id
         `, {
-            type: sequelize.QueryTypes.SELECT
+            type: sequelizeInstance.QueryTypes.SELECT
         });
 
         for (const tree of referralTrees) {
@@ -2388,10 +2470,18 @@ const updateUplineReferralTrees = async (directReferrerId, newUserId, transactio
  * @returns {Object} - Processing result
  */
 const processMultiLevelRebateCommission = async (gameType) => {
-    const t = await sequelize.transaction();
-
+    let t;
+    
     try {
         console.log(`🔄 Starting multi-level rebate processing for ${gameType}`);
+        
+        // Get properly initialized sequelize instance
+        const sequelizeInstance = await getSequelizeInstance();
+        if (!sequelizeInstance) {
+            throw new Error('Database connection not available');
+        }
+        
+        t = await sequelizeInstance.transaction();
         
         // Generate a unique batch ID for this distribution run
         const batchId = `${gameType}-multilevel-${Date.now()}`;
@@ -2409,7 +2499,7 @@ const processMultiLevelRebateCommission = async (gameType) => {
         // Get bet records based on game type
         if (gameType === 'lottery') {
             // Aggregate internal game bets (Wingo, 5D, K3)
-            betRecords = await sequelize.query(`
+            betRecords = await sequelizeInstance.query(`
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
                     SELECT user_id, bet_amount FROM bet_record_wingo 
@@ -2424,19 +2514,19 @@ const processMultiLevelRebateCommission = async (gameType) => {
                 GROUP BY user_id
             `, {
                 replacements: { start: yesterday, end: endOfYesterday },
-                type: sequelize.QueryTypes.SELECT,
+                type: sequelizeInstance.QueryTypes.SELECT,
                 transaction: t
             });
         } else if (gameType === 'casino') {
             // Get external casino game bets
-            betRecords = await sequelize.query(`
+            betRecords = await sequelizeInstance.query(`
                 SELECT user_id, SUM(amount) as total_bet_amount
                 FROM game_transactions
                 WHERE type = 'bet' AND created_at BETWEEN :start AND :end
                 GROUP BY user_id
             `, {
                 replacements: { start: yesterday, end: endOfYesterday },
-                type: sequelize.QueryTypes.SELECT,
+                type: sequelizeInstance.QueryTypes.SELECT,
                 transaction: t
             });
         }

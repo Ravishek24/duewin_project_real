@@ -1,26 +1,32 @@
 const User = require('../models/User');
 
-// Helper function to update wallet balance
+// Helper function to update wallet balance using atomic operations
 const updateWalletBalance = async (userId, amount, operation = 'add', transaction = null) => {
     try {
-        const user = await User.findByPk(userId, { transaction });
-        if (!user) {
-            throw new Error('User not found');
-        }
-
-        const currentBalance = parseFloat(user.wallet_balance) || 0;
-        let newBalance;
-
+        // Use atomic operations to prevent deadlocks
         if (operation === 'add') {
-            newBalance = currentBalance + parseFloat(amount);
+            await User.increment('wallet_balance', { 
+                by: parseFloat(amount),
+                where: { user_id: userId },
+                transaction 
+            });
         } else if (operation === 'subtract') {
-            newBalance = Math.max(0, currentBalance - parseFloat(amount));
+            await User.decrement('wallet_balance', { 
+                by: parseFloat(amount),
+                where: { user_id: userId },
+                transaction 
+            });
         } else {
             throw new Error('Invalid operation');
         }
 
-        await user.update({ wallet_balance: newBalance }, { transaction });
-        return { success: true, newBalance };
+        // Get updated balance
+        const user = await User.findByPk(userId, { 
+            attributes: ['wallet_balance'],
+            transaction 
+        });
+        
+        return { success: true, newBalance: parseFloat(user.wallet_balance) || 0 };
     } catch (error) {
         console.error('Error updating wallet balance:', error);
         throw error;

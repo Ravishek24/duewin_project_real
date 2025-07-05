@@ -150,7 +150,7 @@ const getCurrentPeriod = async (req, res) => {
             },
             include: [{
                 model: User,
-                attributes: ['username', 'phone'],
+                attributes: ['user_name', 'phone'],
                 required: true
             }]
         });
@@ -206,7 +206,7 @@ const getCurrentPeriod = async (req, res) => {
         const formattedBets = periodBets.map(bet => ({
             bet_id: bet.id,
             user: {
-                username: bet.User.username,
+                username: bet.User.user_name,
                 phone: bet.User.phone
             },
             bet_info: formatBetTypeInfo(bet),

@@ -86,14 +86,6 @@ class ReferralCommission extends Model {
                 as: 'referredUser'
             });
         }
-        
-        if (models.RebateLevel) {
-            this.belongsTo(models.RebateLevel, {
-                foreignKey: 'level',
-                targetKey: 'level',
-                as: 'rebateLevel'
-            });
-        }
     }
 }
 

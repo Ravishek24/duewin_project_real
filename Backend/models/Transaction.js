@@ -157,6 +157,27 @@ class Transaction extends Model {
                 },
                 {
                     fields: ['created_at']
+                },
+                // OPTIMIZATION: Add composite indexes for common query patterns
+                {
+                    fields: ['user_id', 'created_at'],
+                    name: 'idx_transactions_user_created'
+                },
+                {
+                    fields: ['user_id', 'type', 'created_at'],
+                    name: 'idx_transactions_user_type_created'
+                },
+                {
+                    fields: ['type', 'status', 'created_at'],
+                    name: 'idx_transactions_type_status_created'
+                },
+                {
+                    fields: ['user_id', 'type', 'status'],
+                    name: 'idx_transactions_user_type_status'
+                },
+                {
+                    fields: ['reference_id', 'type'],
+                    name: 'idx_transactions_reference_type'
                 }
             ]
         });
@@ -174,27 +195,6 @@ class Transaction extends Model {
                 foreignKey: 'created_by',
                 targetKey: 'user_id',
                 as: 'creator'
-            });
-        }
-        
-        if (models.PaymentGateway) {
-            this.belongsTo(models.PaymentGateway, {
-                foreignKey: 'payment_gateway_id',
-                as: 'paymentGateway'
-            });
-        }
-        
-        if (models.BankAccount) {
-            this.belongsTo(models.BankAccount, {
-                foreignKey: 'bank_account_id',
-                as: 'bankAccount'
-            });
-        }
-        
-        if (models.UsdtAccount) {
-            this.belongsTo(models.UsdtAccount, {
-                foreignKey: 'usdt_account_id',
-                as: 'usdtAccount'
             });
         }
     }

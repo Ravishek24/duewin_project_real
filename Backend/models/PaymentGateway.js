@@ -96,18 +96,24 @@ class PaymentGateway extends Model {
         
         if (models.WalletRecharge) {
             this.hasMany(models.WalletRecharge, {
-                foreignKey: 'gateway_id',
+                foreignKey: 'payment_gateway_id',
+                targetKey: 'gateway_id',
                 as: 'recharges'
             });
         }
         
         if (models.WalletWithdrawal) {
             this.hasMany(models.WalletWithdrawal, {
-                foreignKey: 'gateway_id',
+                foreignKey: 'payment_gateway_id',
+                targetKey: 'gateway_id',
                 as: 'withdrawals'
             });
         }
     }
 }
+
+/**
+ * Valid gateway codes: WEPAY, MXPAY, OKPAY, GHPAY, WOWPAY, PPAYPRO, SOLPAY, LPAY, USDTWGPAY, 101PAY
+ */
 
 module.exports = PaymentGateway;

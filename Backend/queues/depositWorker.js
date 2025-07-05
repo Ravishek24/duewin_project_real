@@ -151,6 +151,25 @@ async function applyDepositBonusWithRetry(data, models, maxRetries = 3) {
     return { success: true, message: 'Not eligible for bonus' };
   }
   
+  // Add deduplication to prevent conflicts with cron jobs
+  const redis = require('../config/redisConfig').redis;
+  const deduplicationKey = `deposit_bonus:${userId}`;
+  const cronDeduplicationKey = `deposit_bonus_cron:${userId}`;
+  
+  // Check if already processed by this worker
+  const isAlreadyProcessed = await redis.get(deduplicationKey);
+  if (isAlreadyProcessed) {
+    console.log(`Deposit bonus already processed for user ${userId}`);
+    return { success: true, message: 'Bonus already applied' };
+  }
+  
+  // Check if cron job is processing this user
+  const isCronProcessing = await redis.get(cronDeduplicationKey);
+  if (isCronProcessing) {
+    console.log(`Cron job is processing deposit bonus for user ${userId}, skipping...`);
+    return { success: true, message: 'Cron job is processing' };
+  }
+  
   // Calculate bonus based on amount
   const bonusTiers = [
     { amount: 100, bonus: 20 },
@@ -181,7 +200,7 @@ async function applyDepositBonusWithRetry(data, models, maxRetries = 3) {
     
     try {
       const user = await models.User.findByPk(userId, {
-        lock: transaction.LOCK.UPDATE,
+        attributes: ['wallet_balance', 'bonus_amount', 'has_received_first_bonus'],
         transaction
       });
       
@@ -192,14 +211,24 @@ async function applyDepositBonusWithRetry(data, models, maxRetries = 3) {
       // Check if bonus already applied
       if (user.has_received_first_bonus) {
         console.log(`First deposit bonus already applied for user ${userId}`);
-        await transaction.commit();
+        await transaction.rollback();
         return { success: true, message: 'Bonus already applied' };
       }
       
-      // Apply bonus
+      // Use atomic operations to prevent deadlocks
+      await models.User.increment('wallet_balance', {
+        by: bonusAmount,
+        where: { user_id: userId },
+        transaction
+      });
+      
+      await models.User.increment('bonus_amount', {
+        by: bonusAmount,
+        where: { user_id: userId },
+        transaction
+      });
+      
       await models.User.update({
-        wallet_balance: parseFloat(user.wallet_balance) + bonusAmount,
-        bonus_amount: parseFloat(user.bonus_amount) + bonusAmount,
         has_received_first_bonus: true
       }, {
         where: { user_id: userId },
@@ -223,6 +252,10 @@ async function applyDepositBonusWithRetry(data, models, maxRetries = 3) {
       }, { transaction });
       
       await transaction.commit();
+      
+      // Set deduplication flag (expires in 30 days)
+      await redis.setex(deduplicationKey, 2592000, '1');
+      
       console.log(`✅ First deposit bonus applied for user ${userId}: ${bonusAmount}`);
       return { success: true, bonusAmount };
       

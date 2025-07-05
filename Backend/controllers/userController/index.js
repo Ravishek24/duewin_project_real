@@ -25,17 +25,32 @@ const {
     Transaction,
     Referral,
     UserRebateLevel,
-    RebateLevel,
-    ReferralCommission
+    RebateLevel
 } = require('../../models');
+
+// Import ReferralCommission directly
+let ReferralCommission;
+try {
+    ReferralCommission = require('../../models/ReferralCommission');
+} catch (error) {
+    console.log('ReferralCommission model not found, commission features will be disabled');
+    ReferralCommission = null;
+}
 
 const getUserDetailsForAdmin = async (req, res) => {
     try {
-        const { search } = req.query;
-        let whereClause = {};
+        const { search, page = 1, limit = 10 } = req.query;
+        const offset = (parseInt(page) - 1) * parseInt(limit);
         
+        // Base where clause to exclude admin users
+        let whereClause = {
+            is_admin: false // Exclude admin users
+        };
+        
+        // Add search conditions if search term is provided
         if (search) {
             whereClause = {
+                ...whereClause,
                 [Op.or]: [
                     { user_id: search },
                     { phone_no: search },
@@ -44,6 +59,12 @@ const getUserDetailsForAdmin = async (req, res) => {
             };
         }
 
+        // Get total count for pagination
+        const totalUsers = await User.count({
+            where: whereClause
+        });
+
+        // Get users with pagination
         const users = await User.findAll({
             where: whereClause,
             attributes: [
@@ -51,29 +72,101 @@ const getUserDetailsForAdmin = async (req, res) => {
                 'phone_no',
                 'wallet_balance',
                 'is_phone_verified',
+                'is_blocked',
                 'current_ip',
                 'registration_ip',
                 'actual_deposit_amount',
-                'total_bet_amount'
+                'total_bet_amount',
+                'created_at'
             ],
-            order: [['user_id', 'ASC']]
+            order: [['created_at', 'DESC']], // Show newest users first
+            limit: parseInt(limit),
+            offset: offset
         });
 
-        const formattedUsers = users.map((user, index) => ({
-            sl: index + 1,
-            user_id: user.user_id,
-            mobile_number: user.phone_no,
-            balance: user.wallet_balance,
-            status: user.is_phone_verified ? 'Verified' : 'Unverified',
-            login_ip: user.current_ip,
-            register_ip: user.registration_ip,
-            total_deposit: user.actual_deposit_amount,
-            total_withdrawal: user.total_bet_amount
-        }));
+        // Debug: Check actual database values for is_blocked
+        if (users.length > 0) {
+            const debugUser = await User.findByPk(users[0].user_id, {
+                attributes: ['user_id', 'is_blocked'],
+                raw: true
+            });
+            console.log('Debug - Direct DB query result:', debugUser);
+        }
+
+        // Get total commission for each user (with safety check)
+        const userIds = users.map(user => user.user_id);
+        let commissionMap = {};
+        
+        if (ReferralCommission) {
+            try {
+                // Use raw query as fallback to avoid Sequelize aggregation issues
+                const userCommissions = await User.sequelize.query(`
+                    SELECT user_id, SUM(amount) as total_commission 
+                    FROM referral_commissions 
+                    WHERE user_id IN (:userIds) 
+                    GROUP BY user_id
+                `, {
+                    replacements: { userIds },
+                    type: User.sequelize.QueryTypes.SELECT
+                });
+
+                // Create a map for quick lookup
+                userCommissions.forEach(commission => {
+                    commissionMap[commission.user_id] = parseFloat(commission.total_commission || 0);
+                });
+            } catch (commissionError) {
+                console.error('Error fetching commission data:', commissionError);
+                // Continue without commission data
+                commissionMap = {};
+            }
+        } else {
+            console.log('ReferralCommission model not available, skipping commission calculation');
+        }
+
+        // Debug: Log first user to see what we're getting
+        if (users.length > 0) {
+            console.log('Debug - First user data:', {
+                user_id: users[0].user_id,
+                is_blocked: users[0].is_blocked,
+                is_blocked_type: typeof users[0].is_blocked,
+                raw_user: users[0].toJSON ? users[0].toJSON() : users[0]
+            });
+        }
+
+        const formattedUsers = users.map((user, index) => {
+            // Handle is_blocked properly - check for null, undefined, or falsy values
+            let isBlocked = false;
+            if (user.is_blocked !== null && user.is_blocked !== undefined) {
+                isBlocked = Boolean(user.is_blocked);
+            }
+            
+            return {
+                sl: offset + index + 1, // Correct serial number based on pagination
+                user_id: user.user_id,
+                mobile_number: user.phone_no,
+                balance: user.wallet_balance,
+                status: user.is_phone_verified ? 'Verified' : 'Unverified',
+                is_blocked: isBlocked,
+                total_commission: commissionMap[user.user_id] || 0,
+                login_ip: user.current_ip,
+                register_ip: user.registration_ip,
+                total_deposit: user.actual_deposit_amount,
+                total_withdrawal: user.total_bet_amount,
+                registered_at: user.created_at
+            };
+        });
 
         res.status(200).json({
             success: true,
-            data: formattedUsers
+            data: formattedUsers,
+            pagination: {
+                current_page: parseInt(page),
+                total_pages: Math.ceil(totalUsers / parseInt(limit)),
+                total_users: totalUsers,
+                users_per_page: parseInt(limit),
+                has_next_page: offset + users.length < totalUsers,
+                has_prev_page: parseInt(page) > 1
+            }
         });
     } catch (error) {
         console.error('Error in getUserDetailsForAdmin:', error);
@@ -548,7 +641,7 @@ const getUserDetails = async (req, res) => {
                 'is_phone_verified',
                 'is_email_verified',
                 'created_at',
-                'last_login'
+                'last_login_at'
             ]
         });
 

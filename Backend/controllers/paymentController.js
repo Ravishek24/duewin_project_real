@@ -63,12 +63,27 @@ const {
   processLPayWithdrawalCallback
 } = require('../services/lPayService');
 
+// Import the new USDT WG Pay service
+const {
+  createUsdtwgPayDepositOrder,
+  processUsdtwgPayDepositCallback,
+  createUsdtwgPayWithdrawalOrder,
+  processUsdtwgPayWithdrawalCallback
+} = require('../services/usdtwgPayService');
+
+// Import the new 101pay service
+const {
+  createDepositOrder: create101PayDepositOrder,
+  createWithdrawalOrder: create101PayWithdrawalOrder
+} = require('../services/pay101Service');
+
 // Import PaymentGateway model
 const PaymentGateway = require('../models/PaymentGateway');
 const User = require('../models/User');
 const { sequelize } = require('../config/db');
 const WithdrawalAdmin = require('../models/WithdrawalAdmin');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
+const WalletRecharge = require('../models/WalletRecharge');
 
 // Controller to handle payment creation (adding money to wallet) with gateway selection
 // Updated section for paymentController.js to include MxPay
@@ -89,8 +104,8 @@ const payInController = async (req, res) => {
     // Create a unique order ID based on timestamp and gateway
     const orderId = `PI${gateway.substring(0, 2)}${Date.now()}${userId}`;
 
-    // Get host for callback URL
-    const host = `${req.protocol}://${req.get('host')}`;
+    // Get host for callback URL - use API_BASE_URL if available
+    const host = process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
     let notifyUrl = '';
     let returnUrl = `${process.env.FRONTEND_URL}/wallet`;
 
@@ -130,13 +145,13 @@ const payInController = async (req, res) => {
         notifyUrl = `${host}/api/payments/solpay/payin-callback`;
         break;
       case 'LPAY':
-        result = await createLPayCollectionOrder(
-          userId,
-          orderId,
-          amount,
-          notifyUrl,
-          paymentGateway.gateway_id // or returnUrl if needed
-        );
+        notifyUrl = `${host}/api/payments/lpay/payin-callback`;
+        break;
+      case 'USDTWGPAY':
+        notifyUrl = `${host}/api/payments/usdtwgpay/payin-callback`;
+        break;
+      case '101PAY':
+        notifyUrl = `${host}/api/payments/101pay/payin-callback`;
         break;
       default:
         notifyUrl = `${host}/api/payments/okpay/payin-callback`;
@@ -186,11 +201,16 @@ const payInController = async (req, res) => {
         );
         break;
       case 'PPAYPRO':
+        // Get user information for PPAYPRO
+        const user = await User.findByPk(userId);
         result = await createPpayProDepositOrder(
           userId,
           orderId,
           {
             amount: parseInt(amount, 10), // PPAYPRO expects integer (smallest unit)
+            customerName: user ? user.full_name || user.username || 'User' : 'User',
+            customerEmail: user ? user.email || 'user@example.com' : 'user@example.com',
+            customerPhone: user ? user.phone || '1234567890' : '1234567890',
             ...optionalFields
           },
           notifyUrl,
@@ -217,6 +237,47 @@ const payInController = async (req, res) => {
           notifyUrl,
           paymentGateway.gateway_id // or returnUrl if needed
         );
+        break;
+      case 'USDTWGPAY':
+        result = await createUsdtwgPayDepositOrder(
+          userId,
+          orderId,
+          amount,
+          notifyUrl,
+          returnUrl,
+          paymentGateway.gateway_id
+        );
+        break;
+      case '101PAY':
+        // Use the provided channel code directly, fallback to 'upi' if not provided
+        let validChannelCode = channel || 'upi';
+        result = await create101PayDepositOrder({
+          merchantOrderNo: orderId,
+          channelCode: validChannelCode,
+          amount: amount,
+          currency: 'inr',
+          notifyUrl,
+          jumpUrl: returnUrl
+        });
+        
+        // Create the order record in database if API call was successful
+        if (result.success && result.data && result.data.data) {
+          try {
+            await WalletRecharge.create({
+              user_id: userId,
+              order_id: orderId,
+              amount: amount,
+              payment_gateway_id: paymentGateway.gateway_id,
+              status: 'pending',
+              created_at: new Date(),
+              updated_at: new Date()
+            });
+            console.log('✅ 101pay order created in database:', orderId);
+          } catch (dbError) {
+            console.error('❌ Failed to create 101pay order in database:', dbError);
+            // Don't fail the entire request if DB creation fails
+          }
+        }
         break;
       default:
         result = await createOkPayCollectionOrder(userId, orderId, pay_type, amount, notifyUrl, paymentGateway.gateway_id);
@@ -383,6 +444,23 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
             notifyUrl,
             withdrawal.payment_gateway_id
           );
+          break;
+        case '101PAY':
+          notifyUrl = `${host}/api/payments/101pay/payout-callback`;
+          // Use the provided withdrawal type as channel code, fallback to 'bank' if not provided
+          let withdrawalChannelCode = withdrawal.withdrawal_type || 'bank';
+          transferResult = await create101PayWithdrawalOrder({
+            merchantOrderNo: withdrawal.order_id,
+            beneficiary: withdrawal.account_holder,
+            bankName: withdrawal.bank_name,
+            bankAccount: withdrawal.account_number,
+            ifsc: withdrawal.ifsc_code,
+            currency: 'inr',
+            channelCode: withdrawalChannelCode,
+            amount: withdrawal.amount,
+            address: withdrawal.remark || 'Withdrawal',
+            notifyUrl
+          });
           break;
         default: // OKPAY or any other
           notifyUrl = `${host}/api/payments/okpay/payout-callback`;
@@ -631,6 +709,118 @@ const ghPayCallbackController = async (req, res) => {
       message: 'Server error processing GHPAY callback'
     });
   }
+};
+
+// Controller to handle UTR-based deposit
+const initiateUTRDeposit = async (req, res) => {
+    try {
+        const { amount, utr, channel = 'qq00099' } = req.body;
+        const userId = req.user.user_id;
+
+        if (!amount || parseFloat(amount) <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid amount provided'
+            });
+        }
+
+        if (!utr) {
+            return res.status(400).json({
+                success: false,
+                message: 'UTR number is required'
+            });
+        }
+
+        // Create a unique order ID
+        const orderId = `UTR${Date.now()}${userId}`;
+
+        // Get host for callback URL
+        const host = process.env.API_BASE_URL || `${req.protocol}://${req.get('host')}`;
+        const notifyUrl = `${host}/api/payments/101pay/utr-callback`;
+        const returnUrl = `${process.env.FRONTEND_URL}/wallet`;
+
+        // Find the 101pay payment gateway
+        const paymentGateway = await PaymentGateway.findOne({
+            where: { 
+                code: '101PAY',
+                is_active: true 
+            }
+        });
+
+        if (!paymentGateway) {
+            return res.status(400).json({
+                success: false,
+                message: '101PAY gateway is not available'
+            });
+        }
+
+        // Query deposit by UTR using 101pay service
+        const { queryDepositByUTR } = require('../services/pay101Service');
+        const utrResult = await queryDepositByUTR({ utr });
+
+        if (!utrResult.success) {
+            return res.status(400).json({
+                success: false,
+                message: utrResult.message || 'Failed to verify UTR',
+                data: utrResult.data
+            });
+        }
+
+        // Check if UTR amount matches the requested amount
+        const utrData = utrResult.data;
+        if (utrData && utrData.amount && parseFloat(utrData.amount) !== parseFloat(amount)) {
+            return res.status(400).json({
+                success: false,
+                message: 'UTR amount does not match the requested amount'
+            });
+        }
+
+        // Create deposit record
+        const deposit = await Deposit.create({
+            user_id: userId,
+            order_id: orderId,
+            amount: amount,
+            gateway_id: paymentGateway.gateway_id,
+            status: 'pending',
+            payment_method: 'UTR',
+            utr_number: utr,
+            channel_code: channel,
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+
+        // Add background job to check UTR status
+        const paymentQueue = require('../queues/paymentQueue');
+        paymentQueue.add('checkUTRStatus', {
+            orderId: orderId,
+            utr: utr,
+            userId: userId,
+            amount: amount
+        }, {
+            delay: 10000, // Check after 10 seconds
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 5000 }
+        }).catch(console.error);
+
+        return res.status(200).json({
+            success: true,
+            message: 'UTR deposit initiated successfully',
+            data: {
+                orderId: orderId,
+                utr: utr,
+                amount: amount,
+                status: 'pending',
+                estimatedProcessingTime: '1-3 minutes'
+            }
+        });
+
+    } catch (error) {
+        console.error('Error initiating UTR deposit:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error initiating UTR deposit'
+        });
+    }
 };
 
 // Controller to handle deposit initiation
@@ -1049,6 +1239,215 @@ const lPayWithdrawalCallbackController = async (req, res) => {
   }
 };
 
+// Add USDT WG Pay deposit callback controller
+const usdtwgPayDepositCallbackController = async (req, res) => {
+  try {
+    console.log('USDT WG Pay Deposit Callback Received:', req.body);
+    const result = await processUsdtwgPayDepositCallback(req);
+    if (result.success) {
+      return res.status(200).send('success');
+    } else {
+      return res.status(400).send('fail');
+    }
+  } catch (error) {
+    console.error('Error processing USDT WG Pay deposit callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing USDT WG Pay deposit callback'
+    });
+  }
+};
+
+// Add USDT WG Pay withdrawal callback controller
+const usdtwgPayWithdrawalCallbackController = async (req, res) => {
+  try {
+    console.log('USDT WG Pay Withdrawal Callback Received:', req.body);
+    const result = await processUsdtwgPayWithdrawalCallback(req);
+    if (result.success) {
+      return res.status(200).send('success');
+    } else {
+      return res.status(400).send('fail');
+    }
+  } catch (error) {
+    console.error('Error processing USDT WG Pay withdrawal callback:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error processing USDT WG Pay withdrawal callback'
+    });
+  }
+};
+
+// 101pay deposit callback handler
+const pay101PayinCallbackController = async (req, res) => {
+  try {
+    console.log('🔔 101pay Deposit Callback Received:', req.body);
+    const { merchantOrderNo, orderNo, currency, amount, status, fee, proof, upi, createdTime, updatedTime } = req.body;
+    
+    console.log('🔍 Looking for order:', merchantOrderNo);
+    
+    // Find the deposit order
+    const recharge = await WalletRecharge.findOne({ where: { order_id: merchantOrderNo } });
+    
+    if (!recharge) {
+      console.log('❌ Order not found:', merchantOrderNo);
+      console.log('📋 Available orders in WalletRecharge:');
+      const allOrders = await WalletRecharge.findAll({ 
+        where: { 
+          order_id: { [require('sequelize').Op.like]: '%PI101%' } 
+        },
+        limit: 5 
+      });
+      console.log('Recent orders:', allOrders.map(o => ({ order_id: o.order_id, status: o.status })));
+      
+      return res.status(404).send('fail');
+    }
+    
+    console.log('✅ Order found:', recharge.order_id, 'Status:', recharge.status);
+    // Only process if not already completed
+    if (recharge.status !== 'completed') {
+      console.log('🔄 Processing order with status:', status);
+      
+      if (status === 'success') {
+        console.log('✅ Processing successful payment');
+        await recharge.update({
+          status: 'completed',
+          transaction_id: orderNo,
+          updated_at: new Date()
+        });
+        
+        // Credit user wallet
+        const user = await User.findByPk(recharge.user_id);
+        if (user) {
+          const newBalance = parseFloat(user.wallet_balance) + parseFloat(recharge.amount);
+          await user.update({ wallet_balance: newBalance });
+          console.log('💰 Wallet credited. New balance:', newBalance);
+        }
+        
+        console.log('✅ Success response sent');
+        return res.status(200).send('success');
+      } else if (status === 'failure' || status === 'failed') {
+        console.log('❌ Processing failed payment');
+        await recharge.update({ status: 'failed', updated_at: new Date() });
+        return res.status(200).send('fail');
+      } else {
+        // Pending or unknown status
+        console.log('⏳ Processing pending/unknown status:', status);
+        await recharge.update({ status: 'pending', updated_at: new Date() });
+        return res.status(200).send('fail');
+      }
+    } else {
+      // Already completed
+      console.log('✅ Order already completed');
+      return res.status(200).send('success');
+    }
+  } catch (error) {
+    console.error('Error in 101pay deposit callback:', error);
+    return res.status(500).send('fail');
+  }
+};
+
+// 101pay withdrawal callback handler
+const pay101PayoutCallbackController = async (req, res) => {
+  try {
+    const { merchantOrderNo, orderNo, currency, amount, status, fee, proof, createdTime, updatedTime } = req.body;
+    // Find the withdrawal order
+    const withdrawal = await WalletWithdrawal.findOne({ where: { transaction_id: merchantOrderNo } });
+    if (!withdrawal) {
+      return res.status(404).send('fail');
+    }
+    // Only process if not already completed
+    if (withdrawal.status !== 'completed') {
+      if (status === 'success') {
+        await withdrawal.update({
+          status: 'completed',
+          transaction_id: orderNo,
+          updated_at: new Date()
+        });
+        return res.status(200).send('success');
+      } else if (status === 'failure' || status === 'failed') {
+        await withdrawal.update({ status: 'failed', updated_at: new Date() });
+        return res.status(200).send('fail');
+      } else {
+        // Pending or unknown status
+        await withdrawal.update({ status: 'pending', updated_at: new Date() });
+        return res.status(200).send('fail');
+      }
+    } else {
+      // Already completed
+      return res.status(200).send('success');
+    }
+  } catch (error) {
+    console.error('Error in 101pay withdrawal callback:', error);
+    return res.status(500).send('fail');
+  }
+};
+
+// 101pay UTR callback handler
+const pay101UTRCallbackController = async (req, res) => {
+  try {
+    const { utr, amount, status, orderNo, createdTime, updatedTime } = req.body;
+    
+    // Find the deposit order by UTR
+    const deposit = await Deposit.findOne({ 
+      where: { 
+        utr_number: utr,
+        status: 'pending'
+      } 
+    });
+    
+    if (!deposit) {
+      return res.status(404).send('fail');
+    }
+
+    // Only process if not already completed
+    if (deposit.status !== 'completed') {
+      if (status === 'success') {
+        await deposit.update({
+          status: 'completed',
+          transaction_id: orderNo,
+          updated_at: new Date()
+        });
+
+        // Credit user wallet
+        const user = await User.findByPk(deposit.user_id);
+        if (user) {
+          const newBalance = parseFloat(user.wallet_balance) + parseFloat(deposit.amount);
+          await user.update({ wallet_balance: newBalance });
+          
+          // Process attendance if enabled
+          try {
+            const { autoProcessRechargeForAttendance } = require('../services/autoAttendanceService');
+            await autoProcessRechargeForAttendance(deposit.user_id, deposit.amount);
+          } catch (attendanceError) {
+            console.error('Failed to process attendance for UTR deposit:', attendanceError.message);
+          }
+        }
+        
+        return res.status(200).send('success');
+      } else if (status === 'failure' || status === 'failed') {
+        await deposit.update({ 
+          status: 'failed', 
+          updated_at: new Date() 
+        });
+        return res.status(200).send('fail');
+      } else {
+        // Pending or unknown status
+        await deposit.update({ 
+          status: 'pending', 
+          updated_at: new Date() 
+        });
+        return res.status(200).send('fail');
+      }
+    } else {
+      // Already completed
+      return res.status(200).send('success');
+    }
+  } catch (error) {
+    console.error('Error in 101pay UTR callback:', error);
+    return res.status(500).send('fail');
+  }
+};
+
 module.exports = {
   payInController,
   processWithdrawalAdminAction,
@@ -1062,6 +1461,7 @@ module.exports = {
   okPayCallbackController,
   ghPayCallbackController,
   initiateDeposit,
+  initiateUTRDeposit,
   getDepositHistory,
   getWithdrawalHistory,
   wowPayWithdrawalCallbackController,
@@ -1072,4 +1472,9 @@ module.exports = {
   wowPayDepositCallbackController,
   lPayDepositCallbackController,
   lPayWithdrawalCallbackController,
+  usdtwgPayDepositCallbackController,
+  usdtwgPayWithdrawalCallbackController,
+  pay101PayinCallbackController,
+  pay101PayoutCallbackController,
+  pay101UTRCallbackController,
 };

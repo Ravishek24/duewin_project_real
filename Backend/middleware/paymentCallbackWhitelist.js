@@ -11,16 +11,12 @@ const paymentGatewayIPs = {
   // OKPAY (add official IPs from their documentation)
   OKPAY: [
     // Test environment IPs
-    '103.242.98.41',    // Example sandbox IP
-    '47.242.125.119',   // Example sandbox IP
+    ////////////////////////
+    '27.124.46.151',    // Example sandbox IP
+    '202.79.174.166', 
+    ////////////////////////  // Example sandbox IP
     '47.243.175.82',    // Example sandbox IP
     // Production environment IPs
-    '103.45.102.41',    // Example production IP
-    '47.57.245.224',    // Example production IP
-    // Always include localhost for testing
-    '127.0.0.1',
-    '::1',
-    '::ffff:127.0.0.1'
   ],
   // WePayGlobal (add official IPs from their documentation)
   WEPAY: [
@@ -33,6 +29,13 @@ const paymentGatewayIPs = {
     '::1',
     '::ffff:127.0.0.1'
   ],
+  // 101pay (add official IPs from their documentation)
+  '101PAY': [
+    // Add 101pay IP addresses here
+    // You'll need to get these from 101pay support or documentation
+    'api.oneoonepay.org', // Domain-based check (if supported)
+    // Add actual IP addresses when available
+  ],
   // Add more payment gateways as needed
 };
 
@@ -41,13 +44,53 @@ const combinedWhitelist = [
   ...new Set([
     ...paymentGatewayIPs.OKPAY,
     ...paymentGatewayIPs.WEPAY,
+    ...paymentGatewayIPs['101PAY'],
     // Always include your server's IP
     process.env.SERVER_IP || '51.21.47.178',
     // Add EC2 instance IP
     '51.21.47.178',
     // Add other trusted IPs
     process.env.TRUSTED_IP1 || '',
-    process.env.TRUSTED_IP2 || ''
+    process.env.TRUSTED_IP2 || '',
+    // Add your current IP for testing (replace with your actual IP)
+    'YOUR_CURRENT_IP_HERE', // Replace this with your actual IP address
+    // Add the new IP addresses for payment callbacks
+    '122.161.49.155',
+    '172.31.41.86',
+    // Combine IP of gateways to send callbacks
+    //////////////////////
+    '13.228.129.142', //// L Pay
+    //////////////////////
+    
+    //////////////////////
+    '13.228.129.142', //// L Pay
+    //////////////////////
+
+    //////////////////////
+    '3.1.16.96', //// Ppaypro
+    '52.221.132.176', //// Paypro
+    //////////////////////
+
+    //////////////////////
+    '47.245.107.148', //// USDT wg pay
+    '8.219.120.86', //// USDT wg pay
+    //////////////////////
+
+    //////////////////////
+    '86.38.247.84', //// CH Pay
+    'fe80::be24:11ff:feb8:ed4c', //// CH Pay
+    '146.103.45.221', //// CH Pay
+    '140.99.130.55', //// CH Pay
+    '216.107.138.95', //// CH Pay
+    //////////////////////
+
+    //////////////////////
+    '34.93.160.199',
+    '34.100.152.58', //// 101pay
+    //////////////////////
+
+
+
   ].filter(ip => ip)) // Remove empty strings
 ];
 

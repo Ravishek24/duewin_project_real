@@ -167,7 +167,7 @@ router.get('/invitation/status', auth,  async (req, res) => {
     }
 });
 
-router.post('/invitation/claim', auth, requirePhoneVerification, async (req, res) => {
+router.post('/invitation/claim', auth, async (req, res) => {
     try {
         console.log('🎁 DEBUG: Invitation claim route hit');
         const userId = req.user.user_id;

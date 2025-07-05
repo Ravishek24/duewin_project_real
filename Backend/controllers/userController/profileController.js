@@ -8,7 +8,16 @@ const getProfileController = async (req, res) => {
         const result = await getUserProfile(userId);
         
         if (result.success) {
-            return res.status(200).json(result);
+            // Add member_detail to the response
+            const response = {
+                ...result,
+                data: {
+                    ...result.user,
+                    member_detail: `MEMBER${result.user.user_name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`
+                }
+            };
+            
+            return res.status(200).json(response);
         } else {
             return res.status(404).json(result);
         }

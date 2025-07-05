@@ -38,7 +38,7 @@ const getUserFeedback = async (req, res) => {
             include: [{
                 model: User,
                 as: 'responder',
-                attributes: ['username']
+                attributes: ['user_name']
             }],
             order: [['created_at', 'DESC']],
             limit: parseInt(limit),
@@ -81,12 +81,12 @@ const getAll = async (req, res) => {
                 {
                     model: User,
                     as: 'user',
-                    attributes: ['username']
+                    attributes: ['user_name']
                 },
                 {
                     model: User,
                     as: 'responder',
-                    attributes: ['username']
+                    attributes: ['user_name']
                 }
             ],
             order: [['created_at', 'DESC']],

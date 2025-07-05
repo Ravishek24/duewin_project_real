@@ -130,6 +130,35 @@ const securityMiddleware = (app) => {
 
     // 4. Security logging middleware
     app.use((req, res, next) => {
+        // 🔒 CRITICAL: Block access to sensitive files and directories
+        const sensitivePatterns = [
+            /\.git/i,
+            /\.env/i,
+            /\.config/i,
+            /\.ini/i,
+            /\.log/i,
+            /\.sql/i,
+            /\.bak/i,
+            /\.backup/i,
+            /\.old/i,
+            /\.tmp/i,
+            /\.temp/i,
+            /\/\./i  // Any hidden file/directory
+        ];
+
+        const requestPath = req.path.toLowerCase();
+        
+        // Check if request is for sensitive files
+        for (const pattern of sensitivePatterns) {
+            if (pattern.test(requestPath)) {
+                console.log(`🚨 BLOCKED: ${req.method} ${req.path} from ${req.ip} - User-Agent: ${req.headers['user-agent']}`);
+                return res.status(404).json({
+                    success: false,
+                    message: 'Not found'
+                });
+            }
+        }
+
         // Log security-relevant requests
         if (req.headers['user-agent']?.includes('bot') || 
             req.headers['user-agent']?.includes('crawler') ||

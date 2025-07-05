@@ -21,7 +21,7 @@ class GameTransaction extends Model {
                 type: DataTypes.STRING,
                 allowNull: false
             },
-            transaction_type: {
+            type: {
                 type: DataTypes.STRING,
                 allowNull: false
             },

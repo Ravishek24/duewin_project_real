@@ -6,10 +6,14 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest",
     "check-results": "node scripts/checkLatestResults.js",
     "game-scheduler": "node scripts/setupGameScheduler.js",
-    "test-security": "node test-security-headers.js",
+    "security-monitor": "node scripts/security-monitor.js",
+    "security-test": "node test-security-headers.js",
+    "block-ip": "node scripts/block-ip.js",
+    "unblock-ip": "node scripts/unblock-ip.js",
+    "security-report": "node scripts/security-report.js",
     "workers": "node workers/workerManager.js"
   },
   "keywords": [],

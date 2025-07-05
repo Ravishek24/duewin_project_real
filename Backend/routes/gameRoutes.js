@@ -14,7 +14,7 @@ const router = express.Router();
  */
 
 // Get last result for a specific game and duration
-router.get('/:gameType/:duration/last-result', async (req, res) => {
+router.get('/:gameType/:duration/last-result', auth, async (req, res) => {
   try {
     const { gameType, duration } = req.params;
     
@@ -425,7 +425,7 @@ router.post('/:gameType/:duration/bet',
       });
     }
   }
-);
+);   
 
 // Get user's bet history for a specific game
 router.get('/:gameType/:duration/my-bets', async (req, res) => {
@@ -494,6 +494,160 @@ router.get('/:gameType/:duration/my-bets', async (req, res) => {
   }
 });
 
+// Get user's bet history for all durations of a specific game type
+router.get('/:gameType/my-bets', async (req, res) => {
+  try {
+    const { gameType } = req.params;
+    const { page = 1, limit = 20, status, startDate, endDate } = req.query;
+    const userId = req.user.user_id;
+
+    const gameTypeLower = gameType.toLowerCase();
+    const mappedGameType = gameTypeLower === '5d' ? 'fiveD' : gameTypeLower;
+    
+    // Validate game type
+    const validGameTypes = ['wingo', 'trx_wix', 'k3', 'fiveD'];
+    if (!validGameTypes.includes(mappedGameType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid game type. Valid types: wingo, trx_wix, k3, 5d'
+      });
+    }
+    
+    // Validate date parameters if provided
+    let dateFilter = {};
+    if (startDate || endDate) {
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid date format. Use YYYY-MM-DD or ISO date format'
+          });
+        }
+        
+        if (start > end) {
+          return res.status(400).json({
+            success: false,
+            message: 'Start date cannot be after end date'
+          });
+        }
+        
+        dateFilter = {
+          startDate: start,
+          endDate: end
+        };
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Both startDate and endDate are required when using date filtering'
+        });
+      }
+    }
+    
+    // Get all durations for this game type
+    const durations = {
+      'wingo': [30, 60, 180, 300],
+      'trx_wix': [30, 60, 180, 300],
+      'k3': [60, 180, 300, 600],
+      'fiveD': [60, 180, 300, 600]
+    };
+    
+    const gameDurations = durations[mappedGameType] || [];
+    
+    // Get user's bets for all durations
+    const allBets = [];
+    let totalBets = 0;
+    
+    for (const duration of gameDurations) {
+      try {
+        const result = await gameLogicService.getUserBetHistory(userId, mappedGameType, duration, {
+          page: 1,
+          limit: 1000, // Get all bets for this duration
+          status,
+          ...dateFilter
+        });
+        
+        if (result.success && result.data && result.data.bets) {
+          // Add duration info to each bet
+          const betsWithDuration = result.data.bets.map(bet => ({
+            ...bet,
+            duration: duration,
+            gameType: mappedGameType
+          }));
+          
+          allBets.push(...betsWithDuration);
+          totalBets += result.data.pagination?.total || 0;
+        }
+      } catch (error) {
+        console.error(`Error getting bets for ${mappedGameType} duration ${duration}:`, error);
+        // Continue with other durations even if one fails
+      }
+    }
+    
+    // Sort all bets by creation date (newest first)
+    allBets.sort((a, b) => new Date(b.createdAt || b.created_at) - new Date(a.createdAt || a.created_at));
+    
+    // Apply pagination to the combined results
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 50); // Max 50 per page
+    const offset = (pageNum - 1) * limitNum;
+    const paginatedBets = allBets.slice(offset, offset + limitNum);
+    
+    // Calculate pagination info
+    const totalPages = Math.ceil(allBets.length / limitNum);
+    const hasNextPage = pageNum < totalPages;
+    const hasPrevPage = pageNum > 1;
+    
+    // Calculate summary statistics
+    const summary = {
+      total_bets: allBets.length,
+      total_amount: allBets.reduce((sum, bet) => sum + (parseFloat(bet.betAmount || bet.bet_amount) || 0), 0),
+      total_wins: allBets.filter(bet => bet.status === 'won').length,
+      total_losses: allBets.filter(bet => bet.status === 'lost').length,
+      pending_bets: allBets.filter(bet => bet.status === 'pending').length,
+      by_duration: {}
+    };
+    
+    // Group by duration
+    gameDurations.forEach(duration => {
+      const durationBets = allBets.filter(bet => bet.duration === duration);
+      summary.by_duration[duration] = {
+        count: durationBets.length,
+        total_amount: durationBets.reduce((sum, bet) => sum + (parseFloat(bet.betAmount || bet.bet_amount) || 0), 0),
+        wins: durationBets.filter(bet => bet.status === 'won').length,
+        losses: durationBets.filter(bet => bet.status === 'lost').length
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        gameType: mappedGameType,
+        bets: paginatedBets,
+        summary: summary,
+        pagination: {
+          current_page: pageNum,
+          total_pages: totalPages,
+          total_records: allBets.length,
+          limit: limitNum,
+          has_next_page: hasNextPage,
+          has_prev_page: hasPrevPage
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error getting user bets for all durations:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get user bets',
+      error: error.message
+    });
+  }
+});
+
 /**
  * ======================
  * HELPER FUNCTIONS
@@ -507,9 +661,9 @@ function validateBetTypeAndValue(gameType, betType, betValue) {
     case 'trx_wix':
       const validWingoBets = {
         'NUMBER': (val) => /^[0-9]$/.test(val),
-        'COLOR': (val) => ['red', 'green', 'violet'].includes(val.toLowerCase()),
-        'SIZE': (val) => ['big', 'small'].includes(val.toLowerCase()),
-        'PARITY': (val) => ['odd', 'even'].includes(val.toLowerCase())
+        'COLOR': (val) => ['red', 'green', 'violet'].includes(String(val || '').toLowerCase()),
+        'SIZE': (val) => ['big', 'small'].includes(String(val || '').toLowerCase()),
+        'PARITY': (val) => ['odd', 'even'].includes(String(val || '').toLowerCase())
       };
       
       if (!validWingoBets[betType]) {
@@ -523,9 +677,9 @@ function validateBetTypeAndValue(gameType, betType, betValue) {
     case 'k3':
       const validK3Bets = {
         'SUM': (val) => /^([3-9]|1[0-8])$/.test(val),
-        'SUM_CATEGORY': (val) => ['big', 'small', 'odd', 'even'].includes(val.toLowerCase()),
-        'MATCHING_DICE': (val) => ['triple_any', 'pair_any'].includes(val.toLowerCase()) || /^(triple|pair)_[1-6](_[1-6])?$/.test(val),
-        'PATTERN': (val) => ['all_different', 'straight', 'two_different'].includes(val.toLowerCase())
+        'SUM_CATEGORY': (val) => ['big', 'small', 'odd', 'even'].includes(String(val || '').toLowerCase()),
+        'MATCHING_DICE': (val) => ['triple_any', 'pair_any'].includes(String(val || '').toLowerCase()) || /^(triple|pair)_[1-6](_[1-6])?$/.test(val),
+        'PATTERN': (val) => ['all_different', 'straight', 'two_different'].includes(String(val || '').toLowerCase())
       };
       
       if (!validK3Bets[betType]) {
@@ -541,7 +695,7 @@ function validateBetTypeAndValue(gameType, betType, betValue) {
         'POSITION': (val) => /^[ABCDE]_[1-6]$/.test(val),
         'POSITION_SIZE': (val) => /^[ABCDE]_(big|small)$/.test(val),
         'POSITION_PARITY': (val) => /^[ABCDE]_(odd|even)$/.test(val),
-        'SUM': (val) => ['big', 'small', 'odd', 'even'].includes(val.toLowerCase())
+        'SUM': (val) => ['big', 'small', 'odd', 'even'].includes(String(val || '').toLowerCase())
       };
       
       if (!validFiveDConventions[betType]) {

@@ -1,5 +1,5 @@
 // Backend/services/selfRebateService.js
-const { sequelize } = require('../config/db');
+const { getSequelizeInstance } = require('../config/db');
 const { Op, fn, col } = require('sequelize');
 
 // Import models
@@ -69,6 +69,7 @@ const processSelfRebate = async (userId, betAmount, gameType, gameId = null, bet
         }
 
         // Use provided transaction or create new one
+        const sequelize = await getSequelizeInstance();
         const t = transaction || await sequelize.transaction();
 
         try {

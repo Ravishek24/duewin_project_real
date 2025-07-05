@@ -1,9 +1,21 @@
 const axios = require('axios');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const ppayProConfig = require('../config/ppayProConfig');
 const { WalletRecharge } = require('../models');
 const { WalletWithdrawal } = require('../models');
 const User = require('../models/User');
+
+// Utility: Write deposit order logs to a file
+function logDepositOrder(data) {
+    const logDir = path.join(__dirname, '../logs');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+    const logFile = path.join(logDir, 'ppaypro-deposit-orders.log');
+    const logEntry = `\n[${new Date().toISOString()}] PPayPro Deposit Order Created\n${JSON.stringify(data, null, 2)}\n`;
+    fs.appendFileSync(logFile, logEntry);
+    console.log(logEntry); // Also log to console
+}
 
 // Utility: Generate PPayPro signature (MD5, uppercase)
 function generatePpayProSignature(params, privateKey = ppayProConfig.key) {
@@ -24,12 +36,33 @@ function generatePpayProSignature(params, privateKey = ppayProConfig.key) {
 // Create a deposit order with PPayPro
 async function createPpayProDepositOrder(userId, orderId, params, notifyUrl, gatewayId) {
     try {
+        console.log('\n🚀 Creating PPayPro Deposit Order...');
+        console.log('='.repeat(60));
+        
+        // Convert amount from rupees to paisa (integer)
+        let amountRupees = typeof params.amount === 'string' ? parseFloat(params.amount) : params.amount;
+        if (isNaN(amountRupees)) {
+            return {
+                success: false,
+                message: 'Invalid amount provided. Amount must be a number in rupees.'
+            };
+        }
+        const amountPaisa = Math.round(amountRupees * 100);
+        
+        console.log('📊 Order Details:');
+        console.log(`  - User ID: ${userId}`);
+        console.log(`  - Order ID: ${orderId}`);
+        console.log(`  - Amount (Rupees): ${amountRupees}`);
+        console.log(`  - Amount (Paisa): ${amountPaisa}`);
+        console.log(`  - Gateway ID: ${gatewayId}`);
+        console.log(`  - Notify URL: ${notifyUrl}`);
+        
         // Required fields for PPayPro deposit
         const payload = {
             mchNo: ppayProConfig.mchNo,
             appId: ppayProConfig.appId,
             mchOrderNo: orderId,
-            amount: params.amount, // Integer, smallest unit
+            amount: amountPaisa, // Integer, paisa
             customerName: params.customerName,
             customerEmail: params.customerEmail,
             customerPhone: params.customerPhone,
@@ -39,32 +72,127 @@ async function createPpayProDepositOrder(userId, orderId, params, notifyUrl, gat
             notifyUrl: notifyUrl,
             returnUrl: params.returnUrl
         };
+        
         // Remove undefined/null fields
         Object.keys(payload).forEach(key => (payload[key] === undefined || payload[key] === null) && delete payload[key]);
+        
+        console.log('\n📤 PPayPro Request Payload:');
+        console.log(JSON.stringify(payload, null, 2));
+        
         // Generate signature
         payload.sign = generatePpayProSignature(payload);
+        console.log(`\n🔐 Generated Signature: ${payload.sign}`);
+        
         // Call PPayPro API
         const apiUrl = `${ppayProConfig.host}/api/pay/pay`;
+        console.log(`\n🌐 Calling PPayPro API: ${apiUrl}`);
+        
         const response = await axios.post(apiUrl, payload, {
             headers: { 'Content-Type': 'application/json' }
         });
+        
+        console.log('\n📥 PPayPro API Response:');
+        console.log(JSON.stringify(response.data, null, 2));
+        
         // Handle response
         if (response.data && response.data.code === 0 && response.data.data) {
+            const payOrderId = response.data.data.payOrderId;
+            const paymentUrl = response.data.data.payData;
+            
+            console.log('\n✅ Order Created Successfully!');
+            console.log('='.repeat(60));
+            console.log(`🎯 PPayPro Order ID: ${payOrderId}`);
+            console.log(`🔗 Payment URL: ${paymentUrl}`);
+            
             // Create recharge record in DB (pending)
             await WalletRecharge.create({
                 user_id: userId,
-                amount: params.amount,
+                amount: amountRupees, // Store rupees in DB for consistency
                 payment_gateway_id: gatewayId,
                 status: 'pending',
                 order_id: orderId,
-                transaction_id: response.data.data.payOrderId
+                transaction_id: payOrderId
             });
+            
+            console.log('💾 Database record created successfully');
+            
+            // Prepare callback details for logging
+            const callbackDetails = {
+                timestamp: new Date().toISOString(),
+                orderInfo: {
+                    userId: userId,
+                    orderId: orderId,
+                    payOrderId: payOrderId,
+                    amountRupees: amountRupees,
+                    amountPaisa: amountPaisa,
+                    gatewayId: gatewayId
+                },
+                ppayProRequest: {
+                    apiUrl: apiUrl,
+                    payload: payload,
+                    signature: payload.sign
+                },
+                ppayProResponse: {
+                    payOrderId: payOrderId,
+                    paymentUrl: paymentUrl,
+                    fullResponse: response.data
+                },
+                callbackInfo: {
+                    callbackUrl: notifyUrl,
+                    expectedCallbackData: {
+                        payOrderId: payOrderId,
+                        mchOrderNo: orderId,
+                        amount: amountPaisa.toString(),
+                        state: '2', // Will be 2 for success, 3 for failure
+                        currency: 'INR',
+                        createdAt: Date.now(),
+                        successTime: Date.now()
+                    }
+                }
+            };
+            
+            // Generate expected callback signature
+            const expectedCallbackSignature = generatePpayProSignature(callbackDetails.callbackInfo.expectedCallbackData);
+            callbackDetails.callbackInfo.expectedCallbackData.sign = expectedCallbackSignature;
+            
+            console.log('\n📋 CALLBACK DETAILS FOR TESTING:');
+            console.log('='.repeat(60));
+            console.log('🔗 Callback URL:', callbackDetails.callbackInfo.callbackUrl);
+            console.log('📤 Expected Callback Payload:');
+            console.log(JSON.stringify(callbackDetails.callbackInfo.expectedCallbackData, null, 2));
+            console.log('🔐 Expected Callback Signature:', expectedCallbackSignature);
+            
+            console.log('\n📝 cURL Command for Testing:');
+            const curlCommand = `curl -X POST "${callbackDetails.callbackInfo.callbackUrl}" \\
+  -H "Content-Type: application/x-www-form-urlencoded" \\
+  -d "payOrderId=${payOrderId}&mchOrderNo=${orderId}&amount=${amountPaisa}&state=2&currency=INR&createdAt=${Date.now()}&successTime=${Date.now()}&sign=${expectedCallbackSignature}"`;
+            console.log(curlCommand);
+            
+            console.log('\n📝 Postman Body (x-www-form-urlencoded):');
+            console.log(`payOrderId=${payOrderId}`);
+            console.log(`mchOrderNo=${orderId}`);
+            console.log(`amount=${amountPaisa}`);
+            console.log(`state=2`);
+            console.log(`currency=INR`);
+            console.log(`createdAt=${Date.now()}`);
+            console.log(`successTime=${Date.now()}`);
+            console.log(`sign=${expectedCallbackSignature}`);
+            
+            // Log all details to file
+            logDepositOrder(callbackDetails);
+            
+            console.log('\n✅ Deposit order creation completed!');
+            console.log('📄 Full details logged to: logs/ppaypro-deposit-orders.log');
+            console.log('='.repeat(60));
+            
             return {
                 success: true,
-                paymentUrl: response.data.data.payData, // payDataType may indicate type
-                orderId: response.data.data.payOrderId
+                paymentUrl: paymentUrl,
+                orderId: payOrderId
             };
         } else {
+            console.log('\n❌ PPayPro API Error:');
+            console.log(response.data);
             return {
                 success: false,
                 message: response.data ? response.data.msg : 'No response from PPayPro',
@@ -72,6 +200,8 @@ async function createPpayProDepositOrder(userId, orderId, params, notifyUrl, gat
             };
         }
     } catch (error) {
+        console.log('\n❌ Error creating PPayPro deposit order:');
+        console.log(error.response?.data || error.message);
         return {
             success: false,
             message: error.response && error.response.data ? error.response.data.msg : error.message
@@ -157,12 +287,21 @@ async function queryPpayProDepositOrder(orderId, payOrderId) {
 // Create a withdrawal order with PPayPro
 async function createPpayProWithdrawalOrder(userId, orderId, params, notifyUrl, gatewayId) {
     try {
+        // Convert amount from rupees to paisa (integer)
+        let amountRupees = typeof params.amount === 'string' ? parseFloat(params.amount) : params.amount;
+        if (isNaN(amountRupees)) {
+            return {
+                success: false,
+                message: 'Invalid amount provided. Amount must be a number in rupees.'
+            };
+        }
+        const amountPaisa = Math.round(amountRupees * 100);
         // Required fields for PPayPro withdrawal
         const payload = {
             mchNo: ppayProConfig.mchNo,
             appId: ppayProConfig.appId,
             mchOrderNo: orderId,
-            amount: params.amount, // Integer, smallest unit
+            amount: amountPaisa, // Integer, paisa
             entryType: params.entryType, // e.g., 'IMPS', 'UPI', etc.
             accountNo: params.accountNo, // Beneficiary's account number/UPI ID
             accountCode: params.accountCode, // IFSC, CPF, etc.
@@ -188,7 +327,7 @@ async function createPpayProWithdrawalOrder(userId, orderId, params, notifyUrl, 
             // Create withdrawal record in DB (pending)
             await WalletWithdrawal.create({
                 user_id: userId,
-                amount: params.amount,
+                amount: amountRupees, // Store rupees in DB for consistency
                 payment_gateway_id: gatewayId,
                 status: 'pending',
                 order_id: orderId,

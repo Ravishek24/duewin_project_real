@@ -597,13 +597,21 @@ const getGameLaunchUrl = async (gameId, userId, req = null) => {
     const walletResult = await thirdPartyWalletService.getBalance(userId, 'USD');
     
     if (!walletResult.success || walletResult.balance <= 0) {
-      return {
-        success: false,
-        message: 'No funds available in third-party wallet',
-        suggestion: 'Please transfer funds from your main wallet to third-party wallet first',
-        endpoint: '/api/third-party-wallets/transfer-to-third-party',
-        mainWalletBalance: user.wallet_balance || 0
-      };
+      // ADD AUTOMATIC TRANSFER HERE
+      console.log('💰 No balance in third-party wallet, attempting automatic transfer...');
+      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+      
+      if (!transferResult.success) {
+        return {
+          success: false,
+          message: 'No funds available in third-party wallet and automatic transfer failed',
+          suggestion: 'Please transfer funds from your main wallet to third-party wallet first',
+          endpoint: '/api/third-party-wallets/transfer-to-third-party',
+          mainWalletBalance: user.wallet_balance || 0
+        };
+      }
+      
+      console.log('✅ Automatic transfer successful, continuing with game launch...');
     }
 
     // Generate tokens
@@ -1401,18 +1409,23 @@ const getUserGameHistory = async (userId, filters = {}) => {
       }
     }
     
+    // OPTIMIZATION: Selective loading with only necessary fields
     const transactions = await SpribeTransaction.findAndCountAll({
       where: whereClause,
       include: [
         {
           model: SpribeGameSession,
           as: 'session',
-          attributes: ['game_id', 'provider', 'platform']
+          attributes: ['game_id', 'provider', 'platform'] // Only load necessary fields
         }
       ],
       order: [['created_at', 'DESC']],
       limit,
-      offset
+      offset,
+      attributes: [
+        'id', 'user_id', 'session_id', 'game_id', 'type', 'amount', 
+        'balance', 'created_at' // Only load necessary fields
+      ]
     });
     
     return {
@@ -1443,14 +1456,18 @@ const getSessionStatistics = async (sessionId) => {
   try {
     await initializeModels();
     
-    // Get session details
+    // OPTIMIZATION: Get session details with selective loading
     const session = await SpribeGameSession.findByPk(sessionId, {
       include: [
         {
           model: User,
           as: 'user',
-          attributes: ['user_id', 'user_name']
+          attributes: ['user_id', 'user_name'] // Only load necessary fields
         }
+      ],
+      attributes: [
+        'id', 'user_id', 'session_id', 'game_id', 'provider', 
+        'platform', 'status', 'started_at', 'ended_at' // Only load necessary fields
       ]
     });
     
@@ -1461,7 +1478,7 @@ const getSessionStatistics = async (sessionId) => {
       };
     }
     
-    // Get transaction statistics
+    // Get transaction statistics using aggregated queries
     const stats = await SpribeTransaction.findAll({
       where: { session_id: sessionId },
       attributes: [
@@ -1485,7 +1502,6 @@ const getSessionStatistics = async (sessionId) => {
         user_name: session.user?.user_name,
         game_id: session.game_id,
         provider: session.provider,
-        currency: session.currency,
         platform: session.platform,
         status: session.status,
         started_at: session.started_at,

@@ -28,8 +28,8 @@ const config = {
         dialect: 'mysql',
         logging: console.log,  // Enable logging for debugging
         pool: {
-            max: 50,
-            min: 10,
+            max: 100,
+            min: 20,
             acquire: 60000,
             idle: 30000,
             evict: 60000
@@ -62,8 +62,8 @@ const config = {
         dialect: 'mysql',
         logging: false,  // Disable logging in production
         pool: {
-            max: 50,
-            min: 10,
+            max: 100,
+            min: 20,
             acquire: 60000,
             idle: 30000,
             evict: 60000

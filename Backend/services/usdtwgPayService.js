@@ -20,32 +20,70 @@ function getNonce(len = 6) {
 /**
  * Create a deposit (collection) order
  */
-async function createUsdtwgPayDepositOrder(userId, orderId, amount, notifyUrl, returnUrl) {
+async function createUsdtwgPayDepositOrder(userId, orderId, amount, notifyUrl, returnUrl, gatewayId) {
   const user = await User.findByPk(userId);
   if (!user) return { success: false, message: 'User not found' };
+  
+  // Convert INR to USDT for the gateway
+  const USDT_TO_INR = parseFloat(process.env.USDTWG_PAY_USDT_TO_INR || '85');
+  const usdtAmount = amount / USDT_TO_INR;
+  
+  // Save the original INR amount in the database
   await WalletRecharge.create({
     user_id: userId,
-    phone_no: user.phone_no,
-    added_amount: amount,
+    amount: amount, // Save original INR amount
     order_id: orderId,
-    payment_gateway: 'USDTWGPAY',
-    payment_status: false
+    payment_gateway_id: gatewayId,
+    status: 'pending'
   });
-  const timestamp = getTimestamp();
-  const nonce = getNonce();
-  const urlPath = '/api/order/create';
+  
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = Math.random().toString(36).substring(2, 10); // 8-char random string
+  const urlPath = '/api/order/create';  // ✅ Correct API endpoint for order creation
   const method = 'POST';
   const body = {
     McorderNo: orderId,
-    Amount: amount.toString(),
+    Amount: usdtAmount.toString(), // Send USDT amount to gateway
     Type: 'usdt',
     ChannelCode: usdtwgPayConfig.channelCode,
     CallBackUrl: notifyUrl || usdtwgPayConfig.notifyUrl,
     JumpUrl: returnUrl || usdtwgPayConfig.notifyUrl
   };
   const sign = generateUsdtwgPaySignature(method, urlPath, usdtwgPayConfig.accessKey, timestamp, nonce, usdtwgPayConfig.accessSecret);
+  
+  console.log('📋 USDT WG PAY DEPOSIT ORDER CREATED');
+  console.log('='.repeat(60));
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Order Info:', {
+    userId: userId,
+    orderId: orderId,
+    inrAmount: amount,
+    usdtAmount: usdtAmount,
+    gatewayId: gatewayId
+  });
+  console.log('USDT WG Pay Config:', {
+    baseUrl: usdtwgPayConfig.baseUrl,
+    accessKey: usdtwgPayConfig.accessKey ? 'SET' : 'NOT SET',
+    accessSecret: usdtwgPayConfig.accessSecret ? 'SET' : 'NOT SET',
+    channelCode: usdtwgPayConfig.channelCode ? 'SET' : 'NOT SET',
+    notifyUrl: usdtwgPayConfig.notifyUrl
+  });
+  console.log('USDT WG Pay Request:', {
+    apiUrl: `${usdtwgPayConfig.baseUrl}${urlPath}`,
+    payload: body,
+    signature: sign
+  });
+  // Log the signature details for testing
+  console.log('--- USDTWG SIGNATURE DETAILS FOR TESTING ---');
+  console.log('accesskey:', usdtwgPayConfig.accessKey);
+  console.log('timestamp:', timestamp);
+  console.log('nonce:', nonce);
+  console.log('sign:', sign);
+  console.log('SignatureData:', `${method}&${urlPath}&${usdtwgPayConfig.accessKey}&${timestamp}&${nonce}`);
+  console.log('--- END SIGNATURE DETAILS ---');
+  
   const response = await axios.post(
-    usdtwgPayConfig.baseUrl + urlPath,
+    usdtwgPayConfig.baseUrl + '/api/order/create',
     body,
     {
       headers: {
@@ -57,11 +95,70 @@ async function createUsdtwgPayDepositOrder(userId, orderId, amount, notifyUrl, r
       }
     }
   );
+  
+  console.log('USDT WG Pay Response:', response.data);
+  
   if (response.data.code === 200 && response.data.type === 'success') {
     await WalletRecharge.update(
       { transaction_id: response.data.result.orderNo },
       { where: { order_id: orderId } }
     );
+    
+    console.log('✅ USDT WG Pay deposit order creation completed!');
+    console.log('💰 User wallet will be credited with ₹', amount, '(INR)');
+    console.log('='.repeat(60));
+    
+    // 🔍 CALLBACK TESTING INFORMATION
+    console.log('🔍 CALLBACK TESTING INFO FOR ORDER:', orderId);
+    console.log('='.repeat(60));
+    console.log('📋 Order Details:');
+    console.log('  - Order ID (McorderNo):', orderId);
+    console.log('  - Gateway Order No:', response.data.result.orderNo);
+    console.log('  - Amount (INR):', amount);
+    console.log('  - Amount (USDT):', usdtAmount);
+    console.log('  - User ID:', userId);
+    console.log('  - Gateway ID:', gatewayId);
+    
+    console.log('\n📞 Expected Callback URL:');
+    console.log('  - URL:', notifyUrl || usdtwgPayConfig.notifyUrl);
+    console.log('  - Method: POST');
+    
+    console.log('\n🔐 Expected Callback Headers:');
+    console.log('  - accesskey:', usdtwgPayConfig.accessKey);
+    console.log('  - timestamp: [10-digit timestamp]');
+    console.log('  - nonce: [random string]');
+    console.log('  - sign: [HMAC-SHA256 signature]');
+    
+    console.log('\n📦 Expected Callback Body:');
+    console.log('  - merchantorder (or McorderNo):', orderId);
+    console.log('  - orderno:', response.data.result.orderNo);
+    console.log('  - amount:', usdtAmount);
+    console.log('  - status: "success" (when payment completes)');
+    console.log('  - [other gateway-specific fields]');
+    
+    console.log('\n🔍 Signature Generation for Callback:');
+    console.log('  - Method: POST');
+    console.log('  - URL Path: /api/payments/usdtwgpay/payin-callback');
+    console.log('  - Access Key:', usdtwgPayConfig.accessKey);
+    console.log('  - Access Secret:', usdtwgPayConfig.accessSecret ? '[HIDDEN]' : '[NOT SET]');
+    console.log('  - Signature Format: HMAC-SHA256(base64)');
+    console.log('  - Signature Data: POST&/api/payments/usdtwgpay/payin-callback&[accesskey]&[timestamp]&[nonce]');
+    
+    console.log('\n🧪 Test Callback Command:');
+    console.log('curl -X POST "' + (notifyUrl || usdtwgPayConfig.notifyUrl) + '" \\');
+    console.log('  -H "Content-Type: application/json" \\');
+    console.log('  -H "accesskey: ' + usdtwgPayConfig.accessKey + '" \\');
+    console.log('  -H "timestamp: [TIMESTAMP]" \\');
+    console.log('  -H "nonce: [NONCE]" \\');
+    console.log('  -H "sign: [GENERATED_SIGNATURE]" \\');
+    console.log('  -d \'{"merchantorder":"' + orderId + '","orderno":"' + response.data.result.orderNo + '","amount":"' + usdtAmount + '","status":"success"}\'');
+    
+    console.log('\n📊 Database Records:');
+    console.log('  - WalletRecharge record created with order_id:', orderId);
+    console.log('  - Status: pending');
+    console.log('  - Will be updated to "completed" on successful callback');
+    console.log('='.repeat(60));
+    
     return {
       success: true,
       paymentUrl: response.data.result.payUrl,
@@ -69,6 +166,7 @@ async function createUsdtwgPayDepositOrder(userId, orderId, amount, notifyUrl, r
       orderId: orderId
     };
   } else {
+    console.log('❌ USDT WG Pay API Error:', response.data);
     return { success: false, message: response.data.message || 'Failed to create order' };
   }
 }
@@ -81,35 +179,72 @@ async function processUsdtwgPayDepositCallback(req) {
   const { accesskey, timestamp, nonce, sign } = Object.fromEntries(
     Object.entries(req.headers).map(([k, v]) => [k.toLowerCase(), v])
   );
-  const urlPath = req.route ? req.route.path : req.path;
+  // Use the correct URL path for signature verification (must match what we generated)
+  const urlPath = '/api/payments/usdtwgpay/payin-callback';
   const method = req.method;
-  // Verify signature
-  const valid = verifyUsdtwgPaySignature(
+  // Log incoming callback
+  console.log('--- USDTWG Callback Start ---');
+  console.log('Headers:', req.headers);
+  console.log('Body:', req.body);
+  // Signature debug logs
+  console.log('Signature check params:', {
     method,
     urlPath,
     accesskey,
     timestamp,
     nonce,
-    usdtwgPayConfig.accessSecret,
-    sign
-  );
-  if (!valid) return { success: false, message: 'Invalid signature' };
+    accessSecret: usdtwgPayConfig.accessSecret ? '[HIDDEN]' : '[NOT SET]'
+  });
+  const signatureData = `${method.toUpperCase()}&${urlPath}&${accesskey}&${timestamp}&${nonce}`;
+  console.log('SignatureData:', signatureData);
+  const expectedSign = generateUsdtwgPaySignature(method, urlPath, accesskey, timestamp, nonce, usdtwgPayConfig.accessSecret);
+  console.log('Received sign:', sign);
+  console.log('Expected sign:', expectedSign);
+  // Verify signature
+  const valid = (sign === expectedSign);
+  console.log('Signature valid:', valid);
+  if (!valid) {
+    console.log('❌ Invalid signature');
+    return { success: false, message: 'Invalid signature' };
+  }
   // Process order
   const data = req.body;
   const orderId = data.merchantorder || data.McorderNo;
   const status = data.status;
+  console.log('OrderId from callback:', orderId);
   const recharge = await WalletRecharge.findOne({ where: { order_id: orderId } });
-  if (!recharge) return { success: false, message: 'Order not found' };
+  console.log('Recharge found:', recharge ? recharge.toJSON() : null);
+  if (!recharge) {
+    console.log('❌ Order not found for orderId:', orderId);
+    return { success: false, message: 'Order not found' };
+  }
   if (status === 'success') {
-    await recharge.update({ payment_status: true, time_of_success: new Date(), transaction_id: data.orderno });
+    // Use the saved INR amount directly (no conversion needed)
+    const inrAmount = parseFloat(recharge.amount);
+    await recharge.update({ 
+      status: 'completed', 
+      updated_at: new Date(), 
+      transaction_id: data.orderno 
+    });
     const user = await User.findByPk(recharge.user_id);
+    console.log('User found:', user ? user.toJSON() : null);
     if (user) {
-      const newBalance = parseFloat(user.wallet_balance) + parseFloat(data.amount);
+      const newBalance = parseFloat(user.wallet_balance) + inrAmount;
+      console.log('Updating user balance:', {
+        oldBalance: user.wallet_balance,
+        addAmount: inrAmount,
+        newBalance
+      });
       await user.update({ wallet_balance: newBalance });
+    } else {
+      console.log('❌ User not found for user_id:', recharge.user_id);
     }
+    console.log('--- USDTWG Callback End: Success ---');
     return { success: true };
   } else {
-    await recharge.update({ payment_status: false });
+    await recharge.update({ status: 'failed' });
+    console.log('❌ Payment failed or pending. Status:', status);
+    console.log('--- USDTWG Callback End: Fail ---');
     return { success: false, message: 'Payment failed or pending' };
   }
 }

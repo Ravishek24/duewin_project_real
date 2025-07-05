@@ -365,7 +365,7 @@ const login = async (email, password, ipAddress) => {
 const getUserProfile = async (userId) => {
     try {
         const user = await User.findByPk(userId, {
-            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'created_at', 'profile_picture_id']
+            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'created_at', 'profile_picture_id', 'vip_level']
         });
 
         if (!user) {
@@ -492,7 +492,7 @@ const updateUserProfile = async (userId, userData) => {
 
         // Get updated user
         const updatedUser = await User.findByPk(userId, {
-            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'is_email_verified']
+            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'is_email_verified', 'vip_level']
         });
 
         return {

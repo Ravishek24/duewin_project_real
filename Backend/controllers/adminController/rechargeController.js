@@ -1,4 +1,4 @@
-const { getAllPendingRecharges, getFirstRecharges, getTodayTopDeposits, getTodayTopWithdrawals } = require('../../services/paymentService');
+const { getAllPendingRecharges, getAllSuccessfulRecharges, getFirstRecharges, getTodayTopDeposits, getTodayTopWithdrawals } = require('../../services/paymentService');
 
 /**
  * Get all pending recharge requests
@@ -20,6 +20,30 @@ const getAllPendingRechargesController = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error fetching pending recharges'
+    });
+  }
+};
+
+/**
+ * Get all successful recharges
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getAllSuccessfulRechargesController = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const result = await getAllSuccessfulRecharges(parseInt(page), parseInt(limit));
+    
+    if (result.success) {
+      return res.status(200).json(result);
+    } else {
+      return res.status(400).json(result);
+    }
+  } catch (error) {
+    console.error('Error fetching successful recharges:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching successful recharges'
     });
   }
 };
@@ -98,6 +122,7 @@ const getTodayTopWithdrawalsController = async (req, res) => {
 
 module.exports = {
   getAllPendingRechargesController,
+  getAllSuccessfulRechargesController,
   getFirstRechargesController,
   getTodayTopDepositsController,
   getTodayTopWithdrawalsController

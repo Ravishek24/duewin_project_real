@@ -45,22 +45,28 @@ const worker = new Worker('registration', async job => {
 
 // Enhanced bonus application with deadlock prevention
 async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
+  const redis = require('../config/redisConfig').redis;
+  const deduplicationKey = `registration_bonus:${userId}`;
+  const cronDeduplicationKey = `registration_bonus_cron:${userId}`;
+  
+  // Check if already processed by this worker
+  const isAlreadyProcessed = await redis.get(deduplicationKey);
+  if (isAlreadyProcessed) {
+    console.log(`Registration bonus already processed for user ${userId}`);
+    return { success: true, message: 'Bonus already applied' };
+  }
+  
+  // Check if cron job is processing this user
+  const isCronProcessing = await redis.get(cronDeduplicationKey);
+  if (isCronProcessing) {
+    console.log(`Cron job is processing registration bonus for user ${userId}, skipping...`);
+    return { success: true, message: 'Cron job is processing' };
+  }
+  
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const transaction = await models.User.sequelize.transaction({
-      isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
-    });
+    const transaction = await models.User.sequelize.transaction();
     
     try {
-      // Use FOR UPDATE to prevent race conditions
-      const user = await models.User.findByPk(userId, {
-        lock: transaction.LOCK.UPDATE,
-        transaction
-      });
-      
-      if (!user) {
-        throw new Error(`User ${userId} not found`);
-      }
-      
       // Check if bonus already applied
       const existingBonus = await models.Transaction.findOne({
         where: {
@@ -72,7 +78,7 @@ async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
       
       if (existingBonus) {
         console.log(`Registration bonus already applied for user ${userId}`);
-        await transaction.commit();
+        await transaction.rollback();
         return { success: true, message: 'Bonus already applied' };
       }
       
@@ -86,35 +92,39 @@ async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
           where: { user_id: userId },
           transaction
         });
+        
+        // Create transaction record
+        await models.Transaction.create({
+          user_id: userId,
+          type: 'referral_bonus', // Use existing enum value
+          amount: BONUS_AMOUNT,
+          status: 'completed',
+          description: 'Welcome bonus for new registration',
+          reference_id: `reg_bonus_${userId}_${Date.now()}`,
+          metadata: {
+            bonus_type: 'registration',
+            registration_date: new Date()
+          },
+          restriction_note: 'This bonus can only be used for house games (lottery games)'
+        }, { transaction });
+        
+        await transaction.commit();
+        
+        // Set deduplication flag (expires in 30 days)
+        await redis.setex(deduplicationKey, 2592000, '1');
+        
+        console.log(`✅ Registration bonus applied for user ${userId}`);
+        return { success: true, amount: BONUS_AMOUNT };
       }
       
-      await models.Transaction.create({
-        user_id: userId,
-        type: 'referral_bonus', // Use existing enum value
-        amount: BONUS_AMOUNT,
-        status: 'completed',
-        description: 'Welcome bonus for new registration',
-        reference_id: `reg_bonus_${userId}_${Date.now()}`,
-        metadata: {
-          bonus_type: 'registration',
-          usage_restriction: 'house_games_only',
-          allowed_games: ['wingo', '5d', 'k3', 'trx_wix'],
-          restriction_note: 'This bonus can only be used for house games (lottery games)',
-          applied_at: new Date().toISOString()
-        }
-      }, { transaction });
-      
-      await transaction.commit();
-      console.log(`✅ Registration bonus applied for user ${userId}`);
-      return { success: true, amount: BONUS_AMOUNT };
+      await transaction.rollback();
+      return { success: true, message: 'No bonus applicable' };
       
     } catch (error) {
       await transaction.rollback();
       
-      // Check if it's a deadlock error
       if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
-        console.warn(`Deadlock detected for user ${userId}, retrying (${attempt}/${maxRetries})`);
-        // Exponential backoff
+        console.warn(`Deadlock detected for registration bonus ${userId}, retrying (${attempt}/${maxRetries})`);
         await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, attempt)));
         continue;
       }

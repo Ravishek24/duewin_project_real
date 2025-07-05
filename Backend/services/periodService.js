@@ -570,13 +570,14 @@ const getCurrentPeriod = async (gameType, duration) => {
             bettingOpen: timeRemaining > 5
         };
         
-        console.log(`Current period for ${gameType} ${duration}s:`, {
-            periodId,
-            timeRemaining: Math.floor(timeRemaining),
-            bettingOpen: periodInfo.bettingOpen,
-            currentTime: istMoment.format(),
-            endTime: currentPeriodEnd.format()
-        });
+        // FIXED: Remove excessive logging - only log period transitions, not every tick
+        // console.log(`Current period for ${gameType} ${duration}s:`, {
+        //     periodId,
+        //     timeRemaining: Math.floor(timeRemaining),
+        //     bettingOpen: periodInfo.bettingOpen,
+        //     currentTime: istMoment.format(),
+        //     endTime: currentPeriodEnd.format()
+        // });
         
         return periodInfo;
     } catch (error) {

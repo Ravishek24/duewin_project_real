@@ -37,7 +37,7 @@ const corsOptions = {
         
         // Your allowed origins
         const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(',') || [
-            'http://localhost:3000',
+            'http://localhost:3001',
         ]);
         
         // Check if origin is allowed or if it's from SPRIBE
@@ -82,6 +82,10 @@ app.use(cors(corsOptions));
 
 // 🔒 SECURITY: Apply comprehensive security middleware
 securityMiddleware(app);
+
+// 🚨 ATTACK PROTECTION: Apply advanced attack detection
+const { attackProtection } = require('./middleware/attackProtection');
+app.use(attackProtection);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));

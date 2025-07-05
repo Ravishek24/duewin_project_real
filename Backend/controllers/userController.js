@@ -22,7 +22,7 @@ const getUserDetails = async (req, res) => {
         const user = await User.findByPk(userId, {
             attributes: [
                 'id', 'username', 'email', 'balance', 
-                'created_at', 'last_login', 'status'
+                'created_at', 'last_login_at', 'status'
             ]
         });
 
@@ -69,7 +69,7 @@ const getUserDetails = async (req, res) => {
                     email: user.email,
                     balance: user.balance,
                     created_at: user.created_at,
-                    last_login: user.last_login,
+                    last_login: user.last_login_at,
                     status: user.status
                 },
                 vip: vipInfo || {

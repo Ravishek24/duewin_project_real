@@ -38,7 +38,7 @@ const getClientIp = (req) => {
 };
 
 // Auth middleware that verifies JWT token
-const auth = (req, res, next) => {
+const auth = async (req, res, next) => {
     try {
         // Get token from header
         const token = req.header('Authorization')?.replace('Bearer ', '');
@@ -76,9 +76,26 @@ const auth = (req, res, next) => {
             });
         }
 
-        // Set user ID in request
+        // Fetch complete user data from database
+        const user = await User.findByPk(userId);
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Check if user is blocked
+        if (user.is_blocked) {
+            return res.status(403).json({
+                success: false,
+                message: 'Account is blocked'
+            });
+        }
+
+        // Set complete user object in request
         req.userId = userId;
-        req.user = { user_id: userId }; // Minimal user object
+        req.user = user;
 
         next();
     } catch (error) {

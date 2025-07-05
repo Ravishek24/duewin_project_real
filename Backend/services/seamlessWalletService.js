@@ -292,11 +292,83 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
       return { success: false, message: 'User not found' };
     }
 
+    // ENHANCED: Provider-specific debugging
+    // FIXED: Better provider detection logic
+    let provider = 'BombayLive'; // Default provider - CHANGED TO BOMBAY LIVE (FULL NAME)
+    
+    if (gameId.includes('_')) {
+      // Game ID has underscore format (e.g., "pf_game123")
+      provider = gameId.split('_')[0];
+    } else {
+      // Game ID is numeric, need to determine provider from game list
+      console.log('🎮 Numeric game ID detected, looking up provider...');
+      try {
+        const gameListResponse = await axios.post(seamlessConfig.api_url.production, {
+          api_login: seamlessConfig.api_login,
+          api_password: seamlessConfig.api_password,
+          method: 'getGameList',
+          show_systems: 0,
+          show_additional: true,
+          currency: seamlessConfig.default_currency
+        });
+        
+        if (gameListResponse.data.error === 0 && gameListResponse.data.response) {
+          const game = gameListResponse.data.response.find(g => g.id === gameId || g.game_id === gameId);
+          if (game) {
+            let rawProvider = game.system || game.subcategory || 'BombayLive'; // Default to BombayLive
+            console.log('🎮 Raw provider from game list:', rawProvider);
+            
+            // FIXED: Provider mapping to handle mismatches
+            const providerMapping = {
+              'ol': 'BombayLive',  // 'ol' maps to 'BombayLive'
+              'bl': 'BombayLive',  // 'bl' maps to 'BombayLive'
+              'es': 'es',  // 'es' maps to 'es' (Evolution)
+              'pf': 'pf',  // 'pf' maps to 'pf' (Play'n GO)
+              'ss': 'ss',  // 'ss' maps to 'ss' (Spadegaming)
+              'ep': 'ep',  // 'ep' maps to 'ep' (EvoPlay)
+              'ag': 'ag',  // 'ag' maps to 'ag' (Asia Gaming)
+              'pg': 'pg',  // 'pg' maps to 'pg' (Pragmatic Play)
+              'ev': 'ev',  // 'ev' maps to 'ev' (Evolution)
+              'bp': 'bp',  // 'bp' maps to 'bp' (Blueprint)
+              'bs': 'bs',  // 'bs' maps to 'bs' (Betsoft)
+              'g24': 'g24', // 'g24' maps to 'g24' (G24)
+              'vg': 'vg',  // 'vg' maps to 'vg' (Vivo Gaming)
+              'ez': 'ez',  // 'ez' maps to 'ez' (Ezugi)
+              'dt': 'dt',  // 'dt' maps to 'dt' (Digitain)
+              'ds': 'ds'   // 'ds' maps to 'ds' (Delasport)
+            };
+            
+            provider = providerMapping[rawProvider.toLowerCase()] || 'BombayLive'; // Default to BombayLive for unknown providers
+            console.log('🎮 Mapped provider:', rawProvider, '→', provider);
+          } else {
+            console.log('🎮 Game not found in list, using BombayLive as default provider');
+            provider = 'BombayLive'; // Default to BombayLive
+          }
+        }
+      } catch (error) {
+        console.log('🎮 Error looking up game provider, using BombayLive as default:', error.message);
+        provider = 'BombayLive'; // Default to BombayLive
+      }
+    }
+    
+    console.log('🎮 Provider detected:', provider, 'for game ID:', gameId);
+    
+    if (provider === 'pf') {
+      console.log('🎮 === PLAY\'N GO GAME DETECTED ===');
+      console.log('🎮 Enhanced debugging enabled for Play\'n GO');
+    }
+    
+    if (provider === 'BombayLive') {
+      console.log('🎮 === BOMBAY LIVE GAME DETECTED ===');
+      console.log('🎮 Enhanced debugging enabled for Bombay Live');
+    }
+
     // 1. Ensure player exists at provider
     let playerInfo;
     const existsResult = await playerExists(userId);
     
     if (!existsResult.success) {
+      console.error('❌ Failed to check player existence:', existsResult.message);
       return { success: false, message: 'Failed to check player existence' };
     }
 
@@ -304,6 +376,7 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
       console.log('🎮 Player does not exist, creating...');
       const createResult = await createPlayer(userId);
       if (!createResult.success) {
+        console.error('❌ Failed to create player:', createResult.message);
         return { success: false, message: 'Failed to create player' };
       }
       playerInfo = createResult.playerInfo;
@@ -312,6 +385,15 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
     }
 
     console.log('🎮 Player info:', playerInfo);
+
+    // ENHANCED: Validate player info for Play'n GO
+    if (provider === 'pf') {
+      if (!playerInfo || !playerInfo.id) {
+        console.error('❌ Invalid player info for Play\'n GO:', playerInfo);
+        return { success: false, message: 'Invalid player information for Play\'n GO' };
+      }
+      console.log('✅ Play\'n GO player validation passed');
+    }
 
     // 2. Ensure third-party wallet exists and has balance
     const walletResult = await thirdPartyWalletService.getBalance(userId);
@@ -337,9 +419,20 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
       currency: seamlessConfig.default_currency
     };
 
+    // ENHANCED: Provider-specific request modifications
+    if (provider === 'pf') {
+      console.log('🎮 === PLAY\'N GO GAME REQUEST ===');
+      console.log('🎮 Request data:', JSON.stringify(gameRequest, null, 2));
+      
+      // Add Play'n GO specific parameters if needed
+      gameRequest.provider = 'pf';
+      gameRequest.currency = 'EUR'; // Ensure EUR for Play'n GO
+    }
+
     console.log('🎮 Requesting game URL with:', {
       username: credentials.username,
-      gameid: gameId
+      gameid: gameId,
+      provider: provider
     });
 
     const gameResponse = await axios.post(seamlessConfig.api_url.production, gameRequest);
@@ -347,28 +440,61 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
     console.log('🎮 Game response:', {
       error: gameResponse.data.error,
       message: gameResponse.data.message,
-      hasUrl: !!(gameResponse.data.url || gameResponse.data.response)
+      hasUrl: !!(gameResponse.data.url || gameResponse.data.response),
+      provider: provider
     });
 
+    // ENHANCED: Detailed error analysis for Play'n GO
     if (gameResponse.data.error !== 0) {
+      console.error('❌ Game launch failed for provider:', provider);
+      console.error('❌ Error details:', gameResponse.data);
+      
+      if (provider === 'pf') {
+        console.error('🎮 === PLAY\'N GO ERROR ANALYSIS ===');
+        console.error('🎮 This might be a signup/registration issue');
+        console.error('🎮 Check if player exists properly at Play\'n GO');
+        console.error('🎮 Verify player credentials and currency settings');
+      }
+      
       return {
         success: false,
         message: `Game launch failed: ${gameResponse.data.message} (${gameResponse.data.error})`
       };
     }
 
+    // ENHANCED: Validate game response for Play'n GO
+    if (provider === 'pf') {
+      if (!gameResponse.data.url && !gameResponse.data.response) {
+        console.error('❌ Play\'n GO returned no game URL');
+        return { success: false, message: 'No game URL returned from Play\'n GO' };
+      }
+      
+      if (!gameResponse.data.sessionid) {
+        console.error('❌ Play\'n GO returned no session ID');
+        return { success: false, message: 'No session ID returned from Play\'n GO' };
+      }
+      
+      console.log('✅ Play\'n GO game response validation passed');
+    }
+
     // 4. CRITICAL: Store session with the correct remote_id format
     const remoteId = playerInfo.id || credentials.username; // Use provider's ID
+    
+    // FIXED: Better game ID extraction
+    let gameIdExtracted = gameId;
+    if (gameId.includes('_')) {
+      gameIdExtracted = gameId.split('_')[1] || gameId;
+    }
     
     await SeamlessGameSession.create({
       user_id: userId,
       remote_id: remoteId.toString(), // CRITICAL: Store as string
-      provider: gameId.split('_')[0] || 'ss',
+      provider: provider,
       session_token: gameResponse.data.sessionid,
-      game_id: gameId.split('_')[1] || gameId,
+      game_id: gameIdExtracted,
       game_id_hash: gameId,
       game_url: gameResponse.data.url || gameResponse.data.response,
-      game_type: gameId.split('_')[0] || 'slot',
+      game_type: provider,
       session_id: gameResponse.data.sessionid,
       game_session_id: gameResponse.data.gamesession_id,
       is_active: true,
@@ -376,6 +502,17 @@ const getGameUrl = async (userId, gameId, language = 'en') => {
     });
 
     console.log('✅ Game session created with remote_id:', remoteId);
+
+    // ENHANCED: Success logging for Play'n GO
+    if (provider === 'pf') {
+      console.log('🎮 === PLAY\'N GO LAUNCH SUCCESS ===');
+      console.log('🎮 Game URL:', gameResponse.data.url || gameResponse.data.response);
+      console.log('🎮 Session ID:', gameResponse.data.sessionid);
+      console.log('🎮 If user still gets signup error, check:');
+      console.log('🎮 1. Browser console for JavaScript errors');
+      console.log('🎮 2. Game provider\'s player registration status');
+      console.log('🎮 3. Geographic restrictions or licensing issues');
+    }
 
     return {
       success: true,

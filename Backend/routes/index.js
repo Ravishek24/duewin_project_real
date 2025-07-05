@@ -25,6 +25,10 @@ const activityRoutes = require('./activityRoutes');
 const websocketDebugRoutes = require('./websocketDebug');
 const announcementRoutes = require('./announcementRoutes');
 const feedbackRoutes = require('./feedbackRoutes');
+const gameMoveTransactionRoutes = require('./gameMoveTransactionRoutes');
+const transactionReportRoutes = require('./transactionReportRoutes');
+const giftRoutes = require('./giftRoutes');
+const ppayproRoutes = require('./ppayproRoutes'); // Add PPayPro routes
 
 // Import middleware
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
@@ -119,6 +123,32 @@ router.use('/websocket-debug', websocketDebugRoutes);
 router.use('/wallet', auth, walletRoutes);
 router.use('/announcements', announcementRoutes); // Public route for latest announcements
 
+// Payment callback routes (public, no auth required)
+router.use('/payments/ppaypro', ppayproRoutes); // PPayPro callback routes
+
+// L Pay callback routes (public, no auth required)
+const { lPayDepositCallbackController, lPayWithdrawalCallbackController } = require('../controllers/paymentController');
+const { paymentCallbackWhitelist } = require('../middleware/paymentCallbackWhitelist');
+
+// L Pay callback routes
+router.post('/payments/lpay/payin-callback', paymentCallbackWhitelist, lPayDepositCallbackController);
+router.post('/payments/lpay/payout-callback', paymentCallbackWhitelist, lPayWithdrawalCallbackController);
+
+// USDT WG Pay callback routes (public, no auth required)
+const { usdtwgPayDepositCallbackController, usdtwgPayWithdrawalCallbackController } = require('../controllers/paymentController');
+
+// USDT WG Pay callback routes
+router.post('/payments/usdtwgpay/payin-callback', paymentCallbackWhitelist, usdtwgPayDepositCallbackController);
+router.post('/payments/usdtwgpay/payout-callback', paymentCallbackWhitelist, usdtwgPayWithdrawalCallbackController);
+
+// 101pay callback routes (public, no auth required)
+const { pay101PayinCallbackController, pay101PayoutCallbackController, pay101UTRCallbackController } = require('../controllers/paymentController');
+
+// 101pay callback routes
+router.post('/payments/101pay/payin-callback', paymentCallbackWhitelist, pay101PayinCallbackController);
+router.post('/payments/101pay/payout-callback', paymentCallbackWhitelist, pay101PayoutCallbackController);
+router.post('/payments/101pay/utr-callback', paymentCallbackWhitelist, pay101UTRCallbackController);
+
 // SPRIBE routes - public endpoints first, then protected ones
 router.use('/spribe', spribeRoutes);  // This will handle both public and protected routes
 
@@ -135,7 +165,9 @@ router.use('/vip', auth, vipRoutes); // Add vip routes
 router.use('/third-party-wallets', auth, thirdPartyWalletRoutes); // Add third party wallet routes
 router.use('/activity', auth, activityRoutes); // Add activity routes
 router.use('/announcements', auth, announcementRoutes); // Add announcement routes
-router.use('/feedback', auth, feedbackRoutes); // Add feedback routes
+router.use('/game-move-transactions', auth, gameMoveTransactionRoutes); // Add game move transaction routes
+router.use('/transaction-reports', transactionReportRoutes); // Add transaction report routes (admin only)
+router.use('/gift', auth, giftRoutes); // Add gift routes
 // Add referral routes
 router.use('/referral', auth, referralRoutes);
 

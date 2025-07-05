@@ -7,24 +7,37 @@ const User = require('../models/User');
 
 // Utility: Generate SOLPAY RSA signature
 function generateSolPaySignature(params, privateKey = solPayConfig.privateKey) {
-    // 1. Exclude 'sign' key if present
-    const filtered = Object.entries(params)
-        .filter(([k, v]) => v !== undefined && v !== null && v !== '' && k !== 'sign')
-        .reduce((acc, [k, v]) => { acc[k] = v; return acc; }, {});
-    // 2. Sort keys by ASCII order
-    const sortedKeys = Object.keys(filtered).sort();
-    // 3. Concatenate values (not keys)
-    const strX = sortedKeys.map(key => String(filtered[key])).join('');
-    // 4. Sign with RSA private key (PKCS#8, base64 or PEM)
-    const signer = crypto.createSign('RSA-SHA1');
-    signer.update(strX, 'utf8');
-    signer.end();
-    // If key is base64, convert to PEM
-    let key = privateKey;
-    if (!privateKey.includes('BEGIN')) {
-        key = '-----BEGIN PRIVATE KEY-----\n' + privateKey + '\n-----END PRIVATE KEY-----';
+    try {
+        // 1. Exclude 'sign' key if present
+        const filtered = Object.entries(params)
+            .filter(([k, v]) => v !== undefined && v !== null && v !== '' && k !== 'sign')
+            .reduce((acc, [k, v]) => { acc[k] = v; return acc; }, {});
+        // 2. Sort keys by ASCII order
+        const sortedKeys = Object.keys(filtered).sort();
+        // 3. Concatenate values (not keys)
+        const strX = sortedKeys.map(key => String(filtered[key])).join('');
+        // 4. Sign with RSA private key (PKCS#8, base64 or PEM)
+        const signer = crypto.createSign('RSA-SHA1');
+        signer.update(strX, 'utf8');
+        signer.end();
+        
+        // Check if private key is valid
+        if (!privateKey || privateKey.length < 100) {
+            throw new Error('Invalid or incomplete private key provided');
+        }
+        
+        // If key is base64, convert to PEM
+        let key = privateKey;
+        if (!privateKey.includes('BEGIN')) {
+            key = '-----BEGIN PRIVATE KEY-----\n' + privateKey + '\n-----END PRIVATE KEY-----';
+        }
+        
+        return signer.sign(key, 'base64');
+    } catch (error) {
+        console.error('Error generating SolPay signature:', error.message);
+        // Return a placeholder signature for testing (this will fail verification but won't crash)
+        return 'INVALID_KEY_SIGNATURE_PLACEHOLDER';
     }
-    return signer.sign(key, 'base64');
 }
 
 // Utility: Verify SOLPAY RSA signature
@@ -52,6 +65,15 @@ function verifySolPaySignature(params, signature, publicKey = solPayConfig.platf
 // Create a deposit order with SOLPAY
 async function createSolPayDepositOrder(userId, orderId, params, notifyUrl, gatewayId) {
     try {
+        // Check if private key is valid
+        if (!solPayConfig.privateKey || solPayConfig.privateKey.length < 100) {
+            return {
+                success: false,
+                message: 'SolPay private key is invalid or not configured. Please contact support for the correct RSA private key.',
+                errorCode: 'INVALID_PRIVATE_KEY'
+            };
+        }
+        
         // Build payload per SOLPAY doc
         const payload = {
             merchantCode: solPayConfig.merchantCode,
@@ -67,6 +89,16 @@ async function createSolPayDepositOrder(userId, orderId, params, notifyUrl, gate
         };
         // Generate signature
         payload.sign = generateSolPaySignature(payload);
+        
+        // Check if signature generation failed
+        if (payload.sign === 'INVALID_KEY_SIGNATURE_PLACEHOLDER') {
+            return {
+                success: false,
+                message: 'Failed to generate SolPay signature due to invalid private key',
+                errorCode: 'SIGNATURE_FAILED'
+            };
+        }
+        
         // Call SOLPAY API
         const apiUrl = `${solPayConfig.host}/gateway/v1/INR/pay`;
         const response = await axios.post(apiUrl, payload, {

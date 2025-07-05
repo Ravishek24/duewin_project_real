@@ -55,6 +55,14 @@ class WalletWithdrawal extends Model {
                 type: DataTypes.STRING,
                 allowNull: true
             },
+            bank_account_id: {
+                type: DataTypes.INTEGER,
+                allowNull: true,
+                references: {
+                    model: 'bank_accounts',
+                    key: 'id'
+                }
+            },
             created_at: {
                 type: DataTypes.DATE,
                 allowNull: false,
@@ -96,6 +104,14 @@ class WalletWithdrawal extends Model {
                 foreignKey: 'payment_gateway_id', // Column in wallet_withdrawals
                 targetKey: 'gateway_id',          // Column in payment_gateways
                 as: 'paymentGateway'
+            });
+        }
+
+        if (models.BankAccount) {
+            this.belongsTo(models.BankAccount, {
+                foreignKey: 'bank_account_id',
+                targetKey: 'id',
+                as: 'bankAccount'
             });
         }
     }

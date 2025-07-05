@@ -3,12 +3,13 @@
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../config/constants');
-const { redis, isConnected } = require('../config/redisConfig');
+const redisHelper = require('../config/redis');
+const redisClient = redisHelper.getClient();
+const { redis: pubsubRedis, isConnected } = require('../config/redisConfig');
 const { logger } = require('../utils/logger');
 const moment = require('moment-timezone');
 const { getSequelizeInstance } = require('../config/db');
 const { initializeModels } = require('../models');
-const { Transaction } = require('../models');
 const { recordVipExperience } = require('./autoVipService');
 
 // Import game logic functions for bet processing
@@ -21,6 +22,35 @@ const {
     ensureModelsInitialized,
     storeBetInRedisWithTimeline
 } = require('./gameLogicService');
+
+/**
+ * Bet limit functions for WebSocket validation
+ */
+const getMinBetAmount = (gameType) => {
+    // Minimum bet amount is ₹1 (net amount after platform fee)
+    return 1;
+};
+
+const getMaxBetAmount = (gameType) => {
+    // Maximum bet amount is ₹1,00,000 (gross amount)
+    return 100000;
+};
+
+const getMaxBetsPerUser = (gameType) => {
+    // Maximum 50 bets per user per period
+    return 50;
+};
+
+const getMaxTotalBetPerPeriod = (gameType) => {
+    // Maximum total bet amount per period (same as max bet amount)
+    return 100000;
+};
+
+// Import period service
+const periodService = require('./periodService');
+
+// Import game logic service for direct access
+const gameLogicService = require('./gameLogicService');
 
 // Socket.io server instance
 let io = null;
@@ -39,6 +69,24 @@ const GAME_CONFIGS = {
 };
 
 // Total: 16 rooms (4 games × 4 durations each)
+
+/**
+ * NEW: Get room ID based on game type, duration, and timeline
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} timeline - Timeline (default: 'default')
+ * @returns {string} - Room ID
+ */
+const getRoomId = (gameType, duration, timeline = 'default') => {
+    if (timeline === 'default') {
+        return `${gameType}_${duration}`;
+    }
+    return `${gameType}_${duration}_${timeline}`;
+};
+
+
+
+
 
 /**
  * FIXED: Period time calculation functions (matching gameScheduler.js)
@@ -82,6 +130,10 @@ const initializeWebSocketModels = async () => {
         models = await initializeModels();
         // Attach sequelize instance to models
         models.sequelize = sequelize;
+        // Ensure new models are present
+        if (!models.GameCombinations5D || !models.Game5DSummaryStats) {
+            throw new Error('GameCombinations5D or Game5DSummaryStats model not initialized');
+        }
         console.log('✅ WebSocket models initialized successfully');
         return models;
     } catch (error) {
@@ -93,232 +145,139 @@ const initializeWebSocketModels = async () => {
 /**
  * NEW: WebSocket-specific bet processing that handles timing validation properly
  */
-const processWebSocketBet = async (betData) => {
+const processWebSocketBet = async (socket, data) => {
     try {
-        console.log(`🔄 [WS_BET_PROCESS] Starting WebSocket bet processing for user ${betData.userId}`);
-        
-        // Ensure models are initialized
-        if (!models) {
-            models = await initializeWebSocketModels();
+        const { gameType, duration, betType, betValue, betAmount, timeline = 'default' } = data;
+        const userId = socket.user.userId || socket.user.id;
+
+        console.log(`🎲 [WS_BET] User ${userId} placing bet:`, {
+            gameType, duration, betType, betValue, betAmount, timeline
+        });
+
+        // Validate input
+        if (!gameType || !duration || !betType || !betValue || !betAmount) {
+            socket.emit('betError', {
+                success: false,
+                message: 'Missing required fields'
+            });
+            return { success: false, message: 'Missing required fields' };
         }
+
+        // Validate bet amount
+        if (isNaN(betAmount) || parseFloat(betAmount) <= 0) {
+            socket.emit('betError', {
+                success: false,
+                message: 'Invalid bet amount'
+            });
+            return { success: false, message: 'Invalid bet amount' };
+        }
+
+        // Get current period
+        const currentPeriod = await periodService.getCurrentPeriod(gameType, duration, timeline);
+        if (!currentPeriod || !currentPeriod.periodId) {
+            socket.emit('betError', {
+                success: false,
+                message: 'No active betting period'
+            });
+            return { success: false, message: 'No active betting period' };
+        }
+
+        // Check if betting is allowed (not in last 5 seconds)
+        const now = Date.now();
+        const periodEnd = currentPeriod.endTime;
+        const timeRemaining = periodEnd - now;
         
-        // Start database transaction
-        const t = await models.sequelize.transaction();
-        
-        try {
-            const {
-                userId,
+        if (timeRemaining < 5000) {
+            socket.emit('betError', {
+                success: false,
+                message: 'Betting closed for this period'
+            });
+            return { success: false, message: 'Betting closed for this period' };
+        }
+
+        // Validate bet placement using new structure
+        const validation = await validateBetPlacement(userId, gameType, duration, currentPeriod.periodId, betAmount, timeline);
+        if (!validation.valid) {
+            socket.emit('betError', {
+                success: false,
+                message: validation.error
+            });
+            return { success: false, message: validation.error };
+        }
+
+        // Get odds
+        const odds = calculateOddsForBet(betType, betValue);
+        if (!odds) {
+            socket.emit('betError', {
+                success: false,
+                message: 'Invalid bet type or value'
+            });
+            return { success: false, message: 'Invalid bet type or value' };
+        }
+
+        // Process the bet with new structure
+        const betResult = await gameLogicService.processBet({
+            userId,
+            gameType,
+            duration,
+            timeline,
+            periodId: currentPeriod.periodId,
+            betType,
+            betValue,
+            betAmount,
+            odds
+        });
+
+        if (betResult.success) {
+            socket.emit('betSuccess', {
+                success: true,
+                betId: betResult.data.betId,
+                periodId: currentPeriod.periodId,
+                betAmount: betResult.data.grossBetAmount,
+                netAmount: betResult.data.netBetAmount,
+                platformFee: betResult.data.platformFee,
+                odds: betResult.data.odds,
+                expectedWin: betResult.data.expectedWin,
+                walletBalance: betResult.data.walletBalanceAfter,
+                betType,
+                betValue,
                 gameType,
                 duration,
                 timeline,
-                periodId,
-                betType,
-                betValue,
-                betAmount,
-                odds
-            } = betData;
-            
-            console.log(`💰 [WS_BET_PROCESS] Processing bet: ${betType}:${betValue} for ₹${betAmount}`);
-            
-            // Get user with locking
-            const user = await models.User.findByPk(userId, {
-                lock: true,
-                transaction: t
+                message: 'Bet placed successfully'
             });
 
-            if (!user) {
-                await t.rollback();
-                return {
-                    success: false,
-                    message: 'User not found',
-                    code: 'USER_NOT_FOUND'
-                };
-            }
-
-            const userBalance = parseFloat(user.wallet_balance || 0);
-            const betAmountFloat = parseFloat(betAmount);
-
-            // Check balance within transaction
-            if (userBalance < betAmountFloat) {
-                await t.rollback();
-                return {
-                    success: false,
-                    message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
-                    code: 'INSUFFICIENT_BALANCE'
-                };
-            }
-
-            // Deduct amount from user balance
-            await models.User.decrement('wallet_balance', {
-                by: betAmountFloat,
-                where: { user_id: userId },
-                transaction: t
+            // Update room with total bets using new hash structure
+            const roomId = getRoomId(gameType, duration, timeline);
+            const totalBets = await getTotalBetsForPeriod(gameType, duration, currentPeriod.periodId, timeline);
+            
+            io.to(roomId).emit('totalBetsUpdate', {
+                gameType,
+                duration,
+                periodId: currentPeriod.periodId,
+                totalBets: totalBets.totalAmount,
+                betCount: totalBets.betCount,
+                timeline
             });
 
-            // Store bet in appropriate database table
-            const betTypeFormatted = `${betType}:${betValue}`;
-            const currentWalletBalance = parseFloat(user.wallet_balance);
-            
-            // Calculate tax and amount after tax
-            const taxAmount = parseFloat((betAmountFloat * 0.05).toFixed(8)); // 5% tax rate
-            const amountAfterTax = parseFloat((betAmountFloat - taxAmount).toFixed(8));
-
-            let betRecord;
-            switch (gameType) {
-                case 'wingo':
-                    betRecord = await models.BetRecordWingo.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        tax_amount: taxAmount,
-                        amount_after_tax: amountAfterTax,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
-                    break;
-
-                case 'trx_wix':
-                    betRecord = await models.BetRecordTrxWix.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        tax_amount: taxAmount,
-                        amount_after_tax: amountAfterTax,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
-                    break;
-
-                case 'k3':
-                    betRecord = await models.BetRecordK3.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        tax_amount: taxAmount,
-                        amount_after_tax: amountAfterTax,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
-                    break;
-
-                case 'fiveD':
-                    betRecord = await models.BetRecord5D.create({
-                        user_id: userId,
-                        bet_number: periodId,
-                        bet_type: betTypeFormatted,
-                        bet_amount: betAmountFloat,
-                        tax_amount: taxAmount,
-                        amount_after_tax: amountAfterTax,
-                        odds: odds,
-                        status: 'pending',
-                        wallet_balance_before: currentWalletBalance,
-                        wallet_balance_after: currentWalletBalance - betAmountFloat,
-                        timeline: timeline,
-                        duration: duration,
-                        created_at: new Date()
-                    }, { transaction: t });
-                    break;
-
-                default:
-                    throw new Error(`Unsupported game type: ${gameType}`);
-            }
-
-            console.log(`✅ [WS_BET_PROCESS] Bet record created: ${betRecord.bet_id || betRecord.id}`);
-
-            // Store bet in Redis for real-time optimization
-            const redisStored = await storeBetInRedisWithTimeline(betData);
-            
-            if (!redisStored) {
-                console.warn(`⚠️ [WS_BET_PROCESS] Redis storage failed, but continuing with transaction`);
-            }
-
-            // Process self rebate
-            try {
-                const selfRebateService = require('./selfRebateService');
-                await selfRebateService.processSelfRebate(
-                    userId,
-                    betAmountFloat,
-                    gameType,
-                    betRecord.bet_id || betRecord.id,
-                    periodId,
-                    t
-                );
-                console.log(`✅ [WS_BET_PROCESS] Self rebate processed successfully`);
-            } catch (rebateError) {
-                console.error(`⚠️ [WS_BET_PROCESS] Error processing self rebate:`, rebateError);
-                // Don't fail the bet if rebate processing fails
-            }
-
-            // Record VIP experience
-            try {
-                await recordVipExperience(userId, betAmountFloat, gameType, betRecord.bet_id || betRecord.id, t);
-            } catch (vipError) {
-                console.error('[VIP_EXP] Error recording VIP experience:', vipError);
-            }
-
-            // Process activity reward
-            try {
-                const { processBetForActivityReward } = require('./activityRewardsService');
-                await processBetForActivityReward(userId, betAmountFloat, gameType, t);
-                console.log(`✅ [WS_BET_PROCESS] Activity reward processed successfully`);
-            } catch (activityError) {
-                console.error(`⚠️ [WS_BET_PROCESS] Error processing activity reward:`, activityError);
-                // Don't fail the bet if activity reward processing fails
-            }
-
-            // Commit transaction
-            await t.commit();
-            console.log(`✅ [WS_BET_PROCESS] Transaction committed successfully`);
-
-            return {
-                success: true,
-                message: 'Bet placed successfully',
-                data: {
-                    betId: betRecord.bet_id || betRecord.id,
-                    gameType,
-                    duration,
-                    periodId,
-                    betType,
-                    betValue,
-                    betAmount: betAmountFloat,
-                    odds,
-                    expectedWin: betAmountFloat * odds,
-                    walletBalanceAfter: currentWalletBalance - betAmountFloat
-                }
-            };
-
-        } catch (error) {
-            await t.rollback();
-            console.error(`❌ [WS_BET_PROCESS] Error in transaction:`, error);
-            throw error;
+            console.log(`✅ [WS_BET] Bet placed successfully for user ${userId}`);
+            return { success: true, data: betResult.data };
+        } else {
+            socket.emit('betError', {
+                success: false,
+                message: betResult.message || 'Failed to place bet',
+                code: betResult.code
+            });
+            return { success: false, message: betResult.message || 'Failed to place bet', code: betResult.code };
         }
 
     } catch (error) {
-        console.error(`❌ [WS_BET_PROCESS] Error in processWebSocketBet:`, error);
-        return {
+        console.error('❌ [WS_BET] Error processing WebSocket bet:', error);
+        socket.emit('betError', {
             success: false,
-            message: 'Failed to process bet',
-            code: 'PROCESSING_ERROR',
-            error: error.message
-        };
+            message: 'Server error while processing bet'
+        });
+        return { success: false, message: 'Server error while processing bet' };
     }
 };
 
@@ -329,19 +288,20 @@ const mapClientBetType = (clientType) => {
         'size': 'SIZE',
         'parity': 'PARITY',
         'odd': 'PARITY',
-        'even': 'PARITY'
+        'even': 'PARITY',
+        'sum': 'SUM' // Add support for sum bets (k3 game)
     };
     
-    return typeMapping[clientType?.toLowerCase()] || 'COLOR';
+    return typeMapping[String(clientType || '').toLowerCase()] || 'COLOR';
 };
 
 /**
  * NEW: Transform client bet value to server format
  */
 const mapClientBetValue = (clientSelection, clientType) => {
-    // Handle different client formats
-    const selection = clientSelection?.toLowerCase();
-    const type = clientType?.toLowerCase();
+    // Handle different client formats - convert to string first
+    const selection = String(clientSelection || '').toLowerCase();
+    const type = String(clientType || '').toLowerCase();
     
     // Color mapping
     if (type === 'color') {
@@ -377,6 +337,11 @@ const mapClientBetValue = (clientSelection, clientType) => {
         return String(clientSelection);
     }
     
+    // Sum mapping (for k3 game)
+    if (type === 'sum') {
+        return String(clientSelection);
+    }
+    
     // Default fallback
     return String(clientSelection);
 };
@@ -385,8 +350,8 @@ const mapClientBetValue = (clientSelection, clientType) => {
  * NEW: Calculate odds based on bet type
  */
 const calculateOddsForBet = (clientType, clientSelection) => {
-    const type = clientType?.toLowerCase();
-    const selection = clientSelection?.toLowerCase();
+    const type = String(clientType || '').toLowerCase();
+    const selection = String(clientSelection || '').toLowerCase();
     
     switch (type) {
         case 'number':
@@ -406,6 +371,9 @@ const calculateOddsForBet = (clientType, clientSelection) => {
         case 'even':
             return 2.0; // Odd/Even odds
             
+        case 'sum':
+            return 9.0; // 1:9 odds for sum bets (k3 game)
+            
         default:
             return 2.0; // Default odds
     }
@@ -416,263 +384,120 @@ const calculateOddsForBet = (clientType, clientSelection) => {
  */
 const getTotalBetsForPeriod = async (gameType, duration, periodId, timeline = 'default') => {
     try {
-        const durationKey = duration === 30 ? '30s' : 
-            duration === 60 ? '1m' : 
-            duration === 180 ? '3m' : 
-            duration === 300 ? '5m' : '10m';
+        const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const betsData = await redisClient.hgetall(betHashKey);
         
-        const totalKey = `${gameType}:${durationKey}:${timeline}:${periodId}:total`;
-        return parseFloat(await redis.get(totalKey) || 0);
+        let totalAmount = 0;
+        let totalGross = 0;
+        let totalFees = 0;
+        let betCount = 0;
+        const userBets = new Map();
+        
+        for (const [betId, betJson] of Object.entries(betsData)) {
+            const bet = JSON.parse(betJson);
+            totalAmount += parseFloat(bet.netBetAmount || 0);
+            totalGross += parseFloat(bet.grossBetAmount || bet.netBetAmount || 0);
+            totalFees += parseFloat(bet.platformFee || 0);
+            betCount++;
+            
+            // Track unique users
+            if (!userBets.has(bet.userId)) {
+                userBets.set(bet.userId, 0);
+            }
+            userBets.set(bet.userId, userBets.get(bet.userId) + 1);
+        }
+        
+        return {
+            totalAmount: totalAmount.toFixed(2),
+            totalGross: totalGross.toFixed(2),
+            totalFees: totalFees.toFixed(2),
+            betCount,
+            uniqueUsers: userBets.size,
+            timeline
+        };
     } catch (error) {
-        console.error('Error getting total bets for period:', error);
-        return 0;
+        console.error('Error getting total bets:', error);
+        return { 
+            totalAmount: '0', 
+            totalGross: '0',
+            totalFees: '0',
+            betCount: 0, 
+            uniqueUsers: 0,
+            timeline 
+        };
     }
 };
 
 /**
  * NEW: Validate bet timing and balance
  */
-const validateBetPlacement = async (socket, betData) => {
+const validateBetPlacement = async (userId, gameType, duration, periodId, betAmount, timeline = 'default') => {
     try {
-        console.log(`🔍 [BET_VALIDATION] Raw bet data received:`, JSON.stringify(betData, null, 2));
+        // Check if user exists
+        const models = await ensureModelsInitialized();
+        const user = await models.User.findByPk(userId);
         
-        const { gameType, duration, periodId, timeline = 'default' } = betData;
-        const userId = socket.user.userId || socket.user.id;
+        if (!user) {
+            return { valid: false, error: 'User not found' };
+        }
+
+        // Check wallet balance
+        const walletBalance = parseFloat(user.wallet_balance);
+        const betAmountFloat = parseFloat(betAmount);
         
-        // Extract and validate bet amount early
-        let betAmount = betData.betAmount;
-        console.log(`🔍 [BET_VALIDATION] Original betAmount:`, {
-            value: betAmount,
-            type: typeof betAmount,
-            isNaN: isNaN(betAmount),
-            isUndefined: betAmount === undefined,
-            isNull: betAmount === null
-        });
+        if (walletBalance < betAmountFloat) {
+            return { valid: false, error: 'Insufficient balance' };
+        }
+
+        // Check minimum and maximum bet amounts
+        const minBet = getMinBetAmount(gameType);
+        const maxBet = getMaxBetAmount(gameType);
         
-        // Handle different possible betAmount field names
-        if (betAmount === undefined || betAmount === null || isNaN(betAmount)) {
-            // Try alternative field names
-            betAmount = betData.amount || betData.bet_amount || betData.betAmount;
-            console.log(`🔍 [BET_VALIDATION] Trying alternative fields:`, {
-                amount: betData.amount,
-                bet_amount: betData.bet_amount,
-                betAmount: betData.betAmount,
-                finalValue: betAmount
-            });
+        if (betAmountFloat < minBet) {
+            return { valid: false, error: `Minimum bet amount is ${minBet}` };
         }
         
-        console.log(`🔍 [BET_VALIDATION] Validating bet for user ${userId}:`, {
-            gameType, duration, periodId, betAmount, timeline, 
-            betAmountType: typeof betAmount
-        });
-
-        // 1. Check if user is in the correct room
-        const expectedRoomId = `${gameType}_${duration}`;
-        if (!socket.currentGame || socket.currentGame.roomId !== expectedRoomId) {
-            return {
-                valid: false,
-                message: `You must join ${gameType} ${duration}s room first`,
-                code: 'NOT_IN_ROOM'
-            };
+        if (betAmountFloat > maxBet) {
+            return { valid: false, error: `Maximum bet amount is ${maxBet}` };
         }
 
-        // 2. Get current period info from Redis
-        const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
-        if (!periodInfo) {
-            return {
-                valid: false,
-                message: 'No active period found',
-                code: 'NO_ACTIVE_PERIOD'
-            };
-        }
-
-        // 3. Validate period ID matches current period
-        if (periodInfo.periodId !== periodId) {
-            return {
-                valid: false,
-                message: `Period ${periodId} is not the current period. Current: ${periodInfo.periodId}`,
-                code: 'INVALID_PERIOD'
-            };
-        }
-
-        // 4. Calculate actual time remaining
-        let timeRemaining;
-        try {
-            const actualEndTime = calculatePeriodEndTime(periodId, duration);
-            timeRemaining = Math.max(0, Math.ceil((actualEndTime - new Date()) / 1000));
-        } catch (timeError) {
-            const redisEndTime = new Date(periodInfo.endTime);
-            timeRemaining = Math.max(0, Math.ceil((redisEndTime - new Date()) / 1000));
-        }
-
-        console.log(`🕐 [BET_VALIDATION] Time check for user ${userId}:`, {
-            periodId,
-            currentTime: new Date().toISOString(),
-            timeRemaining,
-            bettingOpen: timeRemaining > 5,
-            periodEndTime: periodInfo.endTime
-        });
-
-        // 5. CRITICAL: Check if betting window is closed (less than 5 seconds)
-        if (timeRemaining <= 5) {
-            return {
-                valid: false,
-                message: `Betting closed! Only ${timeRemaining} seconds remaining`,
-                code: 'BETTING_CLOSED',
-                timeRemaining,
-                currentPeriod: periodInfo.periodId
-            };
-        }
-
-        // 6. Validate bet amount with enhanced checking
-        console.log(`🔍 [BET_VALIDATION] Bet amount validation:`, {
-            original: betAmount,
-            type: typeof betAmount,
-            isNaN: isNaN(betAmount),
-            isUndefined: betAmount === undefined,
-            isNull: betAmount === null,
-            stringValue: String(betAmount),
-            stringLength: String(betAmount).length
-        });
+        // Check if user has already placed maximum bets using new hash structure
+        const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const allBets = await redisClient.hgetall(betHashKey);
         
-        // Try to parse bet amount
-        let betAmountFloat;
-        if (typeof betAmount === 'string') {
-            betAmountFloat = parseFloat(betAmount.trim());
-        } else if (typeof betAmount === 'number') {
-            betAmountFloat = betAmount;
-        } else {
-            return {
-                valid: false,
-                message: `Invalid bet amount type: ${typeof betAmount}. Expected number or string.`,
-                code: 'INVALID_AMOUNT_TYPE'
-            };
-        }
+        let userBetCount = 0;
+        let userTotalAmount = 0;
         
-        console.log(`🔍 [BET_VALIDATION] After parsing:`, {
-            parsed: betAmountFloat,
-            isNaN: isNaN(betAmountFloat),
-            isFinite: isFinite(betAmountFloat)
-        });
-        
-        if (isNaN(betAmountFloat) || !isFinite(betAmountFloat) || betAmountFloat <= 0) {
-            return {
-                valid: false,
-                message: `Invalid bet amount: received "${betAmount}" (type: ${typeof betAmount}), parsed as ${betAmountFloat}`,
-                code: 'INVALID_AMOUNT',
-                debug: {
-                    originalValue: betAmount,
-                    originalType: typeof betAmount,
-                    parsedValue: betAmountFloat,
-                    allBetData: betData
-                }
-            };
-        }
-
-        if (betAmountFloat < 1) {
-            return {
-                valid: false,
-                message: 'Minimum bet amount is ₹1',
-                code: 'MINIMUM_BET'
-            };
-        }
-
-        if (betAmountFloat > 100000) {
-            return {
-                valid: false,
-                message: 'Maximum bet amount is ₹1,00,000',
-                code: 'MAXIMUM_BET'
-            };
-        }
-
-        // 7. CRITICAL: Check user balance
-        const balanceResult = await getUserGameBalance(userId);
-        if (!balanceResult.success) {
-            return {
-                valid: false,
-                message: 'Unable to verify balance',
-                code: 'BALANCE_CHECK_FAILED'
-            };
-        }
-
-        const userBalance = balanceResult.data.totalAvailable;
-        if (userBalance < betAmountFloat) {
-            return {
-                valid: false,
-                message: `Insufficient balance. Your balance: ₹${userBalance.toFixed(2)}, Required: ₹${betAmountFloat.toFixed(2)}`,
-                code: 'INSUFFICIENT_BALANCE',
-                currentBalance: userBalance,
-                requiredAmount: betAmountFloat
-            };
-        }
-
-        // 8. Use existing game logic validation with corrected betAmount
-        const correctedBetData = {
-            ...betData,
-            betAmount: betAmountFloat, // Use the validated number
-            userId
-        };
-        
-        console.log(`🔍 [BET_VALIDATION] Calling validateBetWithTimeline with:`, JSON.stringify(correctedBetData, null, 2));
-        
-        // TEMPORARY: Try to bypass game logic validation to isolate the issue
-        let gameLogicValidation;
-        try {
-            gameLogicValidation = await validateBetWithTimeline(correctedBetData);
-        } catch (gameLogicError) {
-            console.error(`❌ [BET_VALIDATION] Error in validateBetWithTimeline:`, gameLogicError);
-            return {
-                valid: false,
-                message: 'Game logic validation error: ' + gameLogicError.message,
-                code: 'GAME_LOGIC_ERROR'
-            };
-        }
-        
-        console.log(`🔍 [BET_VALIDATION] validateBetWithTimeline result:`, {
-            valid: gameLogicValidation.valid,
-            message: gameLogicValidation.message,
-            code: gameLogicValidation.code
-        });
-
-        if (!gameLogicValidation.valid) {
-            console.log(`❌ [BET_VALIDATION] Game logic validation failed:`, gameLogicValidation);
-            
-            // TEMPORARY DEBUG: If it's a timing issue, let's see if we can bypass it
-            if (gameLogicValidation.code === 'BETTING_CLOSED' || 
-                gameLogicValidation.message?.includes('ended') || 
-                gameLogicValidation.message?.includes('closed')) {
-                
-                console.log(`🚧 [BET_VALIDATION] DEBUGGING: Game logic says period ended, but WebSocket validation passed with ${timeRemaining}s remaining`);
-                
-                // For debugging, let's bypass this for now and log the discrepancy
-                console.log(`🚧 [BET_VALIDATION] BYPASSING game logic timing validation for debugging purposes`);
-                
-                // Continue with WebSocket validation result
-                console.log(`✅ [BET_VALIDATION] Using WebSocket timing validation instead`);
-            } else {
-                // For non-timing related errors, still fail
-                return gameLogicValidation;
+        for (const [betId, betJson] of Object.entries(allBets)) {
+            const bet = JSON.parse(betJson);
+            if (bet.userId === userId) {
+                userBetCount++;
+                userTotalAmount += parseFloat(bet.grossBetAmount || bet.netBetAmount);
             }
         }
+        
+        const maxBetsPerUser = getMaxBetsPerUser(gameType);
+        if (userBetCount >= maxBetsPerUser) {
+            return {
+                valid: false,
+                error: `Maximum ${maxBetsPerUser} bets allowed per period`
+            };
+        }
 
-        console.log(`✅ [BET_VALIDATION] All validations passed for user ${userId}`);
+        // Check maximum total bet amount per user per period
+        const maxTotalPerPeriod = getMaxTotalBetPerPeriod(gameType);
+        if (userTotalAmount + betAmountFloat > maxTotalPerPeriod) {
+            return {
+                valid: false,
+                error: `Maximum total bet amount per period is ${maxTotalPerPeriod}`
+            };
+        }
 
-        return {
-            valid: true,
-            message: 'Bet validation successful',
-            timeRemaining,
-            currentBalance: userBalance,
-            correctedBetAmount: betAmountFloat
-        };
-
+        return { valid: true };
+        
     } catch (error) {
-        console.error('❌ [BET_VALIDATION] Error validating bet placement:', error);
-        return {
-            valid: false,
-            message: 'Validation error occurred',
-            code: 'VALIDATION_ERROR',
-            error: error.message
-        };
+        console.error('Error validating bet placement:', error);
+        return { valid: false, error: 'Validation error' };
     }
 };
 
@@ -701,6 +526,10 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
         // Ensure game logic models are initialized
         await ensureModelsInitialized();
         console.log('✅ Game logic models initialized');
+        
+        // Initialize WebSocket models
+        models = await initializeWebSocketModels();
+        console.log('✅ WebSocket models initialized');
         
         io = new Server(server, {
             cors: {
@@ -775,12 +604,12 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
 
                     // Record game move in transaction
                     try {
-                        const user = await User.findByPk(socket.user.userId);
+                        const user = await models.User.findByPk(socket.user.userId);
                         if (user) {
-                            await Transaction.create({
+                            await models.Transaction.create({
                                 user_id: socket.user.userId,
-                                order_no: `GAME-${Date.now()}`,
-                                type: 'game_move_in',
+                                reference_id: `GAME_MOVE_IN_${Date.now()}_${socket.user.userId}`,
+                                type: 'transfer_in',
                                 amount: 0,
                                 status: 'completed',
                                 description: `User entered ${gameType} ${duration}s room`,
@@ -825,12 +654,12 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                     
                     // Record game move out transaction
                     try {
-                        const user = await User.findByPk(socket.user.userId);
+                        const user = await models.User.findByPk(socket.user.userId);
                         if (user) {
-                            await Transaction.create({
+                            await models.Transaction.create({
                                 user_id: socket.user.userId,
-                                order_no: `GAME-${Date.now()}`,
-                                type: 'game_move_out',
+                                reference_id: `GAME_MOVE_OUT_${Date.now()}_${socket.user.userId}`,
+                                type: 'transfer_out',
                                 amount: 0,
                                 status: 'completed',
                                 description: `User left ${gameType} ${duration}s room`,
@@ -884,7 +713,7 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                     console.log(`🔄 [WEBSOCKET_BET] Transformed bet data:`, JSON.stringify(transformedBetData, null, 2));
                     
                     // CRITICAL: Validate bet placement first
-                    const validation = await validateBetPlacement(socket, transformedBetData);
+                    const validation = await validateBetPlacement(userId, transformedBetData.gameType, transformedBetData.duration, transformedBetData.periodId, transformedBetData.betAmount, transformedBetData.timeline);
                     if (!validation.valid) {
                         console.log(`❌ [WEBSOCKET_BET] Validation failed for user ${userId}:`, validation.message);
                         socket.emit('betError', { 
@@ -908,7 +737,7 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                     console.log(`✅ [WEBSOCKET_BET] Validation passed for user ${userId}, processing bet...`);
                     
                     // Process bet using WebSocket-specific processing (bypasses timing validation)
-                    const result = await processWebSocketBet(finalBetData);
+                    const result = await processWebSocketBet(socket, finalBetData);
                     
                     if (result.success) {
                         // Success response to the betting user only
@@ -1232,6 +1061,106 @@ const startBroadcastTicksForGame = (gameType, duration) => {
     console.log(`⏰ Started broadcast ticks for ${gameType} ${duration}s`);
 };
 
+
+const updateLiveExposure = async (gameType, duration, periodId, betData) => {
+    // Placeholder for future real-time exposure monitoring
+    // This will be implemented when you add admin monitoring features
+    try {
+        // Future implementation will broadcast exposure updates to admin users
+        // For now, exposure is handled in gameLogicService
+        return;
+    } catch (error) {
+        console.error('Error updating live exposure:', error);
+    }
+};
+
+
+const broadcastExposureUpdate = async (io, gameType, duration, periodId) => {
+    // Placeholder for future admin monitoring
+    try {
+        // Future implementation:
+        // 1. Get current exposure data from Redis
+        // 2. Calculate optimal result
+        // 3. Broadcast to admin room
+        
+        // const adminRoomId = `admin_${gameType}_${duration}`;
+        // const exposureData = await gameLogicService.getExposureSnapshot(gameType, duration, periodId);
+        // io.to(adminRoomId).emit('exposureUpdate', exposureData);
+        
+        return;
+    } catch (error) {
+        console.error('Error broadcasting exposure update:', error);
+    }
+};
+
+const getExposureSnapshot = async (gameType, duration, periodId) => {
+    // Placeholder for future admin monitoring
+    try {
+        // Future implementation will return:
+        // - Current exposure by outcome
+        // - Optimal result based on exposure
+        // - Potential payout amounts
+        // - Risk analysis
+        
+        return {
+            exposures: {},
+            totalExposure: 0,
+            optimalResult: null,
+            timestamp: new Date().toISOString()
+        };
+    } catch (error) {
+        console.error('Error getting exposure snapshot:', error);
+        return null;
+    }
+};
+
+const handleAdminConnection = async (socket) => {
+    // Placeholder for future admin monitoring
+    socket.on('subscribeToExposure', async (data) => {
+        const { gameType, duration } = data;
+        const adminRoomId = `admin_${gameType}_${duration}`;
+        
+        socket.join(adminRoomId);
+        console.log(`Admin ${socket.userId} subscribed to exposure updates for ${gameType} ${duration}s`);
+        
+        // Send initial exposure data
+        // const exposureData = await getExposureSnapshot(gameType, duration, currentPeriodId);
+        // socket.emit('exposureSnapshot', exposureData);
+    });
+    
+    socket.on('unsubscribeFromExposure', (data) => {
+        const { gameType, duration } = data;
+        const adminRoomId = `admin_${gameType}_${duration}`;
+        
+        socket.leave(adminRoomId);
+        console.log(`Admin ${socket.userId} unsubscribed from exposure updates`);
+    });
+};
+
+const getUserBetsForPeriod = async (userId, gameType, duration, periodId, timeline = 'default') => {
+    try {
+        const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const allBets = await redisClient.hgetall(betHashKey);
+        
+        const userBets = [];
+        for (const [betId, betJson] of Object.entries(allBets)) {
+            const bet = JSON.parse(betJson);
+            if (bet.userId === userId) {
+                userBets.push({
+                    betId,
+                    ...bet
+                });
+            }
+        }
+        
+        return userBets;
+    } catch (error) {
+        console.error('Error getting user bets:', error);
+        return [];
+    }
+};
+
+
 /**
  * EXISTING: Broadcast tick - Enhanced time validation to prevent race conditions
  */
@@ -1246,7 +1175,7 @@ const broadcastTick = async (gameType, duration) => {
         
         if (!periodInfo) {
             // No period info available - request new period from scheduler
-            await redis.publish('game_scheduler:period_request', JSON.stringify({
+            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
                 gameType,
                 duration,
                 roomId,
@@ -1271,7 +1200,7 @@ const broadcastTick = async (gameType, duration) => {
         // Validate time remaining is within reasonable bounds
         if (actualTimeRemaining < 0 || actualTimeRemaining > duration + 5) {
             // Period has ended or is invalid, request new period from scheduler
-            await redis.publish('game_scheduler:period_request', JSON.stringify({
+            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
                 gameType,
                 duration,
                 roomId,
@@ -1314,7 +1243,7 @@ const broadcastTick = async (gameType, duration) => {
 
         // If period is about to end (less than 1 second remaining), request next period
         if (actualTimeRemaining <= 1) {
-            await redis.publish('game_scheduler:period_request', JSON.stringify({
+            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
                 gameType,
                 duration,
                 roomId,
@@ -1335,93 +1264,60 @@ const broadcastTick = async (gameType, duration) => {
 };
 
 /**
- * EXISTING: Get period info from Redis (populated by game scheduler)
+ * FIXED: Get period info from Redis (populated by game scheduler)
  */
-const getPeriodInfoFromRedis = async (gameType, duration) => {
+const getPeriodInfoFromRedis = async (gameType, duration, timeline = 'default') => {
     try {
-        // FIXED: Simple Redis key without timeline complexity
-        const currentPeriodKey = `game_scheduler:${gameType}:${duration}:current`;
-        const periodData = await redis.get(currentPeriodKey);
+        // FIXED: Use the correct Redis key format that matches game scheduler
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        const periodData = await pubsubRedis.get(periodKey);
         
         if (!periodData) {
             return null;
         }
         
-        const parsed = JSON.parse(periodData);
-        
-        // FIXED: Additional validation to ensure data integrity
-        if (!parsed.periodId || !parsed.endTime) {
-            console.warn(`⚠️ WebSocket: Invalid period data structure for ${gameType}_${duration}`);
-            return null;
-        }
-        
-        return parsed;
+        return JSON.parse(periodData);
     } catch (error) {
-        console.error('❌ WebSocket: Error getting period info from Redis:', error);
+        console.error('Error getting period info from Redis:', error);
         return null;
     }
 };
 
 /**
- * EXISTING: Send current period info from Redis with enhanced validation
+ * FIXED: Send current period info from Redis with enhanced validation
  */
-const sendCurrentPeriodFromRedis = async (socket, gameType, duration) => {
+const sendCurrentPeriodFromRedis = async (socket, gameType, duration, timeline = 'default') => {
     try {
-        const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
+        // FIXED: Use the correct Redis key format that matches game scheduler
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        const periodData = await pubsubRedis.get(periodKey);
         
-        if (!periodInfo) {
-            socket.emit('error', { 
-                message: 'No active period found - game scheduler may not be running',
-                gameType, 
-                duration,
-                code: 'NO_ACTIVE_PERIOD'
-            });
+        if (!periodData) {
+            console.log(`No period data in Redis for ${gameType} ${duration}s ${timeline}`);
             return;
         }
-
-        const now = new Date();
         
-        // FIXED: Use actual time calculation for accuracy
-        let timeRemaining;
-        try {
-            const actualEndTime = calculatePeriodEndTime(periodInfo.periodId, duration);
-            timeRemaining = Math.max(0, Math.ceil((actualEndTime - now) / 1000));
-        } catch (timeError) {
-            // Fallback to Redis time
-            const redisEndTime = new Date(periodInfo.endTime);
-            timeRemaining = Math.max(0, Math.ceil((redisEndTime - now) / 1000));
-        }
+        const period = JSON.parse(periodData);
+        const now = Date.now();
+        const timeRemaining = Math.max(0, period.endTime - now);
         
-        const bettingOpen = timeRemaining > 5;
-
-        // FIXED: Validate that time remaining is realistic before sending
-        if (timeRemaining > duration + 5) {
-            console.warn(`⚠️ WebSocket: Unrealistic time remaining ${timeRemaining}s for period ${periodInfo.periodId}, using fallback`);
-            timeRemaining = duration; // Fallback to full duration
-        }
-
-        socket.emit('periodInfo', {
-            gameType, 
+        // Get total bets using new structure
+        const totalBets = await getTotalBetsForPeriod(gameType, duration, period.periodId, timeline);
+        
+        socket.emit('currentPeriod', {
+            gameType,
             duration,
-            periodId: periodInfo.periodId,
-            timeRemaining,
-            endTime: periodInfo.endTime,
-            bettingOpen,
-            bettingCloseTime: timeRemaining <= 5,
-            timestamp: now.toISOString(),
-            source: 'websocket_validated'
+            periodId: period.periodId,
+            timeRemaining: Math.floor(timeRemaining / 1000),
+            totalBets: totalBets.totalAmount,
+            betCount: totalBets.betCount,
+            uniqueUsers: totalBets.uniqueUsers,
+            timeline,
+            status: timeRemaining > 5000 ? 'betting' : 'closed'
         });
-
-        console.log(`📤 WebSocket: Sent validated period info [${gameType}|${duration}s]: ${periodInfo.periodId} (${timeRemaining}s, betting: ${bettingOpen})`);
-
+        
     } catch (error) {
-        console.error('❌ WebSocket: Error sending period info:', error);
-        socket.emit('error', { 
-            message: 'Failed to get current period info',
-            gameType, 
-            duration,
-            code: 'PERIOD_INFO_ERROR'
-        });
+        console.error('Error sending current period from Redis:', error);
     }
 };
 
@@ -1683,18 +1579,27 @@ module.exports = {
     },
     
     // NEW: Broadcast general period result to all users in room (non-betting users get this)
-    broadcastPeriodResult: (gameType, duration, periodId, periodResult) => {
+    broadcastPeriodResult: async (io, gameType, duration, periodId, result, timeline = 'default') => {
         try {
-            if (!io) return;
+            const roomId = getRoomId(gameType, duration, timeline);
             
-            const roomId = `${gameType}_${duration}`;
+            // Get total statistics using new hash structure
+            const stats = await getTotalBetsForPeriod(gameType, duration, periodId, timeline);
             
             // Broadcast general period result to entire room
             io.to(roomId).emit('periodResult', {
                 gameType,
                 duration,
                 periodId,
-                result: periodResult,
+                result: result,
+                timeline,
+                statistics: {
+                    totalBets: stats.totalAmount,
+                    totalGross: stats.totalGross,
+                    platformFees: stats.totalFees,
+                    betCount: stats.betCount,
+                    uniqueUsers: stats.uniqueUsers
+                },
                 timestamp: new Date().toISOString(),
                 source: 'period_result_general'
             });
@@ -1868,7 +1773,7 @@ module.exports = {
             
             // Test Redis connectivity
             try {
-                await redis.ping();
+                await pubsubRedis.ping();
                 health.redis.latency = 'low';
             } catch (redisError) {
                 health.redis.status = 'error';
@@ -1888,5 +1793,28 @@ module.exports = {
     
     // NEW: Utility functions
     validateBetPlacement,
-    getTotalBetsForPeriod
+    getTotalBetsForPeriod,
+    
+    // Additional utility functions
+    getRoomId,
+    isConnected,
+    calculatePeriodStartTime,
+    calculatePeriodEndTime,
+    initializeWebSocketModels,
+    processWebSocketBet,
+    mapClientBetType,
+    mapClientBetValue,
+    calculateOddsForBet,
+    startBroadcastTicks,
+    startBroadcastTicksForGame,
+    updateLiveExposure,
+    broadcastExposureUpdate,
+    getExposureSnapshot,
+    handleAdminConnection,
+    getUserBetsForPeriod,
+    broadcastTick,
+    getPeriodInfoFromRedis,
+    sendCurrentPeriodFromRedis,
+    setupRedisSubscriptions,
+    handleGameSchedulerEvent
 };

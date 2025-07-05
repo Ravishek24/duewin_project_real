@@ -209,7 +209,6 @@ const processAttendanceBonuses = async () => {
         
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
-        const { updateWalletBalance } = getServices();
         
         const redis = require('../config/redis');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
@@ -246,18 +245,32 @@ const processAttendanceBonuses = async () => {
         let totalBonusAmount = 0;
 
         for (const record of eligibleRecords) {
+            const userId = record.user_id;
+            const bonusAmount = parseFloat(record.bonus_amount);
+            
+            // Add deduplication key to prevent conflicts with BullMQ workers
+            const deduplicationKey = `attendance_bonus:${userId}:${today}`;
+            const isAlreadyProcessed = await redis.get(deduplicationKey);
+            
+            if (isAlreadyProcessed) {
+                console.log(`⏭️ Attendance bonus already processed for user ${userId} on ${today}`);
+                continue;
+            }
+            
             const t = await db.transaction();
             
             try {
-                const bonusAmount = parseFloat(record.bonus_amount);
-                const userId = record.user_id;
-
-                // Credit bonus to wallet
-                await updateWalletBalance(userId, bonusAmount, 'add', t);
+                // Use atomic operation to prevent deadlocks
+                await dbModels.User.increment('wallet_balance', {
+                    by: bonusAmount,
+                    where: { user_id: userId },
+                    transaction: t
+                });
 
                 // Mark bonus as claimed
                 await record.update({
-                    bonus_claimed: true
+                    bonus_claimed: true,
+                    claimed_at: new Date()
                 }, { transaction: t });
 
                 // Create transaction record
@@ -276,26 +289,33 @@ const processAttendanceBonuses = async () => {
                 }, { transaction: t });
 
                 await t.commit();
-
+                
+                // Set deduplication flag (expires in 24 hours)
+                await redis.setex(deduplicationKey, 86400, '1');
+                
                 successCount++;
                 totalBonusAmount += bonusAmount;
-
-                console.log(`✅ Credited ${bonusAmount} attendance bonus to user ${userId} (Streak: ${record.streak_count})`);
-
-            } catch (bonusError) {
+                
+                console.log(`✅ Attendance bonus processed for user ${userId}: ${bonusAmount}`);
+                
+            } catch (error) {
                 await t.rollback();
-                console.error(`❌ Error processing bonus for user ${record.user_id}:`, bonusError.message);
+                console.error(`❌ Failed to process attendance bonus for user ${userId}:`, error.message);
                 errorCount++;
+                
+                // Don't throw error to continue processing other users
+                continue;
             }
         }
 
-        console.log(`💎 Attendance bonus processing completed: ${successCount} bonuses credited, ${errorCount} errors, Total amount: ${totalBonusAmount}`);
+        console.log(`✅ Attendance bonus processing completed: ${successCount} success, ${errorCount} errors, total: ${totalBonusAmount}`);
         
         logger.info('Attendance bonus processing completed', {
             date: today,
-            processedBonuses: successCount,
+            totalRecords: eligibleRecords.length,
+            successful: successCount,
             errors: errorCount,
-            totalAmount: totalBonusAmount,
+            totalBonusAmount: totalBonusAmount,
             timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
 
@@ -303,7 +323,8 @@ const processAttendanceBonuses = async () => {
         console.error('❌ Error in attendance bonus cron:', error);
         logger.error('Error in attendance bonus cron:', {
             error: error.message,
-            stack: error.stack
+            stack: error.stack,
+            timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
     } finally {
         // Release lock
@@ -375,7 +396,6 @@ const processDailyRebates = async () => {
  */
 const processRebateCommissionType = async (gameType) => {
     const { sequelize: db, models: dbModels } = await getDatabaseInstances();
-    const { updateWalletBalance } = getServices();
     const t = await db.transaction();
 
     try {
@@ -388,7 +408,6 @@ const processRebateCommissionType = async (gameType) => {
         let betRecords;
 
         if (gameType === 'lottery') {
-            // Internal games (Wingo, 5D, K3, TRX_WIX)
             betRecords = await db.query(`
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
@@ -412,7 +431,6 @@ const processRebateCommissionType = async (gameType) => {
                 transaction: t
             });
         } else if (gameType === 'casino') {
-            // External/third-party games
             betRecords = await db.query(`
                 SELECT user_id, SUM(amount) as total_bet_amount
                 FROM seamless_transactions
@@ -428,81 +446,120 @@ const processRebateCommissionType = async (gameType) => {
 
         console.log(`📊 Found ${betRecords.length} users with ${gameType} bets yesterday`);
 
+        // OPTIMIZATION: Batch load all users and referrers
+        const userIds = betRecords.map(record => record.user_id);
+        const users = await dbModels.User.findAll({
+            where: { user_id: { [Op.in]: userIds } },
+            attributes: ['user_id', 'user_name', 'referral_code'],
+            transaction: t
+        });
+
+        const userMap = new Map(users.map(user => [user.user_id, user]));
+        const referralCodes = [...new Set(users.map(user => user.referral_code).filter(Boolean))];
+        
+        const referrers = await dbModels.User.findAll({
+            where: { referring_code: { [Op.in]: referralCodes } },
+            attributes: ['user_id', 'user_name', 'referring_code'],
+            include: [{
+                model: dbModels.UserRebateLevel,
+                required: false,
+                as: 'userrebateleveluser',
+                attributes: ['rebate_level']
+            }],
+            transaction: t
+        });
+
+        const referrerMap = new Map(referrers.map(ref => [ref.referring_code, ref]));
+        
+        const rebateLevels = await dbModels.RebateLevel.findAll({
+            attributes: ['level', 'lottery_l1_rebate', 'casino_l1_rebate'],
+            transaction: t
+        });
+
+        const rebateLevelMap = new Map(rebateLevels.map(level => [level.level, level]));
+
         let processedCommissions = 0;
         let totalCommissionAmount = 0;
 
-        // Process each user's bets and distribute commission to referrers
-        for (const record of betRecords) {
-            const userId = record.user_id;
-            const betAmount = parseFloat(record.total_bet_amount);
+        // Process in batches to avoid long transactions
+        const BATCH_SIZE = 50;
+        for (let i = 0; i < betRecords.length; i += BATCH_SIZE) {
+            const batch = betRecords.slice(i, i + BATCH_SIZE);
+            
+            for (const record of batch) {
+                const userId = record.user_id;
+                const betAmount = parseFloat(record.total_bet_amount);
 
-            // Find the user and their referrer
-            const user = await dbModels.User.findByPk(userId, { transaction: t });
-            if (!user || !user.referral_code) continue;
+                const user = userMap.get(userId);
+                if (!user || !user.referral_code) continue;
 
-            const referrer = await dbModels.User.findOne({
-                where: { referring_code: user.referral_code },
-                include: [{
-                    model: dbModels.UserRebateLevel,
-                    required: false,
-                    as: 'userrebateleveluser'
-                }],
-                transaction: t
-            });
+                const referrer = referrerMap.get(user.referral_code);
+                if (!referrer) continue;
 
-            if (!referrer) continue;
+                const rebateLevel = referrer.userrebateleveluser?.rebate_level || 'L0';
+                const rebateLevelDetails = rebateLevelMap.get(rebateLevel);
 
-            // Get rebate level details
-            const rebateLevel = referrer.userrebateleveluser?.rebate_level || 'L0';
-            const rebateLevelDetails = await dbModels.RebateLevel.findOne({
-                where: { level: rebateLevel },
-                transaction: t
-            });
+                if (!rebateLevelDetails) continue;
 
-            if (!rebateLevelDetails) continue;
+                const level1Rate = gameType === 'lottery' ? 
+                    parseFloat(rebateLevelDetails.lottery_l1_rebate) / 100 : 
+                    parseFloat(rebateLevelDetails.casino_l1_rebate) / 100;
 
-            // Calculate commission rates for different levels
-            const level1Rate = gameType === 'lottery' ? 
-                parseFloat(rebateLevelDetails.lottery_l1_rebate) / 100 : 
-                parseFloat(rebateLevelDetails.casino_l1_rebate) / 100;
+                const level1Commission = betAmount * level1Rate;
 
-            const level1Commission = betAmount * level1Rate;
-
-            if (level1Commission > 0) {
-                // Create commission record
-                await dbModels.ReferralCommission.create({
-                    user_id: referrer.user_id,
-                    referred_user_id: userId,
-                    level: 1,
-                    amount: level1Commission,
-                    type: 'rebate',
-                    rebate_type: gameType,
-                    distribution_batch_id: batchId,
-                    status: 'paid',
-                    created_at: new Date()
-                }, { transaction: t });
-
-                // Credit to referrer's wallet
-                await updateWalletBalance(referrer.user_id, level1Commission, 'add', t);
-
-                // Create transaction record
-                await dbModels.Transaction.create({
-                    user_id: referrer.user_id,
-                    type: 'referral_commission',
-                    amount: level1Commission,
-                    status: 'completed',
-                    description: `${gameType} rebate commission from ${user.user_name || userId}`,
-                    reference_id: `rebate_${batchId}_${userId}`,
-                    metadata: {
-                        rebate_type: gameType,
-                        referred_user_id: userId,
-                        bet_amount: betAmount,
-                        commission_rate: level1Rate
+                if (level1Commission > 0) {
+                    // Add deduplication key to prevent conflicts
+                    const redis = require('../config/redis');
+                    const deduplicationKey = `rebate_commission:${referrer.user_id}:${batchId}:${userId}`;
+                    const isAlreadyProcessed = await redis.get(deduplicationKey);
+                    
+                    if (isAlreadyProcessed) {
+                        console.log(`⏭️ Rebate commission already processed for referrer ${referrer.user_id} from user ${userId}`);
+                        continue;
                     }
-                }, { transaction: t });
 
-                processedCommissions++;
-                totalCommissionAmount += level1Commission;
+                    // Create commission record
+                    await dbModels.ReferralCommission.create({
+                        user_id: referrer.user_id,
+                        referred_user_id: userId,
+                        level: 1,
+                        amount: level1Commission,
+                        type: 'rebate',
+                        rebate_type: gameType,
+                        distribution_batch_id: batchId,
+                        status: 'paid',
+                        created_at: new Date()
+                    }, { transaction: t });
+
+                    // Use atomic operation to prevent deadlocks
+                    await dbModels.User.increment('wallet_balance', {
+                        by: level1Commission,
+                        where: { user_id: referrer.user_id },
+                        transaction: t
+                    });
+
+                    // Create transaction record
+                    await dbModels.Transaction.create({
+                        user_id: referrer.user_id,
+                        type: 'referral_commission',
+                        amount: level1Commission,
+                        status: 'completed',
+                        description: `${gameType} rebate commission from ${user.user_name || userId}`,
+                        reference_id: `rebate_${batchId}_${userId}`,
+                        metadata: {
+                            rebate_type: gameType,
+                            referred_user_id: userId,
+                            bet_amount: betAmount,
+                            commission_rate: level1Rate
+                        }
+                    }, { transaction: t });
+
+                    // Set deduplication flag (expires in 7 days)
+                    await redis.setex(deduplicationKey, 604800, '1');
+
+                    processedCommissions++;
+                    totalCommissionAmount += level1Commission;
+                }
             }
         }
 
@@ -536,7 +593,6 @@ const processVipLevelUpRewards = async () => {
         
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
-        const { updateWalletBalance } = getServices();
         
         const redis = require('../config/redis');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
@@ -568,18 +624,32 @@ const processVipLevelUpRewards = async () => {
         let totalRewardAmount = 0;
 
         for (const reward of pendingRewards) {
+            const userId = reward.user_id;
+            const rewardAmount = parseFloat(reward.reward_amount);
+            
+            // Add deduplication key to prevent conflicts
+            const deduplicationKey = `vip_levelup:${userId}:${reward.id}`;
+            const isAlreadyProcessed = await redis.get(deduplicationKey);
+            
+            if (isAlreadyProcessed) {
+                console.log(`⏭️ VIP level-up reward already processed for user ${userId}, reward ID: ${reward.id}`);
+                continue;
+            }
+            
             const t = await db.transaction();
             
             try {
-                const rewardAmount = parseFloat(reward.reward_amount);
-                const userId = reward.user_id;
-
-                // Credit reward to wallet
-                await updateWalletBalance(userId, rewardAmount, 'add', t);
+                // Use atomic operation to prevent deadlocks
+                await dbModels.User.increment('wallet_balance', {
+                    by: rewardAmount,
+                    where: { user_id: userId },
+                    transaction: t
+                });
 
                 // Mark reward as completed
                 await reward.update({
-                    status: 'completed'
+                    status: 'completed',
+                    processed_at: new Date()
                 }, { transaction: t });
 
                 // Create transaction record
@@ -597,20 +667,26 @@ const processVipLevelUpRewards = async () => {
                 }, { transaction: t });
 
                 await t.commit();
+                
+                // Set deduplication flag (expires in 30 days)
+                await redis.setex(deduplicationKey, 2592000, '1');
 
                 successCount++;
                 totalRewardAmount += rewardAmount;
 
-                console.log(`👑 Credited ${rewardAmount} VIP level-up bonus to user ${userId} (Level ${reward.level})`);
+                console.log(`✅ VIP level-up reward processed for user ${userId}: ${rewardAmount} (Level ${reward.level})`);
 
-            } catch (rewardError) {
+            } catch (error) {
                 await t.rollback();
-                console.error(`❌ Error processing VIP reward for user ${reward.user_id}:`, rewardError.message);
+                console.error(`❌ Failed to process VIP reward for user ${userId}:`, error.message);
                 errorCount++;
+                
+                // Don't throw error to continue processing other rewards
+                continue;
             }
         }
 
-        console.log(`💎 VIP level-up processing completed: ${successCount} rewards credited, ${errorCount} errors, Total: ${totalRewardAmount}`);
+        console.log(`✅ VIP level-up processing completed: ${successCount} success, ${errorCount} errors, total: ${totalRewardAmount}`);
         
         logger.info('VIP level-up processing completed', {
             processedRewards: successCount,
@@ -623,7 +699,8 @@ const processVipLevelUpRewards = async () => {
         console.error('❌ Error in VIP level-up cron:', error);
         logger.error('Error in VIP level-up cron:', {
             error: error.message,
-            stack: error.stack
+            stack: error.stack,
+            timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
     } finally {
         // Release lock
@@ -652,7 +729,6 @@ const processMonthlyVipRewards = async () => {
         
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
-        const { updateWalletBalance } = getServices();
         
         const redis = require('../config/redis');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
@@ -681,13 +757,24 @@ const processMonthlyVipRewards = async () => {
         let totalRewardAmount = 0;
 
         for (const user of vipUsers) {
+            const userId = user.user_id;
+            
+            // Add deduplication key to prevent conflicts
+            const deduplicationKey = `vip_monthly:${userId}:${currentMonth}`;
+            const isAlreadyProcessed = await redis.get(deduplicationKey);
+            
+            if (isAlreadyProcessed) {
+                console.log(`⏭️ Monthly VIP reward already processed for user ${userId} in ${currentMonth}`);
+                continue;
+            }
+            
             const t = await db.transaction();
             
             try {
                 // Check if monthly reward already claimed this month
                 const existingReward = await dbModels.VipReward.findOne({
                     where: {
-                        user_id: user.user_id,
+                        user_id: userId,
                         level: user.vip_level,
                         reward_type: 'monthly',
                         created_at: {
@@ -717,24 +804,28 @@ const processMonthlyVipRewards = async () => {
 
                 // Create VIP reward record
                 await dbModels.VipReward.create({
-                    user_id: user.user_id,
+                    user_id: userId,
                     level: user.vip_level,
                     reward_type: 'monthly',
                     reward_amount: monthlyReward,
                     status: 'completed'
                 }, { transaction: t });
 
-                // Credit to wallet
-                await updateWalletBalance(user.user_id, monthlyReward, 'add', t);
+                // Use atomic operation to prevent deadlocks
+                await dbModels.User.increment('wallet_balance', {
+                    by: monthlyReward,
+                    where: { user_id: userId },
+                    transaction: t
+                });
 
                 // Create transaction record
                 await dbModels.Transaction.create({
-                    user_id: user.user_id,
+                    user_id: userId,
                     type: 'vip_reward',
                     amount: monthlyReward,
                     status: 'completed',
                     description: `VIP Level ${user.vip_level} monthly reward - ${currentMonth}`,
-                    reference_id: `vip_monthly_${user.user_id}_${currentMonth}`,
+                    reference_id: `vip_monthly_${userId}_${currentMonth}`,
                     metadata: {
                         vip_level: user.vip_level,
                         reward_type: 'monthly',
@@ -743,26 +834,32 @@ const processMonthlyVipRewards = async () => {
                 }, { transaction: t });
 
                 await t.commit();
+                
+                // Set deduplication flag (expires in 60 days)
+                await redis.setex(deduplicationKey, 5184000, '1');
 
                 successCount++;
                 totalRewardAmount += monthlyReward;
 
-                console.log(`🎁 Credited ${monthlyReward} monthly VIP reward to user ${user.user_id} (Level ${user.vip_level})`);
+                console.log(`✅ Monthly VIP reward processed for user ${userId}: ${monthlyReward} (Level ${user.vip_level})`);
 
-            } catch (rewardError) {
+            } catch (error) {
                 await t.rollback();
-                console.error(`❌ Error processing monthly VIP reward for user ${user.user_id}:`, rewardError.message);
+                console.error(`❌ Failed to process monthly VIP reward for user ${userId}:`, error.message);
                 errorCount++;
+                
+                // Don't throw error to continue processing other users
+                continue;
             }
         }
 
-        console.log(`💎 Monthly VIP processing completed: ${successCount} rewards credited, ${errorCount} errors, Total: ${totalRewardAmount}`);
+        console.log(`✅ Monthly VIP processing completed: ${successCount} success, ${errorCount} errors, total: ${totalRewardAmount}`);
         
         logger.info('Monthly VIP processing completed', {
-            month: currentMonth,
-            processedRewards: successCount,
+            processedUsers: successCount,
             errors: errorCount,
             totalAmount: totalRewardAmount,
+            month: currentMonth,
             timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
 
@@ -770,7 +867,8 @@ const processMonthlyVipRewards = async () => {
         console.error('❌ Error in monthly VIP cron:', error);
         logger.error('Error in monthly VIP cron:', {
             error: error.message,
-            stack: error.stack
+            stack: error.stack,
+            timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
     } finally {
         // Release lock

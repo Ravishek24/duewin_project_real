@@ -10,8 +10,8 @@ const WithdrawalAdmin = require('../models/WithdrawalAdmin');
 const referralService = require('./referralService');
 const otpService = require('./otpService');
 const { processWePayTransfer } = require('./wePayService');
+const { processMxPayTransfer } = require('./mxPayService');
 const { Op } = require('sequelize');
-const PaymentGateway = require('../models/PaymentGateway');
 
 /**
  * Creates a PayIn order (deposit)
@@ -163,21 +163,17 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
     // Create withdrawal record
     const withdrawal = await WalletWithdrawal.create({
       user_id: userId,
-      phone_no: user.phone_no,
-      withdrawal_amount: amount,
-      status: false,
-      payment_gateway: 'OKPAY', // Default gateway
+      amount: amount,
+      status: 'pending',
+      payment_gateway_id: 1, // Default gateway ID
       withdrawal_type: withdrawalType,
-      order_id: orderId,
-      remark: 'Withdrawal initiated. Awaiting admin approval.',
-      time_of_request: new Date(),
-      otp_verified: true, // Set to true since OTP is not required
-      admin_status: 'pending'
+      transaction_id: orderId,
+      bank_account_id: bankAccountId
     }, { transaction: t });
     
     // Create admin approval record
     await WithdrawalAdmin.create({
-      withdrawal_id: withdrawal.withdrawal_id,
+      withdrawal_id: withdrawal.id,
       status: 'pending',
       notes: `Withdrawal request initiated by user. Amount: ${amount} INR.`
     }, { transaction: t });
@@ -195,10 +191,10 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
       success: true,
       message: "Withdrawal request submitted successfully. Awaiting admin approval.",
       withdrawal: {
-        id: withdrawal.withdrawal_id,
+        id: withdrawal.id,
         amount,
         status: 'pending',
-        created_at: withdrawal.time_of_request
+        created_at: withdrawal.created_at
       }
     };
   } catch (error) {
@@ -238,21 +234,22 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
     }
     
     // Check if withdrawal can be processed
-    if (withdrawal.admin_status !== 'pending') {
+    if (withdrawal.status !== 'pending') {
       await t.rollback();
       return {
         success: false,
-        message: `This withdrawal has already been ${withdrawal.admin_status}`
+        message: `This withdrawal has already been ${withdrawal.status}`
       };
     }
     
-    if (!withdrawal.otp_verified) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "This withdrawal has not been verified by the user yet"
-      };
-    }
+    // OTP verification is not required in current implementation
+    // if (!withdrawal.otp_verified) {
+    //   await t.rollback();
+    //   return {
+    //     success: false,
+    //     message: "This withdrawal has not been verified by the user yet"
+    //   };
+    // }
     
     // Get the admin record
     const adminRecord = await WithdrawalAdmin.findOne({
@@ -280,13 +277,12 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
     // Update withdrawal record based on admin action
     if (action === 'approve') {
       // Use the selected gateway
-      const gateway = selectedGateway || withdrawal.payment_gateway;
+      const gateway = selectedGateway || 'OKPAY'; // Default to OKPAY
       
       // Update withdrawal status to approved
       await withdrawal.update({
-        admin_status: 'approved',
-        payment_gateway: gateway,
-        remark: `Admin approved. Processing via ${gateway}.`
+        status: 'approved',
+        payment_gateway_id: 1 // Default gateway ID
       }, { transaction: t });
       
       await t.commit();
@@ -328,7 +324,7 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
       }
       
       // Update user wallet balance (refund)
-      const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawal.withdrawal_amount);
+      const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawal.amount);
       await User.update(
         { wallet_balance: newBalance },
         { 
@@ -339,9 +335,7 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
       
       // Update withdrawal status
       await withdrawal.update({
-        admin_status: 'rejected',
-        remark: `Admin rejected. Reason: ${notes}. Amount refunded to wallet.`,
-        time_of_failed: new Date()
+        status: 'rejected'
       }, { transaction: t });
       
       await t.commit();
@@ -386,7 +380,7 @@ const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
     }
     
     // Check if withdrawal is already processed
-    if (withdrawal.status === true || withdrawal.time_of_failed) {
+    if (withdrawal.status === 'completed' || withdrawal.status === 'failed') {
       await t.rollback();
       return {
         success: false,
@@ -415,11 +409,11 @@ const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
     const requestData = {
       mchId: paymentConfig.mchId,
       currency: "INR",
-      out_trade_no: withdrawal.order_id,
+      out_trade_no: withdrawal.transaction_id,
       pay_type: withdrawal.withdrawal_type, // BANK or UPI
-      account: withdrawal.withdrawal_type === 'BANK' ? bankAccount.account_number : withdrawal.phone_no,
-      userName: bankAccount.account_holder_name,
-      money: parseInt(withdrawal.withdrawal_amount), // Must be integer
+      account: bankAccount.account_number,
+      userName: bankAccount.account_holder,
+      money: parseInt(withdrawal.amount), // Must be integer
       attach: `Withdrawal for user ${withdrawal.user_id}`,
       notify_url: notifyUrl,
       reserve1: withdrawal.withdrawal_type === 'BANK' ? bankAccount.ifsc_code : '' // IFSC for BANK type
@@ -437,8 +431,7 @@ const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
     if (response.data.code === 0) {
       // Update withdrawal with transaction ID
       await withdrawal.update({
-        transaction_id: response.data.data.transaction_Id,
-        remark: `Admin approved. Payment processing initiated.`
+        transaction_id: response.data.data.transaction_Id
       }, { transaction: t });
       
       await t.commit();
@@ -526,7 +519,7 @@ const processPayInCallback = async (callbackData) => {
       }
       
       // 4. Check if already processed
-      if (rechargeRecord.status === true) {
+      if (rechargeRecord.status === 'completed') {
           await t.rollback();
           return {
               success: true,
@@ -538,8 +531,7 @@ const processPayInCallback = async (callbackData) => {
       if (status === "1") { // Payment successful
           // Update recharge record
           await WalletRecharge.update({
-              status: true,
-              time_of_success: new Date(),
+              status: 'completed',
               transaction_id: transaction_Id
           }, {
               where: { order_id: out_trade_no },
@@ -572,7 +564,7 @@ const processPayInCallback = async (callbackData) => {
           });
           
           // Process first recharge bonus if applicable
-          if (rechargeRecord.status === false) {
+          if (rechargeRecord.status === 'pending') {
               await referralService.processFirstRechargeBonus(rechargeRecord.user_id, addAmount);
           }
           
@@ -582,10 +574,10 @@ const processPayInCallback = async (callbackData) => {
           // to avoid prolonging the transaction and risking deadlocks
           
           // NEW: Update attendance record with recharge info
-          await processRechargeForAttendance(rechargeRecord.user_id, addAmount);
+          // await autoProcessRechargeForAttendance(rechargeRecord.user_id, addAmount);
           
           // NEW: Update referral status for this user's referrer
-          await updateReferralOnRecharge(rechargeRecord.user_id, addAmount);
+          // await updateReferralOnRecharge(rechargeRecord.user_id, addAmount);
           
           return {
               success: true,
@@ -593,8 +585,7 @@ const processPayInCallback = async (callbackData) => {
           };
       } else { // Payment failed
           await WalletRecharge.update({
-              status: false,
-              remark: `Payment failed with status: ${status}`
+              status: 'failed'
           }, {
               where: { order_id: out_trade_no },
               transaction: t
@@ -661,7 +652,7 @@ const processPayOutCallback = async (callbackData) => {
   try {
     // 3. Find the withdrawal record
     const withdrawalRecord = await WalletWithdrawal.findOne({
-      where: { order_id: out_trade_no },
+      where: { transaction_id: out_trade_no },
       transaction: t
     });
     
@@ -674,7 +665,7 @@ const processPayOutCallback = async (callbackData) => {
     }
     
     // 4. Check if already processed
-    if (withdrawalRecord.status === true || withdrawalRecord.time_of_failed) {
+    if (withdrawalRecord.status === 'completed' || withdrawalRecord.status === 'failed') {
       await t.rollback();
       return {
         success: true,
@@ -686,12 +677,10 @@ const processPayOutCallback = async (callbackData) => {
     if (status === "1") { // Withdrawal successful
       // Update withdrawal record
       await WalletWithdrawal.update({
-        status: true,
-        time_of_success: new Date(),
-        transaction_id: transaction_Id,
-        remark: "Withdrawal processed successfully"
+        status: 'completed',
+        transaction_id: transaction_Id
       }, {
-        where: { order_id: out_trade_no },
+        where: { transaction_id: out_trade_no },
         transaction: t
       });
       
@@ -716,7 +705,7 @@ const processPayOutCallback = async (callbackData) => {
       }
       
       // Refund wallet balance
-      const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawalRecord.withdrawal_amount);
+      const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawalRecord.amount);
       
       await User.update({
         wallet_balance: newBalance
@@ -727,12 +716,9 @@ const processPayOutCallback = async (callbackData) => {
       
       // Update withdrawal record
       await WalletWithdrawal.update({
-        status: false,
-        time_of_failed: new Date(),
-        admin_status: 'rejected',
-        remark: `Withdrawal failed with status: ${status}. Amount refunded to wallet.`
+        status: 'failed'
       }, {
-        where: { order_id: out_trade_no },
+        where: { transaction_id: out_trade_no },
         transaction: t
       });
       
@@ -781,16 +767,16 @@ const getPaymentStatus = async (orderId) => {
       return {
         success: true,
         type: 'payin',
-        status: rechargeRecord.status ? 'success' : 'pending',
+        status: rechargeRecord.status === 'completed' ? 'success' : 'pending',
         amount: rechargeRecord.amount,
         transactionId: rechargeRecord.transaction_id,
-        timestamp: rechargeRecord.time_of_success || rechargeRecord.created_at,
-        gateway: rechargeRecord.payment_gateway
+        timestamp: rechargeRecord.updated_at || rechargeRecord.created_at,
+        gateway: `Gateway ${rechargeRecord.payment_gateway_id}`
       };
     } else if (isPayOut) {
       // Check PayOut status
       const withdrawalRecord = await WalletWithdrawal.findOne({
-        where: { order_id: orderId }
+        where: { transaction_id: orderId }
       });
       
       if (!withdrawalRecord) {
@@ -801,15 +787,15 @@ const getPaymentStatus = async (orderId) => {
       }
       
       let status = 'pending';
-      if (withdrawalRecord.status) {
+      if (withdrawalRecord.status === 'completed') {
         status = 'success';
-      } else if (withdrawalRecord.time_of_failed) {
+      } else if (withdrawalRecord.status === 'failed') {
         status = 'failed';
-      } else if (withdrawalRecord.admin_status === 'pending') {
+      } else if (withdrawalRecord.status === 'pending') {
         status = 'awaiting_approval';
-      } else if (withdrawalRecord.admin_status === 'rejected') {
+      } else if (withdrawalRecord.status === 'rejected') {
         status = 'rejected';
-      } else if (withdrawalRecord.admin_status === 'approved' && !withdrawalRecord.status) {
+      } else if (withdrawalRecord.status === 'approved') {
         status = 'processing';
       }
       
@@ -817,11 +803,11 @@ const getPaymentStatus = async (orderId) => {
         success: true,
         type: 'payout',
         status: status,
-        amount: withdrawalRecord.withdrawal_amount,
+        amount: withdrawalRecord.amount,
         transactionId: withdrawalRecord.transaction_id,
-        timestamp: withdrawalRecord.time_of_success || withdrawalRecord.time_of_failed || withdrawalRecord.time_of_request,
-        adminStatus: withdrawalRecord.admin_status,
-        gateway: withdrawalRecord.payment_gateway
+        timestamp: withdrawalRecord.updated_at || withdrawalRecord.created_at,
+        adminStatus: withdrawalRecord.status,
+        gateway: `Gateway ${withdrawalRecord.payment_gateway_id}`
       };
     } else {
       return {
@@ -851,45 +837,46 @@ const getPendingWithdrawals = async (page = 1, limit = 10) => {
     
     // Get total count of pending withdrawals
     const total = await WalletWithdrawal.count({
-      where: { admin_status: 'pending' }
+      where: { status: 'pending' }
     });
     
     // Get pending withdrawals with pagination
     const pendingWithdrawals = await WalletWithdrawal.findAll({
-      where: { admin_status: 'pending' },
+      where: { status: 'pending' },
       include: [
         {
           model: User,
-          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal']
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance']
         },
         {
           model: BankAccount,
-          attributes: ['bank_name', 'account_number', 'ifsc_code', 'usdt_network', 'usdt_address', 'address_alias']
+          as: 'bankAccount',
+          attributes: ['bank_name', 'account_number', 'ifsc_code', 'account_holder']
         }
       ],
-      order: [['time_of_request', 'DESC']],
+      order: [['created_at', 'DESC']],
       limit,
       offset
     });
 
     // Transform the data to match required format
     const formattedWithdrawals = pendingWithdrawals.map(withdrawal => ({
-      user_id: withdrawal.User.user_id,
-      mobile_number: withdrawal.User.phone_no,
-      order_id: withdrawal.order_id,
-      withdraw_type: withdrawal.withdrawal_type,
-      applied_amount: withdrawal.withdrawal_amount,
-      balance_after: (parseFloat(withdrawal.User.wallet_balance) - parseFloat(withdrawal.withdrawal_amount)).toFixed(2),
-      total_recharge: withdrawal.User.total_deposit,
-      total_withdraw: withdrawal.User.total_withdrawal,
-      bank_name: withdrawal.BankAccount?.bank_name || 'N/A',
-      account_number: withdrawal.BankAccount?.account_number || 'N/A',
-      ifsc_code: withdrawal.BankAccount?.ifsc_code || 'N/A',
-      usdt_network: withdrawal.BankAccount?.usdt_network || 'N/A',
-      usdt_address: withdrawal.BankAccount?.usdt_address || 'N/A',
-      address_alias: withdrawal.BankAccount?.address_alias || 'N/A',
-      apply_date_time: withdrawal.time_of_request,
-      withdrawal_id: withdrawal.id
+      withdrawal_id: withdrawal.id,
+      user_id: withdrawal.user.user_id,
+      user_name: withdrawal.user.user_name,
+      email: withdrawal.user.email,
+      phone_no: withdrawal.user.phone_no,
+      wallet_balance: withdrawal.user.wallet_balance,
+      order_id: withdrawal.transaction_id,
+      withdrawal_type: withdrawal.withdrawal_type,
+      amount: withdrawal.amount,
+      status: withdrawal.status,
+      created_at: withdrawal.created_at,
+      bank_name: withdrawal.bankAccount?.bank_name || null,
+      account_number: withdrawal.bankAccount?.account_number || null,
+      ifsc_code: withdrawal.bankAccount?.ifsc_code || null,
+      account_holder: withdrawal.bankAccount?.account_holder || null
     }));
     
     return {
@@ -925,8 +912,8 @@ const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
     // Build where clause based on filters
     const whereClause = {};
     
-    if (filters.admin_status) {
-      whereClause.admin_status = filters.admin_status;
+    if (filters.status) {
+      whereClause.status = filters.status;
     }
     
     if (filters.user_id) {
@@ -935,15 +922,15 @@ const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
     
     // Date filters
     if (filters.start_date && filters.end_date) {
-      whereClause.time_of_request = {
+      whereClause.created_at = {
         [Op.between]: [new Date(filters.start_date), new Date(filters.end_date)]
       };
     } else if (filters.start_date) {
-      whereClause.time_of_request = {
+      whereClause.created_at = {
         [Op.gte]: new Date(filters.start_date)
       };
     } else if (filters.end_date) {
-      whereClause.time_of_request = {
+      whereClause.created_at = {
         [Op.lte]: new Date(filters.end_date)
       };
     }
@@ -957,6 +944,7 @@ const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
       include: [
         {
           model: User,
+          as: 'user',
           attributes: ['user_id', 'user_name', 'email', 'phone_no']
         },
         {
@@ -964,7 +952,7 @@ const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
           required: false
         }
       ],
-      order: [['time_of_request', 'DESC']],
+      order: [['created_at', 'DESC']],
       limit,
       offset
     });
@@ -1009,13 +997,8 @@ const getAllPendingRecharges = async (page = 1, limit = 10) => {
       include: [
         {
           model: User,
-          as: 'rechargeUser',
-          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
-        },
-        {
-          model: PaymentGateway,
-          as: 'paymentGateway',
-          attributes: ['gateway_id', 'name']
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'created_at']
         }
       ],
       order: [['created_at', 'DESC']],
@@ -1025,17 +1008,15 @@ const getAllPendingRecharges = async (page = 1, limit = 10) => {
 
     // Transform the data to match required format
     const formattedRecharges = pendingRecharges.map(recharge => ({
-      user_id: recharge.rechargeUser.user_id,
-      mobile_number: recharge.rechargeUser.phone_no,
+      user_id: recharge.user.user_id,
+      mobile_number: recharge.user.phone_no,
       order_id: recharge.order_id || recharge.id,
-      recharge_type: recharge.paymentGateway ? recharge.paymentGateway.name : `Gateway ${recharge.payment_gateway_id}`,
+      recharge_type: `Gateway ${recharge.payment_gateway_id}`,
       applied_amount: recharge.amount,
-      balance_after: (parseFloat(recharge.rechargeUser.wallet_balance) + parseFloat(recharge.amount)).toFixed(2),
-      total_recharge: recharge.rechargeUser.total_deposit,
-      total_withdraw: recharge.rechargeUser.total_withdrawal,
+      balance_after: (parseFloat(recharge.user.wallet_balance) + parseFloat(recharge.amount)).toFixed(2),
       apply_date_time: recharge.created_at,
       recharge_id: recharge.id,
-      user_registered_at: recharge.rechargeUser.created_at
+      user_registered_at: recharge.user.created_at
     }));
     
     return {
@@ -1067,23 +1048,23 @@ const getFirstRecharges = async (page = 1, limit = 10) => {
   try {
     const offset = (page - 1) * limit;
     
-    // Get all successful recharges
+    // First, let's test a simple query without associations
+    console.log('Testing basic WalletRecharge query...');
+    
+    // Get all successful recharges with basic user info
     const successfulRecharges = await WalletRecharge.findAll({
       where: { status: 'completed' },
       include: [
         {
           model: User,
-          as: 'rechargeUser',
-          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
-        },
-        {
-          model: PaymentGateway,
-          as: 'paymentGateway',
-          attributes: ['gateway_id', 'name']
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'actual_deposit_amount', 'created_at']
         }
       ],
       order: [['updated_at', 'DESC']]
     });
+
+    console.log(`Found ${successfulRecharges.length} successful recharges`);
 
     // Create a map to track each user's first successful recharge
     const userFirstRecharges = new Map();
@@ -1100,18 +1081,18 @@ const getFirstRecharges = async (page = 1, limit = 10) => {
 
     // Transform the data to match required format
     const formattedRecharges = firstRecharges.map(recharge => ({
-      user_id: recharge.rechargeUser.user_id,
-      mobile_number: recharge.rechargeUser.phone_no,
+      user_id: recharge.user.user_id,
+      mobile_number: recharge.user.phone_no,
       order_id: recharge.order_id || recharge.id,
-      recharge_type: recharge.paymentGateway ? recharge.paymentGateway.name : `Gateway ${recharge.payment_gateway_id}`,
+      recharge_type: `Gateway ${recharge.payment_gateway_id}`,
       applied_amount: recharge.amount,
-      balance_after: (parseFloat(recharge.rechargeUser.wallet_balance)).toFixed(2),
-      total_recharge: recharge.rechargeUser.total_deposit,
-      total_withdraw: recharge.rechargeUser.total_withdrawal,
+      balance_after: (parseFloat(recharge.user.wallet_balance)).toFixed(2),
+      total_recharge: recharge.user.actual_deposit_amount || 0,
+      total_withdraw: 0, // We'll need to calculate this from withdrawals table if needed
       apply_date_time: recharge.updated_at,
       recharge_id: recharge.id,
       is_first_recharge: true,
-      user_registered_at: recharge.rechargeUser.created_at,
+      user_registered_at: recharge.user.created_at,
       transaction_id: recharge.transaction_id || 'N/A'
     }));
     
@@ -1169,13 +1150,8 @@ const getTodayTopDeposits = async (page = 1, limit = 10) => {
       include: [
         {
           model: User,
-          as: 'rechargeUser',
-          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
-        },
-        {
-          model: PaymentGateway,
-          as: 'paymentGateway',
-          attributes: ['gateway_id', 'name']
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'actual_deposit_amount', 'created_at']
         }
       ],
       order: [['amount', 'DESC']],
@@ -1185,17 +1161,17 @@ const getTodayTopDeposits = async (page = 1, limit = 10) => {
 
     // Transform the data to match required format
     const formattedDeposits = deposits.map(deposit => ({
-      user_id: deposit.rechargeUser.user_id,
-      mobile_number: deposit.rechargeUser.phone_no,
+      user_id: deposit.user.user_id,
+      mobile_number: deposit.user.phone_no,
       order_id: deposit.order_id || deposit.id,
-      recharge_type: deposit.paymentGateway ? deposit.paymentGateway.name : `Gateway ${deposit.payment_gateway_id}`,
+      recharge_type: `Gateway ${deposit.payment_gateway_id}`,
       applied_amount: deposit.amount,
-      balance_after: (parseFloat(deposit.rechargeUser.wallet_balance)).toFixed(2),
-      total_recharge: deposit.rechargeUser.total_deposit,
-      total_withdraw: deposit.rechargeUser.total_withdrawal,
+      balance_after: (parseFloat(deposit.user.wallet_balance)).toFixed(2),
+      total_recharge: deposit.user.actual_deposit_amount || 0,
+      total_withdraw: 0, // We'll need to calculate this from withdrawals table if needed
       apply_date_time: deposit.updated_at,
       recharge_id: deposit.id,
-      user_registered_at: deposit.rechargeUser.created_at,
+      user_registered_at: deposit.user.created_at,
       transaction_id: deposit.transaction_id || 'N/A'
     }));
     
@@ -1214,6 +1190,71 @@ const getTodayTopDeposits = async (page = 1, limit = 10) => {
     return {
       success: false,
       message: 'Error fetching today\'s top deposits'
+    };
+  }
+};
+
+/**
+ * Get all successful recharges using the updated model
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @returns {Object} - List of successful recharges with pagination
+ */
+const getAllSuccessfulRecharges = async (page = 1, limit = 10) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Get total count of successful recharges
+    const total = await WalletRecharge.count({
+      where: { status: 'completed' }
+    });
+    
+    // Get successful recharges with pagination
+    const successfulRecharges = await WalletRecharge.findAll({
+      where: { status: 'completed' },
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'actual_deposit_amount', 'created_at']
+        }
+      ],
+      order: [['updated_at', 'DESC']],
+      limit,
+      offset
+    });
+
+    // Transform the data to match required format
+    const formattedRecharges = successfulRecharges.map(recharge => ({
+      user_id: recharge.user.user_id,
+      mobile_number: recharge.user.phone_no,
+      order_id: recharge.order_id || recharge.id,
+      recharge_type: `Gateway ${recharge.payment_gateway_id}`,
+      applied_amount: recharge.amount,
+      balance_after: (parseFloat(recharge.user.wallet_balance)).toFixed(2),
+      total_recharge: recharge.user.actual_deposit_amount || 0,
+      total_withdraw: 0, // We'll need to calculate this from withdrawals table if needed
+      apply_date_time: recharge.updated_at,
+      recharge_id: recharge.id,
+      user_registered_at: recharge.user.created_at,
+      transaction_id: recharge.transaction_id || 'N/A'
+    }));
+    
+    return {
+      success: true,
+      recharges: formattedRecharges,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting successful recharges:', error);
+    return {
+      success: false,
+      message: 'Error fetching successful recharges'
     };
   }
 };
@@ -1253,36 +1294,37 @@ const getTodayTopWithdrawals = async (page = 1, limit = 10) => {
       include: [
         {
           model: User,
-          as: 'withdrawalUser',
-          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'total_deposit', 'total_withdrawal', 'created_at']
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance', 'actual_deposit_amount', 'created_at']
         },
         {
           model: BankAccount,
           as: 'bankAccount',
-          attributes: ['bank_name', 'account_number', 'ifsc_code', 'usdt_network', 'usdt_address', 'address_alias']
+          attributes: ['bank_name', 'account_number', 'ifsc_code', 'account_holder']
         }
       ],
-      order: [['withdrawal_amount', 'DESC']],
+      order: [['amount', 'DESC']],
       limit,
       offset
     });
 
     // Transform the data to match required format
     const formattedWithdrawals = withdrawals.map(withdrawal => ({
-      user_id: withdrawal.withdrawalUser.user_id,
-      mobile_number: withdrawal.withdrawalUser.phone_no,
-      order_id: withdrawal.order_id || withdrawal.id,
+      user_id: withdrawal.user.user_id,
+      mobile_number: withdrawal.user.phone_no,
+      order_id: withdrawal.transaction_id || withdrawal.id,
       withdraw_type: withdrawal.withdrawal_type || 'BANK',
-      applied_amount: withdrawal.withdrawal_amount,
-      balance_after: (parseFloat(withdrawal.withdrawalUser.wallet_balance)).toFixed(2),
-      total_recharge: withdrawal.withdrawalUser.total_deposit,
-      total_withdraw: withdrawal.withdrawalUser.total_withdrawal,
+      applied_amount: withdrawal.amount,
+      balance_after: (parseFloat(withdrawal.user.wallet_balance)).toFixed(2),
+      total_recharge: withdrawal.user.actual_deposit_amount || 0,
+      total_withdraw: 0, // We'll need to calculate this from withdrawals table if needed
       bank_name: withdrawal.bankAccount?.bank_name || 'N/A',
       account_number: withdrawal.bankAccount?.account_number || 'N/A',
       ifsc_code: withdrawal.bankAccount?.ifsc_code || 'N/A',
-      usdt_network: withdrawal.bankAccount?.usdt_network || 'N/A',
-      usdt_address: withdrawal.bankAccount?.usdt_address || 'N/A',
-      address_alias: withdrawal.bankAccount?.address_alias || 'N/A',
+      account_holder: withdrawal.bankAccount?.account_holder || 'N/A',
+      usdt_network: 'N/A', // Not available in current schema
+      usdt_address: 'N/A', // Not available in current schema
+      address_alias: 'N/A', // Not available in current schema
       apply_date_time: withdrawal.updated_at,
       withdrawal_id: withdrawal.id,
       transaction_id: withdrawal.transaction_id || 'N/A'
@@ -1318,6 +1360,7 @@ module.exports = {
   getPendingWithdrawals,
   getWithdrawalsAdmin,
   getAllPendingRecharges,
+  getAllSuccessfulRecharges,
   getFirstRecharges,
   getTodayTopDeposits,
   getTodayTopWithdrawals

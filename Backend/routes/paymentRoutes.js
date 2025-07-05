@@ -10,6 +10,7 @@ const {
   getPaymentStatusController,
   okPayCallbackController,
   initiateDeposit,
+  initiateUTRDeposit,
   getDepositHistory,
   getWithdrawalHistory,
   ghPayCallbackController,
@@ -18,9 +19,7 @@ const {
   ppayProDepositCallbackController,
   ppayProWithdrawalCallbackController,
   solPayDepositCallbackController,
-  solPayWithdrawalCallbackController,
-  lPayDepositCallbackController,
-  lPayWithdrawalCallbackController
+  solPayWithdrawalCallbackController
 } = require('../controllers/paymentController');
 
 console.log('solPayDepositCallbackController:', solPayDepositCallbackController);
@@ -38,8 +37,6 @@ console.log('ppayProDepositCallbackController:', typeof ppayProDepositCallbackCo
 console.log('ppayProWithdrawalCallbackController:', typeof ppayProWithdrawalCallbackController);
 console.log('solPayDepositCallbackController:', typeof solPayDepositCallbackController);
 console.log('solPayWithdrawalCallbackController:', typeof solPayWithdrawalCallbackController);
-console.log('lPayDepositCallbackController:', typeof lPayDepositCallbackController);
-console.log('lPayWithdrawalCallbackController:', typeof lPayWithdrawalCallbackController);
 const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
 const rateLimiters = require('../middleware/rateLimiter');
 const validationRules = require('../middleware/inputValidator');
@@ -49,7 +46,7 @@ console.log('paymentCallbackWhitelist:', typeof paymentCallbackWhitelist);
 const router = express.Router();
 
 // Protected routes (require authentication & phone verification)
-router.post('/payin', auth, requirePhoneVerification, payInController);
+router.post('/payin', auth, payInController);
 
 // New two-step withdrawal with OTP verification
 router.post('/withdrawal/initiate', auth, requirePhoneVerification, initiateWithdrawalController);
@@ -87,10 +84,8 @@ router.post('/ppaypro/payout-callback', paymentCallbackWhitelist, ppayProWithdra
 router.post('/solpay/payin-callback', paymentCallbackWhitelist, solPayDepositCallbackController);
 router.post('/solpay/payout-callback', paymentCallbackWhitelist, solPayWithdrawalCallbackController);
 
-// Callback routes for LPay (public, accessed by payment gateway)
-// Apply IP whitelisting to protect callbacks
-router.post('/lpay/payin-callback', paymentCallbackWhitelist, lPayDepositCallbackController);
-router.post('/lpay/payout-callback', paymentCallbackWhitelist, lPayWithdrawalCallbackController);
+// 101pay callback routes are now handled in the main routes/index.js file
+// to avoid authentication conflicts
 
 // Deposit routes
 router.post('/deposit',
@@ -99,6 +94,15 @@ router.post('/deposit',
     rateLimiters.payment,
     validationRules.payment,
     initiateDeposit
+);
+
+// UTR Deposit routes
+router.post('/utr-deposit',
+    auth,
+    requirePhoneVerification,
+    rateLimiters.payment,
+    validationRules.payment,
+    initiateUTRDeposit
 );
 
 // Withdrawal routes

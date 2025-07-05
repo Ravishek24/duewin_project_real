@@ -110,7 +110,7 @@ const isValidGameType = (gameType) => {
  * @returns {boolean} - True if valid, false otherwise
  */
 const isValidPaymentGateway = (gateway) => {
-    const validGateways = ['WEPAY', 'MXPAY', 'OKPAY'];
+    const validGateways = ['WEPAY', 'MXPAY', 'OKPAY', 'GHPAY', 'WOWPAY', 'PPAYPRO', 'SOLPAY', 'LPAY', '101PAY'];
     return validGateways.includes(gateway.toUpperCase());
 };
 

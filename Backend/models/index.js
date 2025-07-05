@@ -98,6 +98,8 @@ const initializeModels = async () => {
                 'RefreshToken',
                 'UserSession',
                 'SystemConfig',
+                'Announcement',
+                'Feedback',
 
                 // Game Models
                 'GameConfig',
@@ -160,6 +162,9 @@ const initializeModels = async () => {
                 'ActivityReward',
                 'SelfRebate',
 
+                // Add these for 5D logic
+                'GameCombinations5D',
+                'Game5DSummaryStats',
             ];
 
             // Initialize each model
@@ -380,5 +385,126 @@ module.exports = {
             throw new Error('Models not initialized. Call initializeModels() first.');
         }
         return models;
-    }
+    },
+    // Add individual model exports for backward compatibility
+    get User() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.User;
+    },
+    get Transaction() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.Transaction;
+    },
+    get Announcement() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.Announcement;
+    },
+    get Feedback() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.Feedback;
+    },
+    get SpribeGameSession() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.SpribeGameSession;
+    },
+    get UserRebateLevel() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.UserRebateLevel;
+    },
+    get RebateLevel() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.RebateLevel;
+    },
+    get VipLevel() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.VipLevel;
+    },
+    get GameSession() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.GameSession;
+    },
+    get WalletRecharge() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.WalletRecharge;
+    },
+    get RateLimitViolation() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.RateLimitViolation;
+    },
+    get GameTransaction() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.GameTransaction;
+    },
+    get Game() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.Game;
+    },
+    get BetRecordWingo() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.BetRecordWingo;
+    },
+    get BetRecord5D() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.BetRecord5D;
+    },
+    get BetRecordK3() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.BetRecordK3;
+    },
+    get BetRecordTrxWix() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.BetRecordTrxWix;
+    },
+    get WalletWithdrawal() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.WalletWithdrawal;
+    },
+    get GameCombinations5D() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.GameCombinations5D;
+    },
+    get Game5DSummaryStats() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.Game5DSummaryStats;
+    },
 };

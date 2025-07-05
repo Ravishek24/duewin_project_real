@@ -29,7 +29,8 @@ const {
 const { 
     getTotalUsers, 
     getTodayRegistrations, 
-    getUserStats 
+    getUserStats,
+    getTotalCommission
 } = require('../controllers/adminController/adminStatsController');
 const { 
     blockUser, 
@@ -46,7 +47,8 @@ const {
 const { getTodayFinancialStats, getTotalFinancialStats, getCompleteFinancialStats } = require('../controllers/adminController/financialStatsController');
 const { getActivePeriods, getCurrentPeriod, getRecentPeriods, getWingoStats, setWingoResult } = require('../controllers/adminController/wingoGameController');
 const { 
-  getAllPendingRechargesController, 
+  getAllPendingRechargesController,
+  getAllSuccessfulRechargesController,
   getFirstRechargesController,
   getTodayTopDepositsController,
   getTodayTopWithdrawalsController
@@ -61,6 +63,7 @@ const {
   getPaymentGatewayStatsController
 } = require('../controllers/adminController/paymentGatewayController');
 const { getBlockedEntities, unblockEntity, getViolationHistory } = require('../controllers/adminController/blockedEntitiesController');
+const { createGiftCode, getGiftCodeByCode, getGiftCodeStatus, getAllGiftCodes, getGiftCodeStats } = require('../controllers/adminController/giftCodeController');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
@@ -159,6 +162,7 @@ router.post('/withdrawals/process', processWithdrawalActionController);
 
 // Recharge management routes
 router.get('/recharges/pending', getAllPendingRechargesController);
+router.get('/recharges/successful', getAllSuccessfulRechargesController);
 router.get('/recharges/first-time', getFirstRechargesController);
 router.get('/recharges/top-today', getTodayTopDepositsController);
 router.get('/withdrawals/top-today', getTodayTopWithdrawalsController);
@@ -167,6 +171,7 @@ router.get('/withdrawals/top-today', getTodayTopWithdrawalsController);
 router.get('/stats/total-users', getTotalUsers);
 router.get('/stats/today-registrations', getTodayRegistrations);
 router.get('/stats/user-stats', getUserStats);
+router.get('/stats/total-commission', getTotalCommission);
 
 // Game profit statistics routes
 router.get('/stats/profit/today', getTodayProfit);
@@ -207,5 +212,12 @@ router.get('/payment-gateways/withdrawal', getAvailableWithdrawalGatewaysControl
 router.get('/blocked-entities', getBlockedEntities);
 router.post('/unblock-entity', unblockEntity);
 router.get('/violation-history', getViolationHistory);
+
+// Gift Code Management Routes
+router.post('/gift-codes', createGiftCode);
+router.get('/gift-codes/stats', getGiftCodeStats);
+router.get('/gift-codes', getAllGiftCodes);
+router.get('/gift-codes/:code', getGiftCodeByCode);
+router.get('/gift-codes/:code/status', getGiftCodeStatus);
 
 module.exports = router;

@@ -1,348 +1,894 @@
-==================================================
- WOWPAY PAYMENT GATEWAY INTEGRATION DOCUMENTATION
-==================================================
-
-1. INTERFACE INFORMATION
---------------------------
-Request Address: https://test.wowpay.biz
-
-
-2. PURPOSE OF THE DOCUMENT
---------------------------
-This documentation is used to guide merchants to achieve a smooth integration with the e-commerce payment gateway system. Relevant technical developers should read this document carefully.
-
-
-3. TARGET AUDIENCE
---------------------------
-Merchant system designers, programmers, and testers.
-
-
-4. SAFETY INSTRUCTIONS
---------------------------
-WARNING: Pay close attention to the following situations where financial loss may occur during technical integration!
-
-1. Keys must be kept secure. If your key is lost, unauthorized individuals may simulate asynchronous notifications, causing unpaid orders to be marked as paid and shipped, resulting in financial loss.
-
-2. After an order payment is successful, we send the result to your `notify_url`. After validating the signature, you MUST verify that the payment amount in the notification matches the actual amount the user was supposed to pay.
-
-3. The synchronous notification `return_url` is a user-redirect address. The user is sent here after payment or if they click a "return" button. This redirection CANNOT be used as a reliable basis for confirming payment. Always rely on the asynchronous `notify_url` callback.
-
-4. Our callback server IPs are 86.38.247.84 (IPv4) and fe80::be24:11ff:feb8:ed4c (IPv6). If your system uses an IP whitelist, please add these IPs to allow our callbacks.
-
-
-5. PAYMENT PROCESS DESCRIPTION
---------------------------------
-1) The merchant generates an order based on the customer's action, including merchant number, order number, amount, etc., and submits a payment request to our gateway.
-2) We process the request data, performing security checks and other validations.
-3) After the user completes the payment, our server sends an asynchronous notification to the `notify_url` provided by the merchant in the initial request. If `notify_url` was not provided, this step is skipped.
-4) The merchant's server receives the successful payment notification, validates it, and processes the order on their end (e.g., ships the goods).
-5) After the asynchronous notification, the user's browser is redirected to the `return_url` provided by the merchant. If `return_url` was not provided, this step is skipped.
-
-
-6. DATA EXCHANGE AND COMMUNICATION PROTOCOLS
---------------------------------------------
-- Submission Method: POST
-- Content-Type:      application/json; charset=utf-8
-- Data Format:       JSON for both requests and responses.
-- Character Encoding:  UTF-8
-- Signature Algorithm: MD5withRsa or MD5
-- Signature Requirement: All requests and responses must be signed and validated.
-- Logic Flow:        First, check the protocol fields in the response, then business-level fields, and finally the transaction status.
-
-
-7. DIGITAL SIGNATURE ALGORITHM
---------------------------------
-1) Signature Methods
-The platform supports MD5withRsa and MD5. The callback from our platform will use the same signature method you used in your request.
-
-2) How Keys Are Used
-
-   MD5withRsa:
-   - Platform-to-Merchant (Callback): We sign the request with the Pay platform's private key. You must verify it using the Pay platform's public key.
-   - Merchant-to-Platform (Your Request): You sign the request with your own private key. We verify it using your public key.
-
-   MD5:
-   - Platform-to-Merchant (Callback): We sign the request using the shared merchant key. You verify the signature with the same merchant key.
-   - Merchant-to-Platform (Your Request): You sign the request using the shared merchant key. We verify the signature with the same merchant key.
-
-3) Data Splicing Rules for Signature Generation
-   - Step 1: Take all non-empty request parameters. Sort them alphabetically by parameter name (ASCII order). Concatenate them into a string in the format `key1=value1&key2=value2...`. This result is `stringA`.
-
-   - Important Rules:
-     a. Parameters must be sorted by name in ASCII order (A-Z).
-     b. Parameters with empty or null values are excluded from the signature base string.
-     c. Parameter names are case-sensitive.
-     d. The `sign` parameter itself is never included in the signature base string.
-
-   - Step 2 (for MD5withRsa):
-     RSA encrypt `stringA` using your private key to get the final `sign` value.
-
-   - Step 2 (for MD5):
-     Append `&key=` followed by your secret key to `stringA`. The result is `stringB`. Calculate the MD5 hash of `stringB`. The final `sign` value is the 32-character uppercase representation of the hash.
-
-
-8. INITIATE PAYMENT INTERFACE (DEPOSIT)
-----------------------------------------
-Request URL: https://{request_address}/gw-api/deposit/create
-
-Request Parameters:
-| Parameter     | Required | Type   | Description                                           |
-|---------------|----------|--------|-------------------------------------------------------|
-| merchant_no   | Yes      | string | Your unique merchant number provided by the system.   |
-| out_trade_sn  | Yes      | string | Your unique order number (max 50 chars).              |
-| title         | No       | string | Product name (max 200 chars).                         |
-| amount        | Yes      | string | Payment amount, formatted to two decimal places.      |
-| user_name     | No       | string | Payer's name (Required for Thailand).                 |
-| bank_card_no  | No       | string | Payer's card number (Required for Thailand).          |
-| attach        | No       | string | Additional info, returned as-is (max 255 chars).      |
-| return_url    | No       | string | URL for user redirection after payment (max 255 chars).|
-| notify_url    | Yes      | string | Asynchronous callback URL (max 255 chars).            |
-| sign_type     | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                |
-| sign          | Yes      | string | The generated signature string.                       |
-
-Response Parameters:
-| Parameter | Required | Type   | Description                                           |
-|-----------|----------|--------|-------------------------------------------------------|
-| code      | Yes      | string | Request status. `100` = Success, others = Fail.       |
-| message   | Yes      | string | Information about the request status.                 |
-| data      | Yes      | object | Response data body.                                   |
-| - order_sn| Yes      | string | The system-generated order number.                    |
-| - trade_url| Yes      | string | The URL for the cashier/payment page to redirect to.  |
-
-Test Request Example:
-- Pre-signature String: amount=100&attach=测试产品&merchant_no=ruNkLnM3bncNAzd7&notify_url=http://127.0.0.1:8000&out_trade_sn=20250624141011&return_url=http://127.0.0.1:8000&sign_type=MD5withRsa&title=测试产品
-- Signature Result: hUV6UdYDefjpaDldeVXP+j8ZI9CMizaRsgjIPY3nJfSBoZNnNo4+DVbp4IoKn1PDY9ygSaLKozeK74I/Npvn1GsbIbOl2UOm1Om0yMf5GR4GolvqjAuzcMxiFiDyQ81Lr3gUaVfhwXztvfcn2O6BgDNWzQTWGz9zgw6xz4azxlew8bqduDuQ3+H60jh0tz8WBjPgEMYx3EWTnBzCHaw5ijgPJzFam4tdpEduSTnfrl/9y+ea8RKVdSvDabBvbF/AbmSoR7XGtypReFdAqlkM42olfwyeqOqHPDdJ0cYIEXZIrM9kOHc2nc62Z2/VdEjUGYkhov6I6ZMJk/Ip55VF9Q==
-
-
-9. PAYMENT CALLBACK NOTIFICATION (DEPOSIT)
-------------------------------------------
-This is an asynchronous request sent from our server to your `notify_url`.
-
-Callback Parameters:
-| Parameter    | Required | Type   | Description                                               |
-|--------------|----------|--------|-----------------------------------------------------------|
-| merchant_no  | Yes      | string | Your merchant number.                                     |
-| out_trade_sn | Yes      | string | Your original order number.                               |
-| order_sn     | Yes      | string | The system-generated order number.                        |
-| amount       | Yes      | string | Payment amount.                                           |
-| payment_time | Yes      | string | Payment time in `yyyy-MM-dd HH:mm:ss` format.             |
-| attach       | No       | string | Additional info you sent in the original request.         |
-| trade_status | Yes      | string | `pending`, `success`, `timeout`, `failed`.                |
-| sign_type    | Yes      | string | Signature method used (`MD5withRsa` or `MD5`).              |
-| sign         | Yes      | string | Signature for this callback (not included in verification).|
-
-
-10. QUERY PAYMENT INTERFACE (DEPOSIT)
----------------------------------------
-Request URL: https://{request_address}/gw-api/deposit/query
-
-Request Parameters:
-| Parameter    | Required | Type   | Description                                           |
-|--------------|----------|--------|-------------------------------------------------------|
-| merchant_no  | Yes      | string | Your unique merchant number.                          |
-| out_trade_sn | Yes      | string | Your unique order number (max 50 chars).              |
-| order_sn     | Yes      | string | The system-generated order number (max 50 chars).     |
-| sign_type    | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                |
-| sign         | Yes      | string | The generated signature string.                       |
-
-Response Parameters:
-| Parameter       | Required | Type    | Description                                               |
-|-----------------|----------|---------|-----------------------------------------------------------|
-| code            | Yes      | string  | Request status. `100` = Success, others = Fail.           |
-| message         | Yes      | string  | Information about the request status.                     |
-| data            | Yes      | object  | Response data body.                                       |
-| - merchant_no   | Yes      | string  | Your merchant number.                                     |
-| - out_trade_sn  | Yes      | string  | Your original order number.                               |
-| - order_sn      | Yes      | string  | The system-generated order number.                        |
-| - amount        | Yes      | decimal | Payment amount, with two decimal places.                  |
-| - payment_time  | Yes      | string  | Payment time in `yyyy-MM-dd HH:mm:ss` format.             |
-| - trade_status  | Yes      | string  | `pending`, `success`, `expired`, `failed`.                |
-
-
-11. INITIATE PAYOUT INTERFACE
--------------------------------
-Request URL: https://{request_address}/gw-api/payout/create
-
-Request Parameters:
-| Parameter      | Required | Type   | Description                                                                 |
-|----------------|----------|--------|-----------------------------------------------------------------------------|
-| merchant_no    | Yes      | string | Your unique merchant number.                                                |
-| out_trade_sn   | Yes      | string | Your unique order number (max 50 chars).                                    |
-| amount         | Yes      | string | Payout amount, formatted to two decimal places.                             |
-| trade_account  | Yes      | string | Beneficiary's account name (max 50 chars).                                  |
-| trade_number   | Yes      | string | Beneficiary's bank card or account number (max 50 chars).                   |
-| attach         | No       | string | Additional info, returned as-is (max 255 chars).                            |
-| pix            | No       | string | Required for Brazil payments.                                               |
-| pix_type       | No       | string | Required for Brazil payments. Must be `CPF`, `PHONE`, `EMAIL`, `CNP`, `EVP`.  |
-| ifsc           | No       | string | Required for India payments.                                                |
-| bank_code      | No       | string | Required for Indonesia, Nigeria, Philippines, Thailand, Mexico payments.    |
-| notify_url     | Yes      | string | Asynchronous callback URL (max 255 chars).                                  |
-| mobile         | No       | string | Mobile number. Required for Colombia payouts.                               |
-| email          | No       | string | Email address. Required for Colombia payouts.                               |
-| identity       | No       | string | ID number. Required for Colombia payouts.                                   |
-| sign_type      | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                                      |
-| sign           | Yes      | string | The generated signature string.                                             |
-
-Response Parameters:
-| Parameter | Required | Type   | Description                                           |
-|-----------|----------|--------|-------------------------------------------------------|
-| code      | Yes      | string | Request status. `100` = Success, others = Fail.       |
-| message   | Yes      | string | Information about the request status.                 |
-| data      | Yes      | object | Response data body.                                   |
-| - order_sn| Yes      | string | The system-generated order number for the payout.     |
-
-
-12. PAYOUT CALLBACK NOTIFICATION
---------------------------------
-This is an asynchronous request sent from our server to your `notify_url`.
-
-Callback Parameters:
-| Parameter    | Required | Type   | Description                                               |
-|--------------|----------|--------|-----------------------------------------------------------|
-| merchant_no  | Yes      | string | Your merchant number.                                     |
-| out_trade_sn | Yes      | string | Your original order number.                               |
-| order_sn     | Yes      | string | The system-generated order number.                        |
-| amount       | Yes      | string | Payout amount.                                            |
-| pay_time     | Yes      | string | Payout time in `yyyy-MM-dd HH:mm:ss` format.              |
-| attach       | No       | string | Additional info you sent in the original request.         |
-| trade_status | Yes      | string | `pending`, `success`, `rejected`, `failed`.               |
-| sign_type    | Yes      | string | Signature method used (`MD5withRsa` or `MD5`).              |
-| sign         | Yes      | string | Signature for this callback (not included in verification).|
-
-
-13. QUERY PAYOUT INTERFACE
-----------------------------
-Request URL: https://{request_address}/gw-api/payout/query
-
-Request Parameters:
-| Parameter    | Required | Type   | Description                                           |
-|--------------|----------|--------|-------------------------------------------------------|
-| merchant_no  | Yes      | string | Your unique merchant number.                          |
-| out_trade_sn | Yes      | string | Your unique order number (max 50 chars).              |
-| order_sn     | Yes      | string | The system-generated order number (max 50 chars).     |
-| sign_type    | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                |
-| sign         | Yes      | string | The generated signature string.                       |
-
-Response Parameters:
-| Parameter       | Required | Type    | Description                                               |
-|-----------------|----------|---------|-----------------------------------------------------------|
-| code            | Yes      | string  | Request status. `100` = Success, others = Fail.           |
-| message         | Yes      | string  | Information about the request status.                     |
-| data            | Yes      | object  | Response data body.                                       |
-| - merchant_no   | Yes      | string  | Your merchant number.                                     |
-| - out_trade_sn  | Yes      | string  | Your original order number.                               |
-| - order_sn      | Yes      | string  | The system-generated order number.                        |
-| - amount        | Yes      | decimal | Payout amount, with two decimal places.                   |
-| - payment_time  | Yes      | string  | Payout time in `yyyy-MM-dd HH:mm:ss` format.              |
-| - trade_status  | Yes      | string  | `pending`, `success`, `rejected`, `failed`.               |
-
-
-14. QUERY BANK CODE INTERFACE
--------------------------------
-Request URL: https://{request_address}/gw-api/bank-code
-
-Request Parameters:
-| Parameter   | Required | Type   | Description                                |
-|-------------|----------|--------|--------------------------------------------|
-| merchant_no | Yes      | string | Your unique merchant number.               |
-| sign_type   | Yes      | string | Signature method: `MD5withRsa` or `MD5`.     |
-| sign        | Yes      | string | The generated signature string.            |
-
-Response Parameters:
-| Parameter  | Required | Type   | Description                                           |
-|------------|----------|--------|-------------------------------------------------------|
-| code       | Yes      | string | Request status. `100` = Success, others = Fail.       |
-| message    | Yes      | string | Information about the request status.                 |
-| data       | Yes      | array  | Array of bank objects.                                |
-| - bank_code| Yes      | string | The bank code.                                        |
-| - bank_name| Yes      | string | The name of the bank (max 50 chars).                  |
-
-
-15. QUERY USER BALANCE
-------------------------
-Request URL: https://{request_address}/gw-api/balance/query
-
-Request Parameters:
-| Parameter   | Required | Type   | Description                                |
-|-------------|----------|--------|--------------------------------------------|
-| merchant_no | Yes      | string | Your unique merchant number.               |
-| sign_type   | Yes      | string | Signature method: `MD5withRsa` or `MD5`.     |
-| sign        | Yes      | string | The generated signature string.            |
-
-Response Parameters:
-| Parameter        | Required | Type   | Description                                           |
-|------------------|----------|--------|-------------------------------------------------------|
-| code             | Yes      | string | Request status. `100` = Success, others = Fail.       |
-| message          | Yes      | string | Information about the request status.                 |
-| data             | Yes      | object | Response data body.                                   |
-| - currency       | Yes      | string | The currency of the balance.                          |
-| - balance        | Yes      | string | Total balance.                                        |
-| - usable_balance | Yes      | string | Balance available for withdrawal.                     |
-
-
-16. QUERY ORDER BY UTR
-------------------------
-Request URL: https://{request_address}/gw-api/utr/query
-
-Request Parameters:
-| Parameter   | Required | Type   | Description                                |
-|-------------|----------|--------|--------------------------------------------|
-| merchant_no | Yes      | string | Your unique merchant number.               |
-| utr         | Yes      | int    | The 12-digit UTR number.                   |
-| sign_type   | Yes      | string | Signature method: `MD5withRsa` or `MD5`.     |
-| sign        | Yes      | string | The generated signature string.            |
-
-Response Parameters:
-| Parameter  | Required | Type    | Description                                           |
-|------------|----------|---------|-------------------------------------------------------|
-| code       | Yes      | string  | Request status. `100` = Success, others = Fail.       |
-| message    | Yes      | string  | Information about the request status.                 |
-| data       | No       | object  | Data body, only present if code is `100`.             |
-| - status   | Yes      | string  | Order status: `success` (completed), `pending` (can be confirmed).|
-| - order_sn | No       | string  | Platform order number (only if status is `success`).  |
-| - amount   | Yes      | decimal | Payment amount, with two decimal places.              |
-
-
-17. CONFIRM ORDER BY UTR (MANUAL COMPLETION)
----------------------------------------------
-Request URL: https://{request_address}/gw-api/utr/confirm
-
-Request Parameters:
-| Parameter    | Required | Type   | Description                                                   |
-|--------------|----------|--------|---------------------------------------------------------------|
-| merchant_no  | Yes      | string | Your unique merchant number.                                  |
-| utr          | Yes      | int    | The 12-digit UTR number.                                      |
-| order_sn     | No       | string | Platform order number. Must provide `order_sn` or `out_trade_sn`. |
-| out_trade_sn | No       | string | Merchant order number. Must provide `order_sn` or `out_trade_sn`. |
-| sign_type    | Yes      | string | Signature method: `MD5withRsa` or `MD5`.                        |
-| sign         | Yes      | string | The generated signature string.                               |
-
-Response Parameters:
-| Parameter | Required | Type   | Description                                       |
-|-----------|----------|--------|---------------------------------------------------|
-| code      | Yes      | string | Request status. `100` = Success, others = Fail.   |
-| message   | Yes      | string | Information about the request status.             |
-
-
-
-
-
-
-
+一、接口信息  1. Interface information
+请求地址  The address of the request
+https://test.wowpay.biz
+二、文档用途  2. Purpose of the document
+本操作文档用来指导商户实现与电子商务支付网关系统的顺利对接。请相关技术开发人员详细阅读本文档
+This documentation is used to guide merchants to achieve a smooth integration with the e-commerce payment gateway system. Please read this document carefully for the relevant technical developers
+三、阅读对象  3. Reading Object
+商户系统设计人员、编程人员及测试人员  Merchant system designers, programmers and testers
+四、安全说明  Fourth, safety instructions
+技术对接过程中 可能存在损失的几种情况(一定要注意）！
+There are several situations in which there may be losses in the process of technical docking (be sure to pay attention)!
+1， 密钥一定要妥善保存 ，丢失之后不法分子可能会模拟异步通知导致未支付的订单因为验签通过而发货，造成损失！
+1. The key must be kept properly , after the loss, the criminals may simulate the asynchronous notification and cause the unpaid order to be shipped because of the verification and signing, resulting in losses!
+2，订单支付成功之后我们会发送 处理结果到异步通知notify_url，验签通过后，注意通知中的支付金额是否与用户实际支付金额相同 ！
+2. After the order payment is successful, we will send the processing result to the asynchronous notification notify_url, after the verification is passed, pay attention to whether the payment amount in the notification is the same as the actual payment amount of the user !
+3， 同步通知result_url是用户跳转地址 ，支付完成后或用户点击返回、查询等会调转到该地址，同时会调用查询接口查询订单信息，根据所接入的上游不同，并不是所有的收银台都支持跳转 但是此信息不能做为支付依据！
+3, synchronous notification result_url is the user's jump address , after the payment is completed or the user clicks to return, query, etc. will be transferred to the address, and at the same time will call the query interface to query the order information, according to the access to the upstream different, not all cashiers support jump But this information can not be used as a basis for payment!
+4，回调服务器ip为 86.38.247.84 (IPv4)和 fe80::be24:11ff:feb8:ed4c (IPv6)，如果接口有白名单，请 将回调服务器ip加入白名单，
+4. The callback server IP is 86.38.247.84 (IPv4) and fe80::be24:11ff:feb8:ed4c (IPv6), if the interface has a whitelist, please add the callback server IP to the whitelist
+五、支付流程描述  5. Description of the payment process
+技术对接过程中 可能存在损失的几种情况(一定要注意）！
+There are several situations in which there may be losses in the process of technical docking (be sure to pay attention)!
+1) 商户根据客户的支付行为生成订单，包括商户号、订单号、金额、等支付要素，并提交付款请求。
+1) The merchant generates an order based on the customer's payment behavior, including the merchant number, order number, amount, and other payment elements, and submits a payment request.
+2) 我们会对请求数据进行处理。收到付款请求数据后，会先进行安全校验等验证，一系列验证通过后便会处理完成这次发送过来的数据请求。
+2) We will process the requested data. After receiving the payment request data, it will first carry out security verification and other verification, and after a series of verifications, the data request will be processed.
+3) 用户支付完成后，我们将支付结果返回异步通知，由我们服务器主动发起通知，根据商户提供的notify_url参数，调用商户在请求时设定好的页面路径（如果参数notify_url，如果商户没设定，则不会进行该操作）。
+3) After the payment is completed, we will return an asynchronous notification of the payment result, and our server will actively initiate a notification, and call the page path set by the merchant at the time of request according to the notify_url parameters provided by the merchant (if the parameters are notify_url, if the merchant does not set it, the operation will not be performed).
+4) 商户接收到支付的成功异步通知请求后，输出反馈信息给我们，并完成相关业务逻辑。
+4) After receiving the successful asynchronous notification request of payment, the merchant will output feedback information to us and complete the relevant business logic.
+5) 在第4步执行完成后，会进行同步通知。根据商户提供的result_url参数，在用户当前页面上通过自动跳转的方式跳回商户设定好的页面路径地址（如果参数result_url为空，则不会进行该操作）。
+5) After the execution of step 4 is completed, a synchronization notification will be made. According to the result_url parameters provided by the merchant, the page path address set by the merchant will be automatically redirected back to the user's current page (if the parameter result_url is empty, this operation will not be performed).
+六、数据交互与通讯协议  6. Data exchange and communication protocols
+提交方式: 采用POST方法提交，Content-Type"application/json; charset=utf-8"
+数据格式: 提交和返回数据都为JSON格式   Data format: Both submitted and returned data are in JSON format
+字符编码: 统一采用UTF-8字符编码   Character encoding: UTF-8 character encoding is uniformly adopted
+签名算法: MD5withRsa或MD5
+签名要求: 请求和接收数据均需要校验签名，详细方法请参考数字签名
+Signature requirements: Signatures need to be verified for both requests and received data, see Digital Signatures for details
+判断逻辑: 先判断协议字段返回，再判断业务返回，最后判断交易状态
+Judgment logic: Determine the return of the agreement field first, then the business return, and finally determine the transaction status
+七、数字签名算法  7. Digital signature algorithm
+1) 签名方式   1) Signature method
+平台支持MD5withRsa和MD5两种签名方式，回调也会采用 和请求时相同的签名方式。
+The platform supports MD5withRsa and MD5 signature methods, and the callback will also use the same signature method as the request.
+2) 秘钥的使用方式   2) How keys are used
+MD5withRsa：
+Pay平台主动请求(回调)商户：Pay会使用Pay平台的私钥进行签名，而商户接到请求，需用Pay平台公钥验签。
+The Pay platform actively requests (callbacks) the merchant: Pay will use the private key of the Pay platform to sign, and the merchant needs to use the public key of the Pay platform to verify the signature when receiving the request.
+商户主动请求Pay：商户需先使用商户自己的私钥进行签名，Pay平台接到请求后，会使用商户公钥验签。
+Merchant takes the initiative to request Pay: The merchant needs to use the merchant's own private key to sign first, and the Pay platform will use the merchant's public key to verify the signature after receiving the request.
+MD5：
+Pay平台主动请求(回调)商户：Pay会使用商户密钥加密参数，而商户接到请求，商户密钥验签。
+The Pay platform actively requests (callbacks) the merchant: Pay will use the merchant key to encrypt the parameters, and the merchant receives the request and the merchant key verifies the signature.
+商户主动请求Pay：商户需先使用商户密钥进行签名，Pay平台接到请求后，会使用商户密钥验签。
+Merchant takes the initiative to request Pay: The merchant needs to use the merchant key to sign first, and the Pay platform will use the merchant key to verify the signature after receiving the request.
+3) 数据拼接规则   3) Data splicing rules
+商户和Pay平台均遵守此拼接规则。   Both the merchant and the Pay platform comply with this splicing rule.
+第一步：假设所有发送参数集合M，将集合M内非空参数值的参数按照参数名 ASCII 码从小到大排序（字典序），使用 URL 键值对的格式（即 key1=value1&key2=value2…）拼接成字符串stringA。
+Step 1: Assuming that all sending parameters are set M, the parameters with non-null parameter values in the set M are sorted from small to large according to the ASCII code of the parameter name (dictionary order), and the format of the URL key-value pair is used (i.e., key1=value1&key2=value2...). ) concatenated into the string stringA.
+特别注意以下重要规则：   Pay special attention to the following important rules:
+1.参数名 ASCII 码从小到大排序（字典序）；
+1. Parameter name: ASCII code sorted from small to large (dictionary order);
+2.如果参数的值为空不参与签名；   2. If the value of the parameter is empty, it does not participate in the signature;
+3.参数名区分大小写；   3. Parameter names are case-sensitive;
+4.传送的sign参数不参与签名。   4. The transmitted sign parameter does not participate in the signature.
+MD5withRsa：
+第二步：对stringA进行 RSA 加密，得到sign值signValue。
+Step 2: RSA encrypt stringA to obtain the signValue value.
+MD5：
+第二步：在stringA最后加上&key=密钥，得到字符串stringB，对stringB进行MD5，得到32位的字符串signValue，最后将signValue转成大写。
+Step 2: Add the &key= key to the end of stringA to get stringB, MD5 stringB to get the 32-bit string signValue, and finally convert signValue to uppercase.
+八、发起收款接口  8. Initiating the payment interface
+请求地址  The address of the request
+https://{请求地址}/gw-api/deposit/create
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+title
+否
+string，最大长度200  string, with a maximum length of 200
+产品名称，可为空  Product name, which can be empty
+amount
+是
+string，保留两位小数  string, which retains two decimal places
+付款金额  The amount of the payment
+user_name
+否
+string
+付款人姓名，泰国必填，其他可不填  Payer's name, required in Thailand, others can be omitted
+bank_card_no
+否
+string
+付款人卡号，泰国必填，其他可不填  Payer's card number, required in Thailand, others can be omitted
+attach
+否
+string，最大长度255  string, up to 255 in length
+附加信息，原样返回，可为空  Additional information, returned as is, can be empty
+return_url
+否
+string，最大长度255  string, up to 255 in length
+选填，支付成功回调打开的页面  Optional, the page opened by the successful payment callback
+notify_url
+是
+string，最大长度255  string, up to 255 in length
+回调地址  Callback address
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+data
+是
+object
+数据体（以下为数据体属性）  Data body (the following are the attributes of the data body)
+order_sn
+是
+string
+系统订单号  The system order number
+trade_url
+是
+string
+收银台地址  Cashier address
 请求示例  Sample request
 商户号：
   Merchant ID:
 ruNkLnM3bncNAzd7
-utr：
-202506241410
 订单号：
-20250624141011
-系统订单号：
-  System Order Number:
-20250624141011
+20250628183239
+产品名称：
+  Product Name:
+测试产品
+付款金额：
+  Payment Amount:
+100
+附加信息：
+  Additional information:
+测试产品
+返回页面：
+  Back to page:
+http://127.0.0.1:8000
+回调地址：
+  Callback address:
+http://127.0.0.1:8000
 签名方式：
   Signature Method:
 MD5withRsa
 签名：
   Signature:
-bonsTx+tt1HAn3ePIc7hnWCAAVyXpu0ELkQL3H43qiOdJyC5/R0G+paC5DVpdJGbi/faaLt28hRT+/kH93d3avgb0XAX6XpiTe9huG8Vpi4pM8YFcrpvOdYBDzT1sOUU2HSSrbXPw2I1ISTmq0F7iJYsTGeGa5gYjElQm2oVbPsueUY3+PpkUxwvsX29YO7eW9NuoXnaKA9hkDy+b+7Jn16M5uPL/Fgf6ladYoZ20O8vswOM2OexPgqJxnjtUc4MgKuruEDsQAWLYPVqDjST4IiI6RYA+ryhC70nXMQIdcxfgjHXZwMrqLs/qQ9PSePeo6VrY0L3ZiRGXtw6syhXng==
+HiQlggfuwwH93bR33kflH0/BjkdxIr1FtjiyhwCUqMEEqKurxaGdqeRpqKAQDBQoId2zg8UnE8kXRmIfbteEyPmtNaq26L4ws9zezzjUSIs90WR07/+U5JsBnZ+YxH8hePQXSHjnICxJaeI8wQonZ4IS2gys27z8bxYkJL+BWiWjoZtfikwV3zsBJTBKLedBkpjCgpDynITCX3a/j/tRoXmUno/OIUdj4xriZd+In4O+TagCXV5u1IjsMsJXpNZp+a3xpTqS5SK/ssmmuqXCyv3qBt2i+MU1JcvQ1xM2dQdM3kqekF22ljOiElutEPdtPiEiQkh45gyhFOabLtUjqA==
+  Submit a request
+测试请求结果  Test the results of the request
+待签名字符串：amount=100&attach=测试产品&merchant_no=ruNkLnM3bncNAzd7&notify_url=http://127.0.0.1:8000&out_trade_sn=20250628183239&return_url=http://127.0.0.1:8000&sign_type=MD5withRsa&title=测试产品
+签名结果：HiQlggfuwwH93bR33kflH0/BjkdxIr1FtjiyhwCUqMEEqKurxaGdqeRpqKAQDBQoId2zg8UnE8kXRmIfbteEyPmtNaq26L4ws9zezzjUSIs90WR07/+U5JsBnZ+YxH8hePQXSHjnICxJaeI8wQonZ4IS2gys27z8bxYkJL+BWiWjoZtfikwV3zsBJTBKLedBkpjCgpDynITCX3a/j/tRoXmUno/OIUdj4xriZd+In4O+TagCXV5u1IjsMsJXpNZp+a3xpTqS5SK/ssmmuqXCyv3qBt2i+MU1JcvQ1xM2dQdM3kqekF22ljOiElutEPdtPiEiQkh45gyhFOabLtUjqA==
+  签名结果:HiQlggfuwwH93bR33kflH0/BjkdxIr1FtjiyhwCUqMEEqKurxaGdqeRpqKAQDBQoId2zg8UnE8kXRmIfbteEyPmtNaq26L4ws9zezzjUSIs90WR07/+U5JsBnZ+YxH8hePQXSHjnICxJaeI8wQonZ4IS2gys27z8bxYkJL+BWiiICxJaeI8wQonZ4IS2gys27z8bxYkJL+BWiiICxJaeI8wQonZ4IS2gys27z8bxYkJL+BWiiICxJaeI8wQonZ4IS2gys27z8bxYkJL+BWiIICxJaeI8wQonZ4IS2gys27z8bxYkJL+BWiiJ WjoZtfikwV3zsBJTBKLedBkpjCgpDynITCX3a/j/tRoXmUno/OIUdj4xriZd+In4O+TagCXV5u1IjsMsJXpNZp+a3xpTqS5SK/ssmmuqXCyv3qBt2i+MU1JcvQ1xM2dQdM3kqekF22ljOiElutEPdtPiEiQkh45gyhFOabLtUjqA==
+九、收款回调通知  9. Notice of collection callback
+报文参数  Packet parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+order_sn
+是
+string，最大长度50  string, up to 50 in length
+系统订单号  The system order number
+amount
+是
+string
+付款金额  The amount of the payment
+payment_time
+是
+string
+支付时间，yyyy-MM-dd HH:mm:ss  Payment time, yyyy-MM-dd HH:mm:ss
+attach
+否
+string
+附加信息  Additional Information
+trade_status
+是
+string
+支付状态： pending 未支付 success 支付成功 timeout 过期未支付 failed 支付失败
+Payment Status: Pending Unpaid Success Successful Timeout Expired Unpaid Failed Payment Failed
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名，不参与签名  Signing, not participating in the signature
+模拟回调  Simulate callbacks
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+订单号：
+20250628183239
+系统订单号：
+  System Order Number:
+20250628183239
+付款金额：
+  Payment Amount:
+100
+付款时间：
+  Payment Time:
+2025-06-28 18:32:39
+支付状态：
+  Payment Status:
+success
+附加信息：
+  Additional information:
+测试回调
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+eDOp8OG1uYHZ7ZWcvara857LR6WHGl2ssOk8gfkcR4gFMN64moPPNxS7DN1ZOnnH82wOim7qjCC2EdHDk/nwhB8hIDt1Sg+GJu/mLAPZq449Y9Q8lWrPXh9iAuKV4Vlf8WdrvFtyRzciKUCU9T+nDg8DcKv7D3vCJj+pwvwyQBEGnIXyg39nO64RucNHC6SMEJQfc8n5jCFLIseD4TEuaRtGfWEjov11kHzIBNBwuqjGGt8skdhm7Y2nLDv3exFC7BHOpOEIV4+yL7UbtZ6ceGqZqat0dILVvx1dJ7P5eZoRWc4Dc2VcrgN+rS9+h00ep6AYJ+TrMzznNho4sekltw==
+  Submit a request
+测试请求结果  Test the results of the request
+十、查询收款接口  10. Query and collection interface
+请求地址  The address of the request
+https://{请求地址}/gw-api/deposit/query
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+order_sn
+是
+string，最大长度50  string, up to 50 in length
+系统订单号  The system order number
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+data
+是
+object
+数据体（以下为数据体属性）  Data body (the following are the attributes of the data body)
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+order_sn
+是
+string，最大长度50  string, up to 50 in length
+系统订单号  The system order number
+amount
+是
+decimal，保留两位小数  decimal, with two decimal places
+付款金额  The amount of the payment
+payment_time
+是
+string
+支付时间，yyyy-MM-dd HH:mm:ss  Payment time, yyyy-MM-dd HH:mm:ss
+trade_status
+是
+string
+支付状态： pending 未支付 success 支付成功 expired 过期未支付 failed 支付失败
+Payment Status: Pending Unpaid Success Payment Successful Expired Expired Unpaid Failed Payment Failed
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+订单号：
+20250628183239
+系统订单号：
+  System Order Number:
+20250628183239
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+Hjy7o97h3P3e+hnd+jVQzKhOAzjyhJZnRllrVvMpkw8X8hpbxXS19d82zh6+t1nboGvIOyJVT8Vzd28XTIMoc4ItHM8mKDCU58+oAbW5baSY365AxtZDn/34WUw5srSz+XI81tIf88mbD5AbWhDZdLmbNYen+UdHhg/hW6adkbNH9PTqCcUrHbNf9oB0ctirl3GPr38jV6AXuH9dTrxrITZYUYn4HGhRAd1Dcfc8DdHITnpqLEmCdaARR0rW4NizN1Qq/1SjOAHzn8yzPdcPqQ5fv8eE1589CA4wWBxokDI9mDx0kCxmIoG91y7SwcIt60s6zAOzPmrdb8QsYkFMXA==
+  Submit a request
+测试请求结果  Test the results of the request
+十一、发起代付接口  11. Initiate the payment interface
+请求地址  The address of the request
+https://{请求地址}/gw-api/payout/create
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+amount
+是
+string，保留两位小数  string, which retains two decimal places
+付款金额  The amount of the payment
+trade_account
+是
+string，最大长度50  string, up to 50 in length
+收款账户名称  The name of the beneficiary account
+trade_number
+是
+string，最大长度50  string, up to 50 in length
+银行卡号或者收款账户账号  Bank card number or receiving account number
+attach
+否
+string，最大长度255  string, up to 255 in length
+附加信息，原样返回，可为空  Additional information, returned as is, can be empty
+pix
+否
+string，最大长度255  string, up to 255 in length
+巴西支付必填pix  Brazil payment is required pix
+pix_type
+否
+string，最大长度255  string, up to 255 in length
+巴西支付必填pix_type，值必为CPF、PHONE、EMAIL、CNP、EVP
+The required pix_type for Brazil payment must be CPF, PHONE, EMAIL, CNP, EVP
+ifsc
+否
+string，最大长度255  string, up to 255 in length
+印度支付必填ifsc  Required IFSC for payment in India
+bank_code
+否
+string，最大长度255  string, up to 255 in length
+印尼、尼日尼亚支付必填银行编码/钱包编码(OVO、GOPAY、GOPAYDRIVER、SHOPEEPAY、LINKAJA、DANA)，菲律宾、泰国、墨西哥支付必填银行编码
+Bank code/wallet code required for payment in Indonesia and Nigeria (OVO, GOPAY, GOPAYDRIVER, SHOPEEPAY, LINKAJA, DANA), and bank code required for payment in the Philippines, Thailand and Mexico
+notify_url
+是
+string，最大长度255  string, up to 255 in length
+回调地址  Callback address
+mobile
+否
+string，最大长度255  string, up to 255 in length
+手机号，填不填会影响出款速度，哥伦比亚代付必填  Mobile phone number, whether to fill in or not will affect the speed of withdrawal, Colombia payment is required
+email
+否
+string，最大长度255  string, up to 255 in length
+邮箱，填不填会影响出款速度，哥伦比亚代付必填  Email address, whether to fill in or not will affect the speed of withdrawal, and Colombia payment is required
+identity
+否
+string，最大长度255  string, up to 255 in length
+身份证号，填不填会影响出款速度，哥伦比亚代付必填  ID number, whether to fill in or not will affect the speed of withdrawal, and Colombia payment is required
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+data
+是
+object
+数据体（以下为数据体属性）  Data body (the following are the attributes of the data body)
+order_sn
+是
+string
+系统订单号  The system order number
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+订单号：
+20250628183239
+付款金额：
+  Payment Amount:
+100
+收款账户名称：
+  Beneficiary Account Name:
+收款账户名称
+银行卡号或收款账号：
+  Bank card number or beneficiary account number:
+银行卡号或者收款账户账号
+附加信息：
+  Additional information:
+测试产品
+回调地址：
+  Callback address:
+http://127.0.0.1:8000
+pix：
+请输入pix
+pix_type：
+请输入pix_type
+ifsc：
+请输入ifsc
+银行编码：
+  Bank Code:
+请输入银行编码，银行编码/钱包编码(OVO、GOPAY、GOPAYDRIVER、SHOPEEPAY、LINKAJA、DANA)
+手机号：
+  Mobile phone number:
+手机号，填不填会影响出款速度
+邮箱：
+  Mailbox:
+邮箱，填不填会影响出款速度
+身份证：
+  Identity card:
+身份证，填不填会影响出款速度
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+YtkYDsiddSNjDzVr/8W+ihmTZVyVn143Mv1Zb0QYIUDlSG2O12l9DpJwovHsEltDild9lP6EJe+RYFHTBghP9quJ0/tB0/dLlU+WjekIeEBkVsOVoG8YS8AsI+1tbLKGpo3RCrhAjv7cv2K6MiATtvXMUm3P8Hrc+YmmczMy4nrvRGqKwCLp3EVQe0MQ6WrWIXAU54j1GwiBrPy76EcSx8n/0Q5ApfVIKF5TwgKSPULjzO0uBn6eG74Dbx+Cu7oi9qqIZrCLPYqgzaUg1CyKGnnDuWkVPOA/mfxrJyPeCVD1KiUhGScphttyh1yhReDDFh1sPGnKT3yasA1DM5c/Yw==
+  Submit a request
+测试请求结果  Test the results of the request
+待签名字符串：amount=100&attach=测试产品&merchant_no=ruNkLnM3bncNAzd7&notify_url=http://127.0.0.1:8000&out_trade_sn=20250628183239&sign_type=MD5withRsa&trade_account=收款账户名称&trade_number=银行卡号或者收款账户账号
+签名结果：YtkYDsiddSNjDzVr/8W+ihmTZVyVn143Mv1Zb0QYIUDlSG2O12l9DpJwovHsEltDild9lP6EJe+RYFHTBghP9quJ0/tB0/dLlU+WjekIeEBkVsOVoG8YS8AsI+1tbLKGpo3RCrhAjv7cv2K6MiATtvXMUm3P8Hrc+YmmczMy4nrvRGqKwCLp3EVQe0MQ6WrWIXAU54j1GwiBrPy76EcSx8n/0Q5ApfVIKF5TwgKSPULjzO0uBn6eG74Dbx+Cu7oi9qqIZrCLPYqgzaUg1CyKGnnDuWkVPOA/mfxrJyPeCVD1KiUhGScphttyh1yhReDDFh1sPGnKT3yasA1DM5c/Yw==
+十二、代付回调通知  12. Notice of payment callback
+报文参数  Packet parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+order_sn
+是
+string，最大长度50  string, up to 50 in length
+系统订单号  The system order number
+amount
+是
+string
+付款金额  The amount of the payment
+pay_time
+是
+string
+支付时间，yyyy-MM-dd HH:mm:ss  Payment time, yyyy-MM-dd HH:mm:ss
+attach
+否
+string
+附加信息  Additional Information
+trade_status
+是
+string
+支付状态： pending 未支付 success 支付成功 rejected 被拒绝 failed 支付失败
+Payment Status: Pending Successful Rejected Rejected Failed Payment Failed
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名，不参与签名  Signing, not participating in the signature
+模拟回调  Simulate callbacks
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+订单号：
+20250628183239
+系统订单号：
+  System Order Number:
+20250628183239
+付款金额：
+  Payment Amount:
+100
+付款时间：
+  Payment Time:
+2025-06-28 18:32:39
+支付状态：
+  Payment Status:
+success
+附加信息：
+  Additional information:
+测试回调
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+mP6Q5amFg00g6xLjIUM9Idghbt0a63nLebAVR2rqNkLgmZVYWP3O/jQCSLvwtKNBZvdijA3g61H28WjUnfygTRuTumonPKL+xt0/05PFoE4VkWVJciPLkQyAqlafJuf1T71jVUBdfejR2yfpyvymf5W1ygWvF4j7b5pCGbHUlxqlJMZu48tPGCC4kW71FqKMuLvsRFwgCG996s42qF4oo3YXKiTjuIOQYvyrXi9RGC1Vv2G/2KrAzEalf9WCZw2N//X9K9yzu7ILeEbBa+C7W9AMBfFKA2ELnLA62GhoGzuIn03QXohvMxPhGh+KS020I57iQnmzOSD7BUWsPllv+g==
+  Submit a request
+测试请求结果  Test the results of the request
+十三、查询代付单接口  13. Query the interface of the payment order
+请求地址  The address of the request
+https://{请求地址}/gw-api/payout/query
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+order_sn
+是
+string，最大长度50  string, up to 50 in length
+系统订单号  The system order number
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+data
+是
+object
+数据体（以下为数据体属性）  Data body (the following are the attributes of the data body)
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+out_trade_sn
+是
+string，最大长度50  string, up to 50 in length
+商户订单号  Merchant order number
+order_sn
+是
+string，最大长度50  string, up to 50 in length
+系统订单号  The system order number
+amount
+是
+decimal，保留两位小数  decimal, with two decimal places
+付款金额  The amount of the payment
+payment_time
+是
+string
+支付时间，yyyy-MM-dd HH:mm:ss  Payment time, yyyy-MM-dd HH:mm:ss
+trade_status
+是
+string
+支付状态： pending 未支付 success 支付成功 rejected 支付被驳回 failed 支付失败
+Payment Status: Pending Unpaid Success Successful Rejected Payment Rejected Failed Payment Failed
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+订单号：
+20250628183239
+系统订单号：
+  System Order Number:
+20250628183239
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+Hjy7o97h3P3e+hnd+jVQzKhOAzjyhJZnRllrVvMpkw8X8hpbxXS19d82zh6+t1nboGvIOyJVT8Vzd28XTIMoc4ItHM8mKDCU58+oAbW5baSY365AxtZDn/34WUw5srSz+XI81tIf88mbD5AbWhDZdLmbNYen+UdHhg/hW6adkbNH9PTqCcUrHbNf9oB0ctirl3GPr38jV6AXuH9dTrxrITZYUYn4HGhRAd1Dcfc8DdHITnpqLEmCdaARR0rW4NizN1Qq/1SjOAHzn8yzPdcPqQ5fv8eE1589CA4wWBxokDI9mDx0kCxmIoG91y7SwcIt60s6zAOzPmrdb8QsYkFMXA==
+  Submit a request
+测试请求结果  Test the results of the request
+十四、查询银行代码接口  14. Query bank code interface
+请求地址  The address of the request
+https://{请求地址}/gw-api/bank-code
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+data
+是
+array
+数据体（以下为数据体属性）  Data body (the following are the attributes of the data body)
+bank_code
+是
+string
+银行代码  Bank code
+bank_name
+是
+string，最大长度50  string, up to 50 in length
+银行名称  The name of the bank
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+DLFIMbsw/+8MftpGUqHa3gdAUNr0p2j9L7PbXE/UHSqCMJF9vYTvbB78NyTfCtHFNKRcm+JmIWw3frm5CfB9Rwnvex5qraapDuaPV19sybyGQK1rss2UJT0SCDCYhoPfVRDpfELWRgNB4NAGxJrT14KOWprlVLx0OYiGhoTRMNpK4XeYtEoxDhI+28F0lOc1aHyJgMYTeiQRBpBN67HRQNuqsa5Ktc6PVipdGVkK/u5Wx++yGKDBxZHkSrrziNeYF5wcmXxy5dT5q7sAfCJEE9l8VmOImWn8PUk9UCftZYG/16xJhAWjP6jDIwaj0ZZJFA1MzatwIbLM+thLKciPag==
+  Submit a request
+测试请求结果  Test the results of the request
+十五、查询用户余额  15. Inquire about the user's balance
+请求地址  The address of the request
+https://{请求地址}/gw-api/balance/query
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+data
+是
+object
+数据体（以下为数据体属性）  Data body (the following are the attributes of the data body)
+currency
+是
+string
+币种  Currency
+balance
+是
+string
+全部余额  Full balance
+usable_balance
+是
+string
+可用余额  Available balance
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+DLFIMbsw/+8MftpGUqHa3gdAUNr0p2j9L7PbXE/UHSqCMJF9vYTvbB78NyTfCtHFNKRcm+JmIWw3frm5CfB9Rwnvex5qraapDuaPV19sybyGQK1rss2UJT0SCDCYhoPfVRDpfELWRgNB4NAGxJrT14KOWprlVLx0OYiGhoTRMNpK4XeYtEoxDhI+28F0lOc1aHyJgMYTeiQRBpBN67HRQNuqsa5Ktc6PVipdGVkK/u5Wx++yGKDBxZHkSrrziNeYF5wcmXxy5dT5q7sAfCJEE9l8VmOImWn8PUk9UCftZYG/16xJhAWjP6jDIwaj0ZZJFA1MzatwIbLM+thLKciPag==
+  Submit a request
+测试请求结果  Test the results of the request
+十六、使用utr查单  16. Use UTR to check the list
+请求地址  The address of the request
+https://{请求地址}/gw-api/utr/query
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+utr
+是
+int
+12位utr
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+data
+是
+object
+数据体（以下为数据体属性），只有当code为100时才有data
+Data body (the following is the data body attribute), data is available only when the code is 100
+status
+是
+string
+订单状态，success-已完成，pending-可补单
+Order Status, success-completed, pending - replenishable order
+order_sn
+是
+string，最大长度50  string, up to 50 in length
+平台订单号，只有当status为success时才有
+The platform order number, which is only available when the status is success
+amount
+是
+decimal，保留两位小数  decimal, with two decimal places
+付款金额  The amount of the payment
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+utr：
+202506281832
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+go0M9l+c7yMrRVdxqI9XlqFm+kuF23CnEZ80LM4uHGC/XokRH6D+s3qzNOxuwxzhEyvJYcnq0FL6BoKZqxqH1S4qc+ja0GWXd3FUKAzl6Xiha2XVSpw9/r420z9CQtJb67G1qABS/x481YD6Vm/xXxoIeDKuO2L4HZpuL3ely5aqWUIhGu+QiB13Gcx7EpKgRkJaoOcfxHJ0OZfwtk7E9jEK+YA7L23kPCTgkdYjS9so89KkGa5jeYEpvibQKZmm+36e4ZqWBNY987uYXnoOOQFM8ogV7Fu6Alxzft4C55BugaeakkmJLe3Ty0hqDjw01ipqGKTE6a7VMxjorNefeg==
+  Submit a request
+测试请求结果  Test the results of the request
+十七、使用utr补单  17. Use UTR to make up the order
+请求地址  The address of the request
+https://{请求地址}/gw-api/utr/confirm
+请求参数  Request parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+merchant_no
+是
+string
+支付系统提供给合作商户的“商户号”  The "merchant number" provided by the payment system to the participating merchant
+utr
+是
+int
+12位utr
+order_sn
+否
+string，最大长度50  string, up to 50 in length
+平台订单号，和商户订单号必须传一个  The platform order number and the merchant order number must be passed along
+out_trade_sn
+否
+string，最大长度50  string, up to 50 in length
+商户订单号，和平台订单号必须传一个  The merchant order number and the platform order number must be passed along
+sign_type
+是
+string
+签名方式，固定传MD5withRsa或MD5  Signature mode, fixed transmission MD5withRsa or MD5
+sign
+是
+string
+签名  signature
+响应参数  Response parameters
+  The name of the parameter
+  Required
+  type
+  illustrate
+code
+是
+string
+请求状态，100-成功，其他失败  Request Status, 100 - Succeeded, Other Failed
+message
+是
+string
+请求信息  Request Information
+请求示例  Sample request
+商户号：
+  Merchant ID:
+ruNkLnM3bncNAzd7
+utr：
+202506281832
+订单号：
+20250628183239
+系统订单号：
+  System Order Number:
+20250628183239
+签名方式：
+  Signature Method:
+MD5withRsa
+签名：
+  Signature:
+XHx6LO9isJij+qAall148j4sckQ2g3CPOqig0h2Pe4jRqg5w2gM3qh2DCd2MKIZrKkitHSEjk1PzZox44gdX7BoxWP8WYc3DFlQRPlHSNXNb8JBMZQh7OT+5cvHQPR7kdNFOVjpuFI5XuEFMx5OSupN/jjRvpSsMZlbqWNIdIxnTC2mmsGAdA1cuY9S6d5EQwMtDG+OsmDZ2VfClQ0jv9JPebosETeEsczctnbk/ZjQ5QmlqSmAKanCrEkOaxQiXTcaC2IwNwzedjQz9oERRYaEfUrMRkDBdkGRpsmH9mqVj4t5qCQD9iHoCMOgtub+P+wCoikHv/4X+e0lAOdLzmQ==
+  Submit a request

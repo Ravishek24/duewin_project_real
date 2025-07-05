@@ -146,13 +146,20 @@ const launchGameController = async (req, res) => {
     
     // Check if user has balance to play
     if (!balanceResult.success || balanceResult.balance <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No funds available in third-party wallet',
-        suggestion: 'Please transfer funds from your main wallet to third-party wallet first',
-        endpoint: '/api/seamless-wallet/prepare-for-game',
-        mainWalletBalance: req.user.wallet_balance || 0
-      });
+      console.log('💰 No balance in third-party wallet, attempting automatic transfer...');
+      const transferResult = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
+      
+      if (!transferResult.success) {
+        return res.status(400).json({
+          success: false,
+          message: 'No funds available in third-party wallet and automatic transfer failed',
+          suggestion: 'Please transfer funds from your main wallet to third-party wallet first',
+          endpoint: '/api/seamless-wallet/prepare-for-game',
+          mainWalletBalance: req.user.wallet_balance || 0
+        });
+      }
+      
+      console.log('✅ Automatic transfer successful, continuing with game launch...');
     }
     
     const result = await getGameUrl(userId, gameId, language);

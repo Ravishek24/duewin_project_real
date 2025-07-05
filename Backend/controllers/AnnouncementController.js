@@ -37,7 +37,7 @@ const getLatestAnnouncements = async (req, res) => {
             include: [{
                 model: User,
                 as: 'creator',
-                attributes: ['username']
+                attributes: ['user_name']
             }],
             order: [['created_at', 'DESC']],
             limit: 5
@@ -67,7 +67,7 @@ const getAllAnnouncements = async (req, res) => {
             include: [{
                 model: User,
                 as: 'creator',
-                attributes: ['username']
+                attributes: ['user_name']
             }],
             order: [['created_at', 'DESC']],
             limit: parseInt(limit),

@@ -295,6 +295,530 @@ const transferFromThirdPartyToMain = async (req, res) => {
   }
 };
 
+// Controller to get seamless slot game history
+const getSeamlessSlotHistoryController = async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { page = 1, limit = 20, provider, gameId, startDate, endDate, type } = req.query;
+        
+        // Import the service
+        const { getSeamlessTransactionHistory } = require('../services/walletServices');
+        
+        // Build where clause for filtering
+        let whereClause = { user_id: userId };
+        
+        if (provider) {
+            whereClause.provider = provider;
+        }
+        
+        if (gameId) {
+            whereClause.game_id = gameId;
+        }
+        
+        if (type) {
+            whereClause.type = type;
+        }
+        
+        if (startDate || endDate) {
+            whereClause.created_at = {};
+            if (startDate) {
+                whereClause.created_at.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                whereClause.created_at.$lte = new Date(endDate);
+            }
+        }
+        
+        // Get transactions with enhanced processing
+        const SeamlessTransaction = require('../models/SeamlessTransaction');
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        
+        // Get total count
+        const total = await SeamlessTransaction.count({
+            where: whereClause
+        });
+        
+        // Get transactions with pagination
+        const transactions = await SeamlessTransaction.findAll({
+            where: whereClause,
+            order: [['created_at', 'DESC']],
+            limit: parseInt(limit),
+            offset: offset,
+            include: [
+                {
+                    model: require('../models/User'),
+                    as: 'seamlesstransactionuser',
+                    attributes: ['user_name', 'user_id']
+                }
+            ]
+        });
+        
+        // Process transactions to calculate profit/loss and format data
+        const processedTransactions = transactions.map(transaction => {
+            const amount = parseFloat(transaction.amount);
+            const isBet = transaction.type === 'debit';
+            const isWin = transaction.type === 'credit';
+            
+            // Calculate profit/loss
+            let profitLoss = 0;
+            if (isBet) {
+                profitLoss = -amount; // Negative for bets
+            } else if (isWin) {
+                profitLoss = amount; // Positive for wins
+            }
+            
+            return {
+                order_no: transaction.transaction_id,
+                provider: transaction.provider,
+                game_id: transaction.game_id,
+                game_id_hash: transaction.game_id_hash,
+                round_id: transaction.round_id,
+                type: transaction.type,
+                total_bet: isBet ? amount : 0,
+                winnings: isWin ? amount : 0,
+                profit_loss: profitLoss,
+                profit_loss_formatted: profitLoss >= 0 ? `+${profitLoss.toFixed(2)}` : `${profitLoss.toFixed(2)}`,
+                balance_before: parseFloat(transaction.wallet_balance_before || 0),
+                balance_after: parseFloat(transaction.wallet_balance_after || 0),
+                is_freeround_bet: transaction.is_freeround_bet,
+                is_freeround_win: transaction.is_freeround_win,
+                is_jackpot_win: transaction.is_jackpot_win,
+                jackpot_contribution: parseFloat(transaction.jackpot_contribution_in_amount || 0),
+                status: transaction.status,
+                created_at: transaction.created_at,
+                updated_at: transaction.updated_at
+            };
+        });
+        
+        // Calculate summary statistics
+        const summary = {
+            total_transactions: total,
+            total_bets: processedTransactions.filter(t => t.type === 'debit').length,
+            total_wins: processedTransactions.filter(t => t.type === 'credit').length,
+            total_bet_amount: processedTransactions
+                .filter(t => t.type === 'debit')
+                .reduce((sum, t) => sum + t.total_bet, 0),
+            total_winnings: processedTransactions
+                .filter(t => t.type === 'credit')
+                .reduce((sum, t) => sum + t.winnings, 0),
+            net_profit_loss: processedTransactions
+                .reduce((sum, t) => sum + t.profit_loss, 0),
+            net_profit_loss_formatted: processedTransactions
+                .reduce((sum, t) => sum + t.profit_loss, 0) >= 0 
+                ? `+${processedTransactions.reduce((sum, t) => sum + t.profit_loss, 0).toFixed(2)}`
+                : `${processedTransactions.reduce((sum, t) => sum + t.profit_loss, 0).toFixed(2)}`
+        };
+        
+        // Group by provider for additional insights
+        const providerStats = {};
+        processedTransactions.forEach(transaction => {
+            if (!providerStats[transaction.provider]) {
+                providerStats[transaction.provider] = {
+                    total_bets: 0,
+                    total_wins: 0,
+                    total_bet_amount: 0,
+                    total_winnings: 0,
+                    net_profit_loss: 0
+                };
+            }
+            
+            if (transaction.type === 'debit') {
+                providerStats[transaction.provider].total_bets++;
+                providerStats[transaction.provider].total_bet_amount += transaction.total_bet;
+                providerStats[transaction.provider].net_profit_loss -= transaction.total_bet;
+            } else if (transaction.type === 'credit') {
+                providerStats[transaction.provider].total_wins++;
+                providerStats[transaction.provider].total_winnings += transaction.winnings;
+                providerStats[transaction.provider].net_profit_loss += transaction.winnings;
+            }
+        });
+        
+        return res.status(200).json({
+            success: true,
+            data: {
+                transactions: processedTransactions,
+                summary: summary,
+                provider_stats: providerStats,
+                pagination: {
+                    current_page: parseInt(page),
+                    total_pages: Math.ceil(total / parseInt(limit)),
+                    total_records: total,
+                    limit: parseInt(limit),
+                    has_next_page: parseInt(page) < Math.ceil(total / parseInt(limit)),
+                    has_prev_page: parseInt(page) > 1
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error fetching seamless slot history:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error fetching seamless slot history.' 
+        });
+    }
+};
+
+// Controller to get live casino game history
+const getLiveCasinoHistoryController = async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { page = 1, limit = 20, provider, gameId, startDate, endDate, type } = req.query;
+        
+        // Import the service
+        const { getSeamlessTransactionHistory } = require('../services/walletServices');
+        
+        // Build where clause for filtering - focus on live casino providers
+        let whereClause = { user_id: userId };
+        
+        // Live casino providers (these are the main live casino providers)
+        const liveCasinoProviders = ['BombayLive', 'es', 'ev', 'ag', 'vg', 'ez', 'ol', 'bl'];
+        
+        if (provider) {
+            if (liveCasinoProviders.includes(provider)) {
+                whereClause.provider = provider;
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid provider for live casino. Valid providers: BombayLive, es, ev, ag, vg, ez, ol, bl'
+                });
+            }
+        } else {
+            // If no specific provider, filter by live casino providers
+            whereClause.provider = { [require('sequelize').Op.in]: liveCasinoProviders };
+        }
+        
+        if (gameId) {
+            whereClause.game_id = gameId;
+        }
+        
+        if (type) {
+            whereClause.type = type;
+        }
+        
+        if (startDate || endDate) {
+            whereClause.created_at = {};
+            if (startDate) {
+                whereClause.created_at.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                whereClause.created_at.$lte = new Date(endDate);
+            }
+        }
+        
+        // Get transactions with enhanced processing
+        const SeamlessTransaction = require('../models/SeamlessTransaction');
+        const { Op } = require('sequelize');
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        
+        // Get total count
+        const total = await SeamlessTransaction.count({
+            where: whereClause
+        });
+        
+        // Get transactions with pagination
+        const transactions = await SeamlessTransaction.findAll({
+            where: whereClause,
+            order: [['created_at', 'DESC']],
+            limit: parseInt(limit),
+            offset: offset,
+            include: [
+                {
+                    model: require('../models/User'),
+                    as: 'seamlesstransactionuser',
+                    attributes: ['user_name', 'user_id']
+                }
+            ]
+        });
+        
+        // Process transactions to calculate profit/loss and format data
+        const processedTransactions = transactions.map(transaction => {
+            const amount = parseFloat(transaction.amount);
+            const isBet = transaction.type === 'debit';
+            const isWin = transaction.type === 'credit';
+            
+            // Calculate profit/loss
+            let profitLoss = 0;
+            if (isBet) {
+                profitLoss = -amount; // Negative for bets
+            } else if (isWin) {
+                profitLoss = amount; // Positive for wins
+            }
+            
+            return {
+                order_no: transaction.transaction_id,
+                provider: transaction.provider,
+                game_id: transaction.game_id,
+                game_id_hash: transaction.game_id_hash,
+                round_id: transaction.round_id,
+                type: transaction.type,
+                total_bet: isBet ? amount : 0,
+                winnings: isWin ? amount : 0,
+                profit_loss: profitLoss,
+                profit_loss_formatted: profitLoss >= 0 ? `+${profitLoss.toFixed(2)}` : `${profitLoss.toFixed(2)}`,
+                balance_before: parseFloat(transaction.wallet_balance_before || 0),
+                balance_after: parseFloat(transaction.wallet_balance_after || 0),
+                is_freeround_bet: transaction.is_freeround_bet,
+                is_freeround_win: transaction.is_freeround_win,
+                is_jackpot_win: transaction.is_jackpot_win,
+                jackpot_contribution: parseFloat(transaction.jackpot_contribution_in_amount || 0),
+                status: transaction.status,
+                created_at: transaction.created_at,
+                updated_at: transaction.updated_at
+            };
+        });
+        
+        // Calculate summary statistics
+        const summary = {
+            game_type: 'live_casino',
+            total_transactions: total,
+            total_bets: processedTransactions.filter(t => t.type === 'debit').length,
+            total_wins: processedTransactions.filter(t => t.type === 'credit').length,
+            total_bet_amount: processedTransactions
+                .filter(t => t.type === 'debit')
+                .reduce((sum, t) => sum + t.total_bet, 0),
+            total_winnings: processedTransactions
+                .filter(t => t.type === 'credit')
+                .reduce((sum, t) => sum + t.winnings, 0),
+            net_profit_loss: processedTransactions
+                .reduce((sum, t) => sum + t.profit_loss, 0),
+            net_profit_loss_formatted: processedTransactions
+                .reduce((sum, t) => sum + t.profit_loss, 0) >= 0 
+                ? `+${processedTransactions.reduce((sum, t) => sum + t.profit_loss, 0).toFixed(2)}`
+                : `${processedTransactions.reduce((sum, t) => sum + t.profit_loss, 0).toFixed(2)}`
+        };
+        
+        // Group by provider for additional insights
+        const providerStats = {};
+        processedTransactions.forEach(transaction => {
+            if (!providerStats[transaction.provider]) {
+                providerStats[transaction.provider] = {
+                    total_bets: 0,
+                    total_wins: 0,
+                    total_bet_amount: 0,
+                    total_winnings: 0,
+                    net_profit_loss: 0
+                };
+            }
+            
+            if (transaction.type === 'debit') {
+                providerStats[transaction.provider].total_bets++;
+                providerStats[transaction.provider].total_bet_amount += transaction.total_bet;
+                providerStats[transaction.provider].net_profit_loss -= transaction.total_bet;
+            } else if (transaction.type === 'credit') {
+                providerStats[transaction.provider].total_wins++;
+                providerStats[transaction.provider].total_winnings += transaction.winnings;
+                providerStats[transaction.provider].net_profit_loss += transaction.winnings;
+            }
+        });
+        
+        return res.status(200).json({
+            success: true,
+            data: {
+                game_type: 'live_casino',
+                transactions: processedTransactions,
+                summary: summary,
+                provider_stats: providerStats,
+                pagination: {
+                    current_page: parseInt(page),
+                    total_pages: Math.ceil(total / parseInt(limit)),
+                    total_records: total,
+                    limit: parseInt(limit),
+                    has_next_page: parseInt(page) < Math.ceil(total / parseInt(limit)),
+                    has_prev_page: parseInt(page) > 1
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error fetching live casino history:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error fetching live casino history.' 
+        });
+    }
+};
+
+// Controller to get sports betting history
+const getSportsBettingHistoryController = async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { page = 1, limit = 20, provider, gameId, startDate, endDate, type } = req.query;
+        
+        // Import the service
+        const { getSeamlessTransactionHistory } = require('../services/walletServices');
+        
+        // Build where clause for filtering - focus on sports betting providers
+        let whereClause = { user_id: userId };
+        
+        // Sports betting providers (these are the main sports betting providers)
+        const sportsProviders = ['ds', 'dt', 'g24']; // Delasport, Digitain, G24 are known for sports
+        
+        if (provider) {
+            if (sportsProviders.includes(provider)) {
+                whereClause.provider = provider;
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid provider for sports betting. Valid providers: ds, dt, g24'
+                });
+            }
+        } else {
+            // If no specific provider, filter by sports providers
+            whereClause.provider = { [require('sequelize').Op.in]: sportsProviders };
+        }
+        
+        if (gameId) {
+            whereClause.game_id = gameId;
+        }
+        
+        if (type) {
+            whereClause.type = type;
+        }
+        
+        if (startDate || endDate) {
+            whereClause.created_at = {};
+            if (startDate) {
+                whereClause.created_at.$gte = new Date(startDate);
+            }
+            if (endDate) {
+                whereClause.created_at.$lte = new Date(endDate);
+            }
+        }
+        
+        // Get transactions with enhanced processing
+        const SeamlessTransaction = require('../models/SeamlessTransaction');
+        const { Op } = require('sequelize');
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        
+        // Get total count
+        const total = await SeamlessTransaction.count({
+            where: whereClause
+        });
+        
+        // Get transactions with pagination
+        const transactions = await SeamlessTransaction.findAll({
+            where: whereClause,
+            order: [['created_at', 'DESC']],
+            limit: parseInt(limit),
+            offset: offset,
+            include: [
+                {
+                    model: require('../models/User'),
+                    as: 'seamlesstransactionuser',
+                    attributes: ['user_name', 'user_id']
+                }
+            ]
+        });
+        
+        // Process transactions to calculate profit/loss and format data
+        const processedTransactions = transactions.map(transaction => {
+            const amount = parseFloat(transaction.amount);
+            const isBet = transaction.type === 'debit';
+            const isWin = transaction.type === 'credit';
+            
+            // Calculate profit/loss
+            let profitLoss = 0;
+            if (isBet) {
+                profitLoss = -amount; // Negative for bets
+            } else if (isWin) {
+                profitLoss = amount; // Positive for wins
+            }
+            
+            return {
+                order_no: transaction.transaction_id,
+                provider: transaction.provider,
+                game_id: transaction.game_id,
+                game_id_hash: transaction.game_id_hash,
+                round_id: transaction.round_id,
+                type: transaction.type,
+                total_bet: isBet ? amount : 0,
+                winnings: isWin ? amount : 0,
+                profit_loss: profitLoss,
+                profit_loss_formatted: profitLoss >= 0 ? `+${profitLoss.toFixed(2)}` : `${profitLoss.toFixed(2)}`,
+                balance_before: parseFloat(transaction.wallet_balance_before || 0),
+                balance_after: parseFloat(transaction.wallet_balance_after || 0),
+                is_freeround_bet: transaction.is_freeround_bet,
+                is_freeround_win: transaction.is_freeround_win,
+                is_jackpot_win: transaction.is_jackpot_win,
+                jackpot_contribution: parseFloat(transaction.jackpot_contribution_in_amount || 0),
+                status: transaction.status,
+                created_at: transaction.created_at,
+                updated_at: transaction.updated_at
+            };
+        });
+        
+        // Calculate summary statistics
+        const summary = {
+            game_type: 'sports_betting',
+            total_transactions: total,
+            total_bets: processedTransactions.filter(t => t.type === 'debit').length,
+            total_wins: processedTransactions.filter(t => t.type === 'credit').length,
+            total_bet_amount: processedTransactions
+                .filter(t => t.type === 'debit')
+                .reduce((sum, t) => sum + t.total_bet, 0),
+            total_winnings: processedTransactions
+                .filter(t => t.type === 'credit')
+                .reduce((sum, t) => sum + t.winnings, 0),
+            net_profit_loss: processedTransactions
+                .reduce((sum, t) => sum + t.profit_loss, 0),
+            net_profit_loss_formatted: processedTransactions
+                .reduce((sum, t) => sum + t.profit_loss, 0) >= 0 
+                ? `+${processedTransactions.reduce((sum, t) => sum + t.profit_loss, 0).toFixed(2)}`
+                : `${processedTransactions.reduce((sum, t) => sum + t.profit_loss, 0).toFixed(2)}`
+        };
+        
+        // Group by provider for additional insights
+        const providerStats = {};
+        processedTransactions.forEach(transaction => {
+            if (!providerStats[transaction.provider]) {
+                providerStats[transaction.provider] = {
+                    total_bets: 0,
+                    total_wins: 0,
+                    total_bet_amount: 0,
+                    total_winnings: 0,
+                    net_profit_loss: 0
+                };
+            }
+            
+            if (transaction.type === 'debit') {
+                providerStats[transaction.provider].total_bets++;
+                providerStats[transaction.provider].total_bet_amount += transaction.total_bet;
+                providerStats[transaction.provider].net_profit_loss -= transaction.total_bet;
+            } else if (transaction.type === 'credit') {
+                providerStats[transaction.provider].total_wins++;
+                providerStats[transaction.provider].total_winnings += transaction.winnings;
+                providerStats[transaction.provider].net_profit_loss += transaction.winnings;
+            }
+        });
+        
+        return res.status(200).json({
+            success: true,
+            data: {
+                game_type: 'sports_betting',
+                transactions: processedTransactions,
+                summary: summary,
+                provider_stats: providerStats,
+                pagination: {
+                    current_page: parseInt(page),
+                    total_pages: Math.ceil(total / parseInt(limit)),
+                    total_records: total,
+                    limit: parseInt(limit),
+                    has_next_page: parseInt(page) < Math.ceil(total / parseInt(limit)),
+                    has_prev_page: parseInt(page) > 1
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('Error fetching sports betting history:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error fetching sports betting history.' 
+        });
+    }
+};
+
 module.exports = {
     getWalletBalanceController,
     getTransactionHistoryController,
@@ -303,5 +827,8 @@ module.exports = {
     getFirstBonusStatusController,
     initiateWithdrawalController,
     getAllWalletBalances,
-    transferFromThirdPartyToMain
+    transferFromThirdPartyToMain,
+    getSeamlessSlotHistoryController,
+    getLiveCasinoHistoryController,
+    getSportsBettingHistoryController
 };

@@ -39,7 +39,7 @@ const {
       const { 
         page = 1, 
         limit = 10, 
-        admin_status, 
+        status, 
         user_id, 
         start_date, 
         end_date 
@@ -47,7 +47,7 @@ const {
       
       const filters = {};
       
-      if (admin_status) filters.admin_status = admin_status;
+      if (status) filters.status = status;
       if (user_id) filters.user_id = user_id;
       if (start_date) filters.start_date = start_date;
       if (end_date) filters.end_date = end_date;
