@@ -708,21 +708,38 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
             netBetAmount: bet.netBetAmount,
             odds: bet.odds
         });
+        console.log('📊 [EXPOSURE_START] Full bet object received:', JSON.stringify(bet, null, 2));
 
-        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        console.log('🔍 [EXPOSURE_DEBUG] Writing to key:', exposureKey);
+
         const { betType, betValue, netBetAmount, odds } = bet;
+        
+        // CRITICAL FIX: Handle field name variations
+        const actualBetAmount = bet.netBetAmount || bet.betAmount || netBetAmount || 0;
+        console.log('🔍 [EXPOSURE_DEBUG] Bet amount resolved:', {
+            netBetAmount: bet.netBetAmount,
+            betAmount: bet.betAmount,
+            actualBetAmount: actualBetAmount
+        });
 
         // Calculate exposure (potential payout) - convert to integer for Redis
-        const exposure = Math.round(netBetAmount * odds * 100); // Convert to cents
-        
+        const exposure = Math.round(actualBetAmount * odds * 100); // Convert to cents
+        console.log('🔍 [EXPOSURE_DEBUG] Exposure calculation:', {
+            actualBetAmount,
+            odds,
+            exposure,
+            exposureInRupees: exposure / 100
+        });
+
         // Ensure exposure is a valid integer
         if (isNaN(exposure) || exposure < 0) {
-            console.error('❌ [EXPOSURE_ERROR] Invalid exposure calculation:', { netBetAmount, odds, exposure });
+            console.error('❌ [EXPOSURE_ERROR] Invalid exposure calculation:', { actualBetAmount, odds, exposure });
             throw new Error('Invalid exposure calculation');
         }
 
         console.log('💰 [EXPOSURE_CALC] Exposure calculation:', {
-            netBetAmount, odds, exposure, exposureInRupees: exposure / 100,
+            actualBetAmount, odds, exposure, exposureInRupees: exposure / 100,
             exposureKey: exposureKey
         });
 
@@ -849,7 +866,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId) {
             gameType, duration, periodId
         });
 
-        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
@@ -931,7 +948,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId) {
 
 async function getOptimal5DResultByExposure(duration, periodId) {
     try {
-        const exposureKey = `duewin:exposure:5d:${duration}:${periodId}`;
+        const exposureKey = `exposure:5d:${duration}:${periodId}`;
         const betExposures = await redisClient.hgetall(exposureKey);
 
         // Get total bets amount
@@ -1132,7 +1149,7 @@ function findUnbetPositions(betExposures) {
 
 async function resetPeriodExposure(gameType, duration, periodId) {
     try {
-        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
         await redisClient.del(exposureKey);
         logger.info('Period exposure reset', { gameType, duration, periodId });
     } catch (error) {
@@ -2079,7 +2096,7 @@ const getAllMinimumCombinations = async (gameType) => {
 
 async function selectProtectedResultWithExposure(gameType, duration, periodId, timeline) {
     try {
-        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
@@ -2125,7 +2142,7 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                 console.log(`🛡️ CRITICAL: No zero-exposure numbers found, forcing user loss`);
                 
                 // Get all user bets to ensure we select a losing result
-                const betHashKey = `duewin:bets:${gameType}:${duration}:${timeline}:${periodId}`;
+                const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
                 const betsData = await redisClient.hgetall(betHashKey);
                 const userBetOutcomes = new Set();
                 
@@ -2628,7 +2645,7 @@ const markAllBetsAsLost = async (gameType, periodId) => {
 const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'default') => {
     try {
         // FIXED: Use correct Redis hash key pattern that matches bet storage
-        const betHashKey = `duewin:bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
         const betsData = await redisClient.hgetall(betHashKey);
         const uniqueUsers = new Set();
 
@@ -4509,7 +4526,12 @@ async function storeBetInRedis(betData) {
         await redisClient.incrbyfloat(totalKey, betAmount);
 
         // Update exposure tracking
-        await updateBetExposure(gameType, duration, periodId, betData);
+        await updateBetExposure(gameType, duration, periodId, {
+            betType,
+            betValue,
+            netBetAmount: betAmount, // Use betAmount as netBetAmount for this function
+            odds
+        });
 
         logger.info('Bet stored in Redis with exposure tracking', {
             gameType, duration, periodId, userId, betType, betValue, betAmount
