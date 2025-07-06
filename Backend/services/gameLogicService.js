@@ -722,30 +722,30 @@ async function get5DCombinationsBatch(diceValues) {
 
 async function updateBetExposure(gameType, duration, periodId, bet, timeline = 'default') {
     try {
+        console.log('🔍 [EXPOSURE_DEBUG] updateBetExposure called with:', {
+            gameType, duration, periodId, timeline, bet
+        });
+        
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
+        console.log('🔍 [EXPOSURE_DEBUG] Exposure key:', exposureKey);
 
         // CRITICAL FIX: Parse bet_type and calculate missing fields
-        let betType, betValue, odds;
+        let betType, betValue;
         
         if (bet.bet_type) {
             [betType, betValue] = bet.bet_type.split(':');
-            odds = bet.odds || calculateOdds(gameType, betType, betValue);
         } else {
             // Legacy format
             betType = bet.betType;
             betValue = bet.betValue;
-            odds = bet.odds;
         }
         
         // CRITICAL FIX: Handle field name variations
         const actualBetAmount = bet.netBetAmount || bet.amount_after_tax || bet.betAmount || 0;
 
-        // Calculate exposure (potential payout) - convert to integer for Redis
-        const exposure = Math.round(actualBetAmount * odds * 100); // Convert to cents
-
-        // Ensure exposure is a valid integer
-        if (isNaN(exposure) || exposure < 0) {
-            throw new Error('Invalid exposure calculation');
+        // Validate bet amount
+        if (isNaN(actualBetAmount) || actualBetAmount < 0) {
+            throw new Error('Invalid bet amount');
         }
 
         // Update exposure based on game type
@@ -754,20 +754,70 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
             case 'trx_wix':
                 // For number bets, update specific number
                 if (betType === 'NUMBER') {
+                    const numberOdds = 9.0; // Number bets always pay 9.0x
+                    const exposure = Math.round(actualBetAmount * numberOdds * 100); // Convert to cents
                     await redisClient.hincrby(exposureKey, `number:${betValue}`, exposure);
                 }
-                // For other bets, update all matching numbers
+                // For other bets, update all matching numbers with correct odds
                 else {
+                    console.log('🔍 [EXPOSURE_DEBUG] Processing COLOR/SIZE/PARITY bet');
+                    
                     // Ensure combinations are initialized
                     if (!global.wingoCombinations) {
+                        console.log('🔍 [EXPOSURE_DEBUG] Initializing wingo combinations...');
                         await initializeGameCombinations();
                     }
+                    
+                    console.log('🔍 [EXPOSURE_DEBUG] Checking numbers 0-9 for bet:', { betType, betValue });
                     
                     for (let num = 0; num <= 9; num++) {
                         const combo = global.wingoCombinations[num];
                         // Use the correct win checking logic for exposure tracking
                         if (combo && checkWingoWin(betType, betValue, combo)) {
+                            console.log(`🔍 [EXPOSURE_DEBUG] Number ${num} (${combo.color}) wins for bet ${betType}:${betValue}`);
+                            
+                            // Calculate correct odds for this specific number
+                            let correctOdds;
+                            if (betType === 'COLOR') {
+                                if (betValue === 'red') {
+                                    if (combo.color === 'red') {
+                                        correctOdds = 2.0; // Pure red
+                                    } else if (combo.color === 'red_violet') {
+                                        correctOdds = 1.5; // Mixed color
+                                    } else {
+                                        correctOdds = 0; // No win
+                                    }
+                                } else if (betValue === 'green') {
+                                    if (combo.color === 'green') {
+                                        correctOdds = 2.0; // Pure green
+                                    } else if (combo.color === 'green_violet') {
+                                        correctOdds = 1.5; // Mixed color
+                                    } else {
+                                        correctOdds = 0; // No win
+                                    }
+                                } else if (betValue === 'violet') {
+                                    if (combo.color === 'red_violet' || combo.color === 'green_violet') {
+                                        correctOdds = 4.5; // Violet win
+                                    } else {
+                                        correctOdds = 0; // No win
+                                    }
+                                } else {
+                                    correctOdds = 0; // Unknown color
+                                }
+                            } else {
+                                // For other bet types, use standard odds
+                                correctOdds = calculateOdds(gameType, betType, betValue);
+                            }
+                            
+                            console.log(`🔍 [EXPOSURE_DEBUG] Number ${num}: odds=${correctOdds}, betAmount=${actualBetAmount}`);
+                            
+                            // Calculate exposure with correct odds
+                            const exposure = Math.round(actualBetAmount * correctOdds * 100); // Convert to cents
+                            console.log(`🔍 [EXPOSURE_DEBUG] Adding exposure ${exposure} to number ${num}`);
+                            
                             await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
+                        } else {
+                            console.log(`🔍 [EXPOSURE_DEBUG] Number ${num} (${combo?.color}) does NOT win for bet ${betType}:${betValue}`);
                         }
                     }
                 }
@@ -780,9 +830,12 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                     await initializeGameCombinations();
                 }
                 
+                const k3Odds = calculateOdds(gameType, betType, betValue);
+                const k3Exposure = Math.round(actualBetAmount * k3Odds * 100);
+                
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
                     if (combo && checkK3WinCondition(combo, betType, betValue)) {
-                        await redisClient.hincrby(exposureKey, `dice:${key}`, exposure);
+                        await redisClient.hincrby(exposureKey, `dice:${key}`, k3Exposure);
                     }
                 }
                 break;
@@ -791,15 +844,22 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
             case '5d':
                 // For 5D, we'll update exposure without loading all combinations
                 // Store bet-level exposure for later calculation
+                const fiveDOdds = calculateOdds(gameType, betType, betValue);
+                const fiveDExposure = Math.round(actualBetAmount * fiveDOdds * 100);
                 const betKey = `${betType}:${betValue}`;
-                await redisClient.hincrby(exposureKey, `bet:${betKey}`, exposure);
+                await redisClient.hincrby(exposureKey, `bet:${betKey}`, fiveDExposure);
                 break;
         }
 
         // Set expiry
         await redisClient.expire(exposureKey, duration + 300);
 
+        // Debug: Check final exposures
+        const finalExposures = await redisClient.hgetall(exposureKey);
+        console.log('🔍 [EXPOSURE_DEBUG] Final exposures after update:', finalExposures);
+
     } catch (error) {
+        console.error('🔍 [EXPOSURE_DEBUG] Error in updateBetExposure:', error);
         logger.error('Error updating bet exposure', { error: error.message, gameType, periodId });
     }
 }
@@ -2437,12 +2497,13 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
 
         // Check user count for protection
         console.log('👥 [RESULT_USERS] Checking user count for protection...');
-        const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId, timeline);
-        const shouldUseProtectedResult = uniqueUserCount < ENHANCED_USER_THRESHOLD;
-
+        const userCountResult = await getUniqueUserCount(gameType, duration, periodId, timeline);
+        console.log('👥 [USER_COUNT] Enhanced unique user count:', userCountResult);
+        
+        const shouldUseProtectedResult = userCountResult.uniqueUserCount < ENHANCED_USER_THRESHOLD;
         console.log('🔍 [RESULT_USERS] User count check result:', {
             gameType, periodId, timeline,
-            uniqueUserCount,
+            uniqueUserCount: userCountResult.uniqueUserCount,
             shouldUseProtectedResult,
             threshold: ENHANCED_USER_THRESHOLD
         });
@@ -2666,7 +2727,7 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
             }
         }
 
-        console.log('👥 [USER_COUNT] Enhanced unique user count:', {
+        const result = {
             gameType,
             periodId,
             timeline,
@@ -2676,9 +2737,11 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
             uniqueUsers: Array.from(uniqueUsers),
             betHashKey: betHashKey,
             meetsThreshold: uniqueUsers.size >= ENHANCED_USER_THRESHOLD
-        });
+        };
 
-        return uniqueUsers.size;
+        console.log('👥 [USER_COUNT] Enhanced unique user count:', result);
+
+        return result;
     } catch (error) {
         logger.error('Error getting enhanced unique user count', {
             error: error.message,
@@ -2686,7 +2749,17 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
             periodId,
             timeline
         });
-        return 0;
+        return {
+            gameType,
+            periodId,
+            timeline,
+            uniqueUserCount: 0,
+            totalBets: 0,
+            threshold: ENHANCED_USER_THRESHOLD,
+            uniqueUsers: [],
+            betHashKey: `bets:${gameType}:${duration}:${timeline}:${periodId}`,
+            meetsThreshold: false
+        };
     }
 };
 
@@ -3098,6 +3171,20 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
     try {
         // Use net bet amount (after platform fee) for payout calculations
         const betAmount = parseFloat(bet.amount_after_tax || bet.netBetAmount || bet.betAmount || bet.bet_amount || 0);
+        
+        console.log(`💰 [CALC_WINGO_DEBUG] calculateWingoWin called with:`, {
+            betType,
+            betValue,
+            resultColor: result.color,
+            resultNumber: result.number,
+            betAmount,
+            betFields: {
+                amount_after_tax: bet.amount_after_tax,
+                netBetAmount: bet.netBetAmount,
+                betAmount: bet.betAmount,
+                bet_amount: bet.bet_amount
+            }
+        });
 
         switch (betType) {
             case 'NUMBER':
@@ -3109,24 +3196,54 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
 
             case 'COLOR':
                 // Complex color betting with violet mechanics
+                console.log(`💰 [PAYOUT_DEBUG] COLOR bet calculation:`, {
+                    betValue,
+                    resultColor: result.color,
+                    betAmount,
+                    gameType: 'wingo'
+                });
+                
                 if (betValue === 'red') {
+                    console.log(`💰 [PAYOUT_DEBUG] Processing red bet against result color: ${result.color}`);
                     if (result.color === 'red') {
-                        return betAmount * 2.0; // Pure red win
+                        const payout = betAmount * 2.0;
+                        console.log(`💰 [PAYOUT_DEBUG] Red bet on pure red: ${betAmount} × 2.0 = ${payout}`);
+                        return payout; // Pure red win
                     } else if (result.color === 'red_violet') {
-                        return betAmount * 1.5; // Mixed color win
+                        const payout = betAmount * 1.5;
+                        console.log(`💰 [PAYOUT_DEBUG] Red bet on red_violet: ${betAmount} × 1.5 = ${payout}`);
+                        return payout; // Mixed color win
+                    } else {
+                        console.log(`💰 [PAYOUT_DEBUG] Red bet loses on ${result.color}`);
+                        return 0;
                     }
                 } else if (betValue === 'green') {
+                    console.log(`💰 [PAYOUT_DEBUG] Processing green bet against result color: ${result.color}`);
                     if (result.color === 'green') {
-                        return betAmount * 2.0; // Pure green win
+                        const payout = betAmount * 2.0;
+                        console.log(`💰 [PAYOUT_DEBUG] Green bet on pure green: ${betAmount} × 2.0 = ${payout}`);
+                        return payout; // Pure green win
                     } else if (result.color === 'green_violet') {
-                        return betAmount * 1.5; // Mixed color win
+                        const payout = betAmount * 1.5;
+                        console.log(`💰 [PAYOUT_DEBUG] Green bet on green_violet: ${betAmount} × 1.5 = ${payout}`);
+                        return payout; // Mixed color win
+                    } else {
+                        console.log(`💰 [PAYOUT_DEBUG] Green bet loses on ${result.color}`);
+                        return 0;
                     }
                 } else if (betValue === 'violet') {
+                    console.log(`💰 [PAYOUT_DEBUG] Processing violet bet against result color: ${result.color}`);
                     if (result.color === 'red_violet' || result.color === 'green_violet') {
-                        return betAmount * 4.5; // Violet win
+                        const payout = betAmount * 4.5;
+                        console.log(`💰 [PAYOUT_DEBUG] Violet bet on mixed color: ${betAmount} × 4.5 = ${payout}`);
+                        return payout; // Violet win
+                    } else {
+                        console.log(`💰 [PAYOUT_DEBUG] Violet bet loses on ${result.color}`);
+                        return 0;
                     }
                 }
-                break;
+                console.log(`💰 [PAYOUT_DEBUG] Unknown bet value: ${betValue} on ${result.color}`);
+                return 0;
 
             case 'SIZE':
                 // Big (5-9) or Small (0-4) - 2.0x payout
@@ -3145,6 +3262,7 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
                 break;
         }
 
+        console.log(`💰 [CALC_WINGO_DEBUG] No win condition met, returning 0`);
         return 0; // Bet loses
     } catch (error) {
         logger.error('Error calculating Wingo win', {
@@ -3801,10 +3919,21 @@ const calculateWinnings = (bet, result, gameType) => {
         // FIXED: Use comprehensive payout functions for accurate calculations
         let winnings = 0;
         
+        console.log(`💰 [WINNINGS_DEBUG] Bet data for payout calculation:`, {
+            betId: bet.bet_id,
+            betType: bet.bet_type,
+            betAmount: bet.bet_amount,
+            amountAfterTax: bet.amount_after_tax,
+            netBetAmount: bet.netBetAmount,
+            betAmountField: bet.betAmount
+        });
+        
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
+                console.log(`💰 [WINNINGS_DEBUG] Calling calculateWingoWin for ${gameType}`);
                 winnings = calculateWingoWin(bet, result, betType, betValue);
+                console.log(`💰 [WINNINGS_DEBUG] calculateWingoWin returned: ${winnings}`);
                 break;
             case 'fived':
             case '5d':
@@ -5613,7 +5742,14 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                 try {
                     const isWinner = await checkBetWin(bet, result, gameType);
                     if (isWinner) {
+                        console.log(`💰 [PAYOUT_START] About to calculate winnings for bet:`, {
+                            betId: bet.bet_id,
+                            betType: bet.bet_type,
+                            betAmount: bet.bet_amount,
+                            amountAfterTax: bet.amount_after_tax
+                        });
                         const winnings = calculateWinnings(bet, result, gameType);
+                        console.log(`💰 [PAYOUT_END] calculateWinnings returned: ${winnings}`);
 
                         // Update user balance
                         await models.User.increment('wallet_balance', {
