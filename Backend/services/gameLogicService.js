@@ -696,13 +696,14 @@ async function get5DCombinationsBatch(diceValues) {
     }
 }
 
-async function updateBetExposure(gameType, duration, periodId, bet) {
+async function updateBetExposure(gameType, duration, periodId, bet, timeline = 'default') {
     try {
         console.log('📊 [EXPOSURE_START] ==========================================');
         console.log('📊 [EXPOSURE_START] Updating bet exposure:', {
             gameType,
             duration,
             periodId,
+            timeline,
             betType: bet.betType,
             betValue: bet.betValue,
             netBetAmount: bet.netBetAmount,
@@ -710,7 +711,7 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
         });
         console.log('📊 [EXPOSURE_START] Full bet object received:', JSON.stringify(bet, null, 2));
 
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
         console.log('🔍 [EXPOSURE_DEBUG] Writing to key:', exposureKey);
 
         const { betType, betValue, netBetAmount, odds } = bet;
@@ -835,8 +836,14 @@ function checkWinCondition(combination, betType, betValue) {
         case 'NUMBER':
             return combination.number === parseInt(betValue);
         case 'COLOR':
-            if (betValue === 'red' && combination.color === 'red_violet') return true;
-            if (betValue === 'green' && combination.color === 'green_violet') return true;
+            // FIXED: Red bet wins on both 'red' and 'red_violet' numbers
+            if (betValue === 'red') {
+                return combination.color === 'red' || combination.color === 'red_violet';
+            }
+            // FIXED: Green bet wins on both 'green' and 'green_violet' numbers
+            if (betValue === 'green') {
+                return combination.color === 'green' || combination.color === 'green_violet';
+            }
             return combination.color === betValue;
         case 'SIZE':
             return combination.size.toLowerCase() === betValue.toLowerCase();
@@ -859,14 +866,14 @@ function checkK3WinCondition(combination, betType, betValue) {
     }
     return false;
 }
-async function getOptimalResultByExposure(gameType, duration, periodId) {
+async function getOptimalResultByExposure(gameType, duration, periodId, timeline = 'default') {
     try {
         console.log('📊 [OPTIMAL_START] ==========================================');
         console.log('📊 [OPTIMAL_START] Getting optimal result by exposure:', {
-            gameType, duration, periodId
+            gameType, duration, periodId, timeline
         });
 
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
@@ -934,7 +941,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId) {
             case 'fived':
             case '5d':
                 // For 5D, we need a different approach
-                return await getOptimal5DResultByExposure(duration, periodId);
+                return await getOptimal5DResultByExposure(duration, periodId, timeline);
 
             default:
                 throw new Error(`Unknown game type: ${gameType}`);
@@ -946,9 +953,9 @@ async function getOptimalResultByExposure(gameType, duration, periodId) {
     }
 }
 
-async function getOptimal5DResultByExposure(duration, periodId) {
+async function getOptimal5DResultByExposure(duration, periodId, timeline = 'default') {
     try {
-        const exposureKey = `exposure:5d:${duration}:${periodId}`;
+        const exposureKey = `exposure:5d:${duration}:${timeline}:${periodId}`;
         const betExposures = await redisClient.hgetall(exposureKey);
 
         // Get total bets amount
@@ -1147,11 +1154,11 @@ function findUnbetPositions(betExposures) {
     return unbetPositions;
 }
 
-async function resetPeriodExposure(gameType, duration, periodId) {
+async function resetPeriodExposure(gameType, duration, periodId, timeline = 'default') {
     try {
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
         await redisClient.del(exposureKey);
-        logger.info('Period exposure reset', { gameType, duration, periodId });
+        logger.info('Period exposure reset', { gameType, duration, periodId, timeline });
     } catch (error) {
         logger.error('Error resetting period exposure', { error: error.message, gameType, periodId });
     }
@@ -2096,7 +2103,7 @@ const getAllMinimumCombinations = async (gameType) => {
 
 async function selectProtectedResultWithExposure(gameType, duration, periodId, timeline) {
     try {
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
@@ -3524,12 +3531,12 @@ const checkBetWin = async (bet, result, gameType) => {
             case 'wingo':
             case 'trx_wix':
                 // Use in-memory combinations
-                if (!global.wingoCombinatons) {
+                if (!global.wingoCombinations) {
                     console.log('⚠️ Wingo combinations not initialized, initializing now...');
                     await initializeGameCombinations();
                 }
                 
-                const wingoCombo = global.wingoCombinatons[result.number];
+                const wingoCombo = global.wingoCombinations[result.number];
                 if (!wingoCombo) return false;
                 
                 return checkWinCondition(wingoCombo, betType, betValue);
@@ -4531,7 +4538,7 @@ async function storeBetInRedis(betData) {
             betValue,
             netBetAmount: betAmount, // Use betAmount as netBetAmount for this function
             odds
-        });
+        }, 'default');
 
         logger.info('Bet stored in Redis with exposure tracking', {
             gameType, duration, periodId, userId, betType, betValue, betAmount
@@ -4765,7 +4772,7 @@ const storeBetInRedisWithTimeline = async (betData) => {
             betValue,
             netBetAmount,
             odds
-        });
+        }, timeline);
 
         // Set expiry for all keys
         await redisClient.expire(totalKey, 86400);

@@ -91,7 +91,7 @@ const RATE_LIMIT = {
 // Cache Constants
 const CACHE = {
     TTL: 60 * 60, // 1 hour in seconds
-    PREFIX: 'duewin:'
+    PREFIX: ''
 };
 
 // Export all constants
