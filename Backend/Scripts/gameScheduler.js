@@ -428,6 +428,7 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
       schedulerProcessingLocks.add(processKey);
       
       console.log(`🏁 SCHEDULER: Starting period end validation [${gameType}|${duration}s]: ${periodId}`);
+      console.log(`🏁 SCHEDULER: Period details: gameType=${gameType}, duration=${duration}, periodId=${periodId}`);
       
       // ✅ CRITICAL: Strict timing validation to prevent premature processing
       const periodEndTime = periodService.calculatePeriodEndTime(periodId, duration);
@@ -523,14 +524,25 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
           }
           
           console.log(`🎲 SCHEDULER: Generating NEW result for ${periodId} (${finalTimingCheck.toFixed(2)}s after end)`);
+          console.log(`🎲 SCHEDULER: Calling gameLogicService.processGameResults...`);
+          console.log(`🎲 SCHEDULER: Parameters: gameType=${gameType}, duration=${duration}, periodId=${periodId}, timeline=default`);
           
           // Process NEW results using gameLogicService with explicit timeline
+          console.log(`🎲 SCHEDULER: About to call processGameResults...`);
           const gameResult = await gameLogicService.processGameResults(
               gameType, 
               duration, 
               periodId,
               'default' // ✅ Always use default timeline to prevent confusion
           );
+          console.log(`🎲 SCHEDULER: processGameResults returned:`, gameResult);
+          
+          console.log(`🎲 SCHEDULER: processGameResults completed for ${periodId}:`, {
+              success: gameResult.success,
+              source: gameResult.source,
+              protectionMode: gameResult.protectionMode,
+              protectionReason: gameResult.protectionReason
+          });
           
           if (gameResult.success) {
               await publishPeriodResult(

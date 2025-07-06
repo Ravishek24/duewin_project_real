@@ -94,6 +94,8 @@ const ensureModelsInitialized = async () => {
 const { v4: uuidv4 } = require('uuid');
 const referralService = require('./referralService');
 
+
+
 // Updated Risk Thresholds
 const RISK_THRESHOLDS = {
     LOW: {
@@ -494,9 +496,9 @@ async function initializeGameCombinations() {
         console.log('🎲 Initializing game combinations...');
 
         // Initialize Wingo in memory (10 combinations)
-        global.wingoCombinatons = {};
+        global.wingoCombinations = {};
         for (let number = 0; number <= 9; number++) {
-            global.wingoCombinatons[number] = {
+            global.wingoCombinations[number] = {
                 number,
                 color: getColorForNumber(number),
                 size: number >= 5 ? 'Big' : 'Small',
@@ -543,7 +545,7 @@ async function initializeGameCombinations() {
         }
 
         // For TRX_WIX, use same as Wingo
-        global.trxWixCombinations = global.wingoCombinatons;
+        global.trxWixCombinations = global.wingoCombinations;
 
         console.log('✅ Game combinations initialized');
         console.log(`   - Wingo: 10 combinations`);
@@ -696,7 +698,18 @@ async function get5DCombinationsBatch(diceValues) {
 
 async function updateBetExposure(gameType, duration, periodId, bet) {
     try {
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        console.log('📊 [EXPOSURE_START] ==========================================');
+        console.log('📊 [EXPOSURE_START] Updating bet exposure:', {
+            gameType,
+            duration,
+            periodId,
+            betType: bet.betType,
+            betValue: bet.betValue,
+            netBetAmount: bet.netBetAmount,
+            odds: bet.odds
+        });
+
+        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
         const { betType, betValue, netBetAmount, odds } = bet;
 
         // Calculate exposure (potential payout) - convert to integer for Redis
@@ -704,15 +717,12 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
         
         // Ensure exposure is a valid integer
         if (isNaN(exposure) || exposure < 0) {
-            console.error('❌ Invalid exposure calculation:', { netBetAmount, odds, exposure });
+            console.error('❌ [EXPOSURE_ERROR] Invalid exposure calculation:', { netBetAmount, odds, exposure });
             throw new Error('Invalid exposure calculation');
         }
 
-        console.log('💰 Exposure update debug:', {
-            gameType, duration, periodId,
-            bet: { betType, betValue, netBetAmount, odds },
-            exposure: exposure,
-            exposureInRupees: exposure / 100,
+        console.log('💰 [EXPOSURE_CALC] Exposure calculation:', {
+            netBetAmount, odds, exposure, exposureInRupees: exposure / 100,
             exposureKey: exposureKey
         });
 
@@ -730,13 +740,13 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
                     const updatedNumbers = [];
                     
                     // Ensure combinations are initialized
-                    if (!global.wingoCombinatons) {
+                    if (!global.wingoCombinations) {
                         console.log('⚠️ Wingo combinations not initialized, initializing now...');
                         await initializeGameCombinations();
                     }
                     
                     for (let num = 0; num <= 9; num++) {
-                        const combo = global.wingoCombinatons[num];
+                        const combo = global.wingoCombinations[num];
                         if (combo && checkWinCondition(combo, betType, betValue)) {
                             console.log(`📊 Updating exposure for number ${num}: ${exposure} cents (type: ${typeof exposure})`);
                             try {
@@ -794,7 +804,8 @@ async function updateBetExposure(gameType, duration, periodId, bet) {
             exposuresInRupees[key] = `${(parseInt(value) / 100).toFixed(2)}₹`;
         }
         
-        console.log('✅ Current exposures after update (in rupees):', exposuresInRupees);
+        console.log('✅ [EXPOSURE_VERIFY] Current exposures after update (in rupees):', exposuresInRupees);
+        console.log('📊 [EXPOSURE_END] ==========================================');
 
     } catch (error) {
         logger.error('Error updating bet exposure', { error: error.message, gameType, periodId });
@@ -833,32 +844,52 @@ function checkK3WinCondition(combination, betType, betValue) {
 }
 async function getOptimalResultByExposure(gameType, duration, periodId) {
     try {
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        console.log('📊 [OPTIMAL_START] ==========================================');
+        console.log('📊 [OPTIMAL_START] Getting optimal result by exposure:', {
+            gameType, duration, periodId
+        });
+
+        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
+                console.log('🎲 [OPTIMAL_WINGO] Analyzing Wingo exposures...');
                 // Get all exposures
                 const wingoExposures = await redisClient.hgetall(exposureKey);
                 let minExposure = Infinity;
                 let optimalNumber = 0;
 
+                console.log('📊 [OPTIMAL_WINGO] Raw exposures from Redis:', wingoExposures);
+
                 // Check each number
                 for (let num = 0; num <= 9; num++) {
                     const exposure = parseInt(wingoExposures[`number:${num}`] || 0) / 100; // Convert from cents to rupees
+                    console.log(`📊 [OPTIMAL_WINGO] Number ${num}: ${exposure}₹ exposure`);
                     if (exposure < minExposure) {
                         minExposure = exposure;
                         optimalNumber = num;
+                        console.log(`📊 [OPTIMAL_WINGO] New minimum: Number ${num} with ${exposure}₹ exposure`);
                     }
                 }
 
+                console.log('🎯 [OPTIMAL_WINGO] Selected optimal number:', {
+                    number: optimalNumber,
+                    exposure: minExposure,
+                    reason: 'MINIMUM_EXPOSURE'
+                });
+
                 // Ensure combinations are initialized
-                if (!global.wingoCombinatons) {
-                    console.log('⚠️ Wingo combinations not initialized, initializing now...');
+                if (!global.wingoCombinations) {
+                    console.log('⚠️ [OPTIMAL_WINGO] Wingo combinations not initialized, initializing now...');
                     await initializeGameCombinations();
                 }
                 
-                return global.wingoCombinatons[optimalNumber];
+                const result = global.wingoCombinations[optimalNumber];
+                console.log('📊 [OPTIMAL_END] ==========================================');
+                console.log('📊 [OPTIMAL_END] Final optimal result:', result);
+                
+                return result;
 
             case 'k3':
                 // Get all exposures
@@ -900,7 +931,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId) {
 
 async function getOptimal5DResultByExposure(duration, periodId) {
     try {
-        const exposureKey = `exposure:5d:${duration}:${periodId}`;
+        const exposureKey = `duewin:exposure:5d:${duration}:${periodId}`;
         const betExposures = await redisClient.hgetall(exposureKey);
 
         // Get total bets amount
@@ -1101,7 +1132,7 @@ function findUnbetPositions(betExposures) {
 
 async function resetPeriodExposure(gameType, duration, periodId) {
     try {
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
         await redisClient.del(exposureKey);
         logger.info('Period exposure reset', { gameType, duration, periodId });
     } catch (error) {
@@ -2038,248 +2069,17 @@ const getAllMinimumCombinations = async (gameType) => {
 /**
  * NEW: Enhanced user threshold validation with outcome coverage analysis
  */
-const checkEnhancedUserRequirement = async (gameType, duration, periodId, timeline = 'default') => {
+
+
+
+
+
+
+
+
+async function selectProtectedResultWithExposure(gameType, duration, periodId, timeline) {
     try {
-        const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId, timeline);
-        const outcomeAnalysis = await analyzeOutcomeCoverage(gameType, duration, periodId, timeline);
-
-        return {
-            sufficientUsers: uniqueUserCount >= ENHANCED_USER_THRESHOLD,
-            uniqueUserCount,
-            outcomeAnalysis,
-            shouldUseProtectedResult: uniqueUserCount < ENHANCED_USER_THRESHOLD ||
-                outcomeAnalysis.maxUserCoveragePercent > 0.70,
-            protectionReason: uniqueUserCount < ENHANCED_USER_THRESHOLD ?
-                'INSUFFICIENT_USERS' : 'SINGLE_USER_GAMING_DETECTED'
-        };
-    } catch (error) {
-        logger.error('Error checking enhanced user requirement', {
-            error: error.message,
-            gameType,
-            periodId
-        });
-        return {
-            sufficientUsers: false,
-            shouldUseProtectedResult: true,
-            protectionReason: 'ERROR_OCCURRED'
-        };
-    }
-};
-
-/**
- * NEW: Analyze outcome coverage to detect gaming attempts
- */
-const analyzeOutcomeCoverage = async (gameType, duration, periodId, timeline = 'default') => {
-    try {
-        const durationKey = duration === 30 ? '30s' :
-            duration === 60 ? '1m' :
-                duration === 180 ? '3m' :
-                    duration === 300 ? '5m' : '10m';
-
-        // Get all possible results for the game
-        const allPossibleResults = await generateAllPossibleResults(gameType);
-
-        const analysis = {
-            totalOutcomes: allPossibleResults.length,
-            coveredOutcomes: 0,
-            uncoveredOutcomes: [],
-            outcomeBetAmounts: [],
-            userCoverageMap: new Map(),
-            maxUserCoveragePercent: 0,
-            zeroBetOutcomes: [],
-            lowestBetOutcomes: []
-        };
-
-        // Analyze each possible outcome
-        for (const result of allPossibleResults) {
-            const betsOnOutcome = await getBetsOnSpecificOutcome(gameType, duration, periodId, timeline, result);
-            const totalBetAmount = betsOnOutcome.reduce((sum, bet) => sum + parseFloat(bet.netBetAmount || bet.betAmount), 0);
-
-            const outcomeData = {
-                result,
-                totalBetAmount,
-                betCount: betsOnOutcome.length,
-                users: new Set(betsOnOutcome.map(bet => bet.userId))
-            };
-
-            analysis.outcomeBetAmounts.push(outcomeData);
-
-            if (betsOnOutcome.length === 0) {
-                analysis.uncoveredOutcomes.push(result);
-                analysis.zeroBetOutcomes.push(outcomeData);
-            } else {
-                analysis.coveredOutcomes++;
-
-                // Track user coverage for gaming detection
-                outcomeData.users.forEach(userId => {
-                    const currentCoverage = analysis.userCoverageMap.get(userId) || 0;
-                    analysis.userCoverageMap.set(userId, currentCoverage + 1);
-                });
-            }
-        }
-
-        // Calculate maximum user coverage percentage
-        analysis.userCoverageMap.forEach(coverage => {
-            const coveragePercent = coverage / analysis.totalOutcomes;
-            analysis.maxUserCoveragePercent = Math.max(analysis.maxUserCoveragePercent, coveragePercent);
-        });
-
-        // Sort outcomes by bet amount (lowest first)
-        analysis.outcomeBetAmounts.sort((a, b) => a.totalBetAmount - b.totalBetAmount);
-        analysis.lowestBetOutcomes = analysis.outcomeBetAmounts.slice(0, 10);
-
-        logger.info('Outcome coverage analysis completed', {
-            gameType,
-            periodId,
-            totalOutcomes: analysis.totalOutcomes,
-            coveredOutcomes: analysis.coveredOutcomes,
-            uncoveredOutcomes: analysis.uncoveredOutcomes.length,
-            maxUserCoveragePercent: analysis.maxUserCoveragePercent
-        });
-
-        return analysis;
-
-    } catch (error) {
-        logger.error('Error analyzing outcome coverage', {
-            error: error.message,
-            gameType,
-            periodId
-        });
-        return {
-            totalOutcomes: 0,
-            coveredOutcomes: 0,
-            uncoveredOutcomes: [],
-            outcomeBetAmounts: [],
-            zeroBetOutcomes: [],
-            lowestBetOutcomes: []
-        };
-    }
-};
-
-/**
- * NEW: Get bets on a specific outcome
- */
-const getBetsOnSpecificOutcome = async (gameType, duration, periodId, timeline, result) => {
-    try {
-        const durationKey = duration === 30 ? '30s' :
-            duration === 60 ? '1m' :
-                duration === 180 ? '3m' :
-                    duration === 300 ? '5m' : '10m';
-
-        // Get all bet keys for this period
-        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${timeline}:${periodId}:*`);
-        const betsOnOutcome = [];
-
-        for (const key of betKeys) {
-            try {
-                const betData = await redisClient.get(key);
-                if (!betData) continue;
-
-                const bet = JSON.parse(betData);
-
-                // Check if this bet would win with the given result
-                if (checkBetWin(bet, result, gameType)) {
-                    betsOnOutcome.push(bet);
-                }
-            } catch (parseError) {
-                continue;
-            }
-        }
-
-        return betsOnOutcome;
-    } catch (error) {
-        logger.error('Error getting bets on specific outcome', {
-            error: error.message,
-            gameType,
-            periodId
-        });
-        return [];
-    }
-};
-
-/**
- * NEW: Select protected result (zero-bet or lowest-bet)
- */
-const selectProtectedResult = async (gameType, duration, periodId, timeline, outcomeAnalysis) => {
-    try {
-        console.log('🛡️ Enhanced protection mode activated', {
-            gameType,
-            periodId,
-            timeline,
-            zeroBetOutcomes: outcomeAnalysis.zeroBetOutcomes.length,
-            lowestBetAmount: outcomeAnalysis.lowestBetOutcomes[0]?.totalBetAmount || 0
-        });
-
-        // PRIORITY 1: Zero bet outcomes (house wins everything)
-        if (outcomeAnalysis.zeroBetOutcomes.length > 0) {
-            const randomZeroBetResult = outcomeAnalysis.zeroBetOutcomes[
-                Math.floor(Math.random() * outcomeAnalysis.zeroBetOutcomes.length)
-            ];
-
-            console.log('🎯 Selected zero-bet outcome', {
-                result: randomZeroBetResult.result,
-                reason: 'ZERO_BET_OUTCOME'
-            });
-
-            return {
-                result: randomZeroBetResult.result,
-                reason: 'ZERO_BET_OUTCOME',
-                protectionMode: true,
-                expectedPayout: 0,
-                houseEdge: 100
-            };
-        }
-
-        // PRIORITY 2: Lowest bet outcomes
-        if (outcomeAnalysis.lowestBetOutcomes.length > 0) {
-            const lowestBetOutcome = outcomeAnalysis.lowestBetOutcomes[0];
-
-            console.log('🎯 Selected lowest-bet outcome', {
-                result: lowestBetOutcome.result,
-                betAmount: lowestBetOutcome.totalBetAmount,
-                reason: 'LOWEST_BET_OUTCOME'
-            });
-
-            return {
-                result: lowestBetOutcome.result,
-                reason: 'LOWEST_BET_OUTCOME',
-                protectionMode: true,
-                expectedPayout: lowestBetOutcome.totalBetAmount,
-                betCount: lowestBetOutcome.betCount
-            };
-        }
-
-        // FALLBACK: Random result if analysis fails
-        console.warn('⚠️ No protected results found, using random fallback');
-        const fallbackResult = await generateRandomResult(gameType);
-
-        return {
-            result: fallbackResult,
-            reason: 'RANDOM_FALLBACK',
-            protectionMode: true,
-            expectedPayout: null
-        };
-
-    } catch (error) {
-        logger.error('Error selecting protected result', {
-            error: error.message,
-            gameType,
-            periodId
-        });
-
-        // Ultimate fallback
-        const fallbackResult = await generateRandomResult(gameType);
-        return {
-            result: fallbackResult,
-            reason: 'ERROR_FALLBACK',
-            protectionMode: true
-        };
-    }
-};
-
-async function selectProtectedResultWithExposure(gameType, duration, periodId, timeline, outcomeAnalysis) {
-    try {
-        const exposureKey = `exposure:${gameType}:${duration}:${periodId}`;
+        const exposureKey = `duewin:exposure:${gameType}:${duration}:${periodId}`;
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
@@ -2311,18 +2111,85 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                     const selectedNumber = zeroExposureNumbers[randomIndex];
                     console.log(`🛡️ Protected: Using random zero-exposure number ${selectedNumber} from [${zeroExposureNumbers.join(',')}]`);
                     
-                    // Ensure combinations are initialized
-                    if (!global.wingoCombinatons) {
-                        console.log('⚠️ Wingo combinations not initialized, initializing now...');
-                        await initializeGameCombinations();
-                    }
-                    
-                    return global.wingoCombinatons[selectedNumber];
+                                    // Ensure combinations are initialized
+                if (!global.wingoCombinations) {
+                    console.log('⚠️ Wingo combinations not initialized, initializing now...');
+                    await initializeGameCombinations();
                 }
                 
-                // Fallback to minimum exposure
-                console.log(`🔄 No zero-exposure numbers found, using minimum exposure`);
-                return await getOptimalResultByExposure(gameType, duration, periodId);
+                return global.wingoCombinations[selectedNumber];
+                }
+                
+                // CRITICAL FIX: Never fall back to exposure-based selection in protection mode
+                // Instead, force a result that makes the user lose
+                console.log(`🛡️ CRITICAL: No zero-exposure numbers found, forcing user loss`);
+                
+                // Get all user bets to ensure we select a losing result
+                const betHashKey = `duewin:bets:${gameType}:${duration}:${timeline}:${periodId}`;
+                const betsData = await redisClient.hgetall(betHashKey);
+                const userBetOutcomes = new Set();
+                
+                // Collect all outcomes the user bet on
+                for (const [betId, betJson] of Object.entries(betsData)) {
+                    try {
+                        const bet = JSON.parse(betJson);
+                        if (bet.betType === 'COLOR' && bet.betValue === 'red') {
+                            // User bet on red - add red numbers
+                            userBetOutcomes.add(0); userBetOutcomes.add(2); 
+                            userBetOutcomes.add(4); userBetOutcomes.add(6); 
+                            userBetOutcomes.add(8);
+                        } else if (bet.betType === 'COLOR' && bet.betValue === 'green') {
+                            // User bet on green - add green numbers
+                            userBetOutcomes.add(1); userBetOutcomes.add(3); 
+                            userBetOutcomes.add(5); userBetOutcomes.add(7); 
+                            userBetOutcomes.add(9);
+                        } else if (bet.betType === 'NUMBER') {
+                            // User bet on specific number
+                            userBetOutcomes.add(parseInt(bet.betValue));
+                        }
+                    } catch (parseError) {
+                        continue;
+                    }
+                }
+                
+                // Find a number that the user did NOT bet on
+                const losingNumbers = [];
+                for (let num = 0; num <= 9; num++) {
+                    if (!userBetOutcomes.has(num)) {
+                        losingNumbers.push(num);
+                    }
+                }
+                
+                // If user bet on everything, use the number with lowest exposure
+                if (losingNumbers.length === 0) {
+                    console.log(`🛡️ User bet on all numbers, using lowest exposure number`);
+                    let minExposure = Infinity;
+                    let lowestExposureNumber = 0;
+                    
+                    for (let num = 0; num <= 9; num++) {
+                        const exposure = parseInt(wingoExposures[`number:${num}`] || 0);
+                        if (exposure < minExposure) {
+                            minExposure = exposure;
+                            lowestExposureNumber = num;
+                        }
+                    }
+                    
+                    console.log(`🛡️ Selected lowest exposure number: ${lowestExposureNumber}`);
+                    
+                    if (!global.wingoCombinations) {
+                        await initializeGameCombinations();
+                    }
+                    return global.wingoCombinations[lowestExposureNumber];
+                }
+                
+                // Select a random losing number
+                const randomLosingNumber = losingNumbers[Math.floor(Math.random() * losingNumbers.length)];
+                console.log(`🛡️ Selected losing number: ${randomLosingNumber} from [${losingNumbers.join(',')}]`);
+                
+                if (!global.wingoCombinations) {
+                    await initializeGameCombinations();
+                }
+                return global.wingoCombinations[randomLosingNumber];
 
             case 'k3':
                 // Find zero exposure combination
@@ -2351,8 +2218,66 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                     return selected.combo;
                 }
                 
-                // Fallback to minimum exposure
-                return await getOptimalResultByExposure(gameType, duration, periodId);
+                // CRITICAL FIX: Never fall back to exposure-based selection in protection mode
+                console.log(`🛡️ CRITICAL: No zero-exposure K3 combinations found, forcing user loss`);
+                
+                // Get all user bets to ensure we select a losing result
+                const k3BetHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+                const k3BetsData = await redisClient.hgetall(k3BetHashKey);
+                const k3UserBetOutcomes = new Set();
+                
+                // Collect all outcomes the user bet on
+                for (const [betId, betJson] of Object.entries(k3BetsData)) {
+                    try {
+                        const bet = JSON.parse(betJson);
+                        if (bet.betType === 'SUM') {
+                            k3UserBetOutcomes.add(parseInt(bet.betValue));
+                        } else if (bet.betType === 'TRIPLE') {
+                            k3UserBetOutcomes.add(bet.betValue);
+                        }
+                    } catch (parseError) {
+                        continue;
+                    }
+                }
+                
+                // Find combinations that the user did NOT bet on
+                const k3LosingCombinations = [];
+                for (const [key, combo] of Object.entries(global.k3Combinations)) {
+                    const sum = combo.dice_a + combo.dice_b + combo.dice_c;
+                    const triple = combo.dice_a === combo.dice_b && combo.dice_b === combo.dice_c ? 
+                        `${combo.dice_a}${combo.dice_b}${combo.dice_c}` : null;
+                    
+                    const isLosing = !k3UserBetOutcomes.has(sum) && 
+                                   (!triple || !k3UserBetOutcomes.has(triple));
+                    
+                    if (isLosing) {
+                        k3LosingCombinations.push({ key, combo });
+                    }
+                }
+                
+                // If user bet on everything, use the combination with lowest exposure
+                if (k3LosingCombinations.length === 0) {
+                    console.log(`🛡️ User bet on all K3 outcomes, using lowest exposure combination`);
+                    let minExposure = Infinity;
+                    let lowestExposureKey = '1,1,1';
+                    
+                    for (const [key, combo] of Object.entries(global.k3Combinations)) {
+                        const exposure = parseInt(k3Exposures[`dice:${key}`] || 0);
+                        if (exposure < minExposure) {
+                            minExposure = exposure;
+                            lowestExposureKey = key;
+                        }
+                    }
+                    
+                    console.log(`🛡️ Selected lowest exposure K3 combination: ${lowestExposureKey}`);
+                    return global.k3Combinations[lowestExposureKey];
+                }
+                
+                // Select a random losing combination
+                const randomLosingCombo = k3LosingCombinations[Math.floor(Math.random() * k3LosingCombinations.length)];
+                console.log(`🛡️ Selected losing K3 combination: ${randomLosingCombo.key}`);
+                
+                return randomLosingCombo.combo;
 
             case 'fived':
             case '5d':
@@ -2389,8 +2314,74 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                     }
                 }
 
-                // Fallback to minimum exposure
-                return await getOptimal5DResultByExposure(duration, periodId);
+                // CRITICAL FIX: Never fall back to exposure-based selection in protection mode
+                console.log(`🛡️ CRITICAL: No zero-exposure 5D combinations found, forcing user loss`);
+                
+                // Get all user bets to ensure we select a losing result
+                const fivedBetHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+                const fivedBetsData = await redisClient.hgetall(fivedBetHashKey);
+                const fivedUserBetOutcomes = new Set();
+                
+                // Collect all outcomes the user bet on
+                for (const [betId, betJson] of Object.entries(fivedBetsData)) {
+                    try {
+                        const bet = JSON.parse(betJson);
+                        if (bet.betType === 'SUM') {
+                            fivedUserBetOutcomes.add(parseInt(bet.betValue));
+                        } else if (bet.betType === 'POSITION') {
+                            fivedUserBetOutcomes.add(`${bet.betValue}_${bet.position}`);
+                        }
+                    } catch (parseError) {
+                        continue;
+                    }
+                }
+                
+                // Find a combination that the user did NOT bet on
+                const fivedLosingCombinations = [];
+                
+                // Query for combinations with unbet positions or sums
+                let losingQuery = `
+                    SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
+                           sum_value, sum_size, sum_parity, winning_conditions
+                    FROM game_combinations_5d
+                    WHERE 1=1
+                `;
+                
+                // Add conditions for unbet sums
+                const unbetSums = [];
+                for (let sum = 0; sum <= 45; sum++) {
+                    if (!fivedUserBetOutcomes.has(sum)) {
+                        unbetSums.push(sum);
+                    }
+                }
+                
+                if (unbetSums.length > 0) {
+                    losingQuery += ` AND sum_value IN (${unbetSums.join(',')})`;
+                }
+                
+                losingQuery += ` ORDER BY RAND() LIMIT 100`;
+                
+                const losingResults = await models.sequelize.query(losingQuery, {
+                    type: models.sequelize.QueryTypes.SELECT
+                });
+                
+                if (losingResults.length > 0) {
+                    console.log(`🛡️ Selected losing 5D combination with unbet sum`);
+                    return format5DResult(losingResults[0]);
+                }
+                
+                // Ultimate fallback: use lowest probability combination
+                console.log(`🛡️ User bet on all 5D outcomes, using lowest probability combination`);
+                const fallbackResult = await models.sequelize.query(`
+                    SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
+                           sum_value, sum_size, sum_parity, winning_conditions
+                    FROM game_combinations_5d
+                    WHERE sum_value IN (0, 1, 2, 3, 4, 41, 42, 43, 44, 45)
+                    ORDER BY RAND()
+                    LIMIT 1
+                `, { type: models.sequelize.QueryTypes.SELECT });
+                
+                return format5DResult(fallbackResult[0]);
 
             default:
                 throw new Error(`Unknown game type: ${gameType}`);
@@ -2418,44 +2409,67 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
  */
 async function calculateResultWithVerification(gameType, duration, periodId, timeline = 'default') {
     try {
-        // Check enhanced user requirements
-        const enhancedValidation = await checkEnhancedUserRequirement(gameType, duration, periodId, timeline);
+        console.log('🎲 [RESULT_START] ==========================================');
+        console.log('🎲 [RESULT_START] Calculating result for period:', {
+            gameType, duration, periodId, timeline
+        });
 
-        console.log('🔍 Enhanced user validation result:', {
+        // Check user count for protection
+        console.log('👥 [RESULT_USERS] Checking user count for protection...');
+        const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId, timeline);
+        const shouldUseProtectedResult = uniqueUserCount < ENHANCED_USER_THRESHOLD;
+
+        console.log('🔍 [RESULT_USERS] User count check result:', {
             gameType, periodId, timeline,
-            sufficientUsers: enhancedValidation.sufficientUsers,
-            uniqueUserCount: enhancedValidation.uniqueUserCount,
-            shouldUseProtectedResult: enhancedValidation.shouldUseProtectedResult,
-            protectionReason: enhancedValidation.protectionReason
+            uniqueUserCount,
+            shouldUseProtectedResult,
+            threshold: ENHANCED_USER_THRESHOLD
         });
 
         let result;
 
-        if (enhancedValidation.shouldUseProtectedResult) {
-            // Use protected result selection (zero exposure)
+        if (shouldUseProtectedResult) {
+            console.log('🛡️ [RESULT_PROTECTION] Using PROTECTED result selection');
+            console.log('🛡️ [RESULT_PROTECTION] Reason: INSUFFICIENT_USERS');
+            
+            // Use simplified protection logic with pre-generated combinations
             result = await selectProtectedResultWithExposure(
-                gameType, duration, periodId, timeline,
-                enhancedValidation.outcomeAnalysis
+                gameType, duration, periodId, timeline
             );
         } else {
+            console.log('📊 [RESULT_NORMAL] Using NORMAL exposure-based result selection');
             // Normal operation - use exposure-based result
             result = await getOptimalResultByExposure(gameType, duration, periodId);
         }
 
-        // Get verification
-        const verification = await tronHashService.getResultWithVerification(result);
+        console.log('🎯 [RESULT_FINAL] Selected result:', result);
 
-        return {
+        // Get verification only for TrxWix
+        let verification = null;
+        if (gameType.toLowerCase() === 'trx_wix') {
+            verification = await tronHashService.getResultWithVerification(result);
+        }
+
+        const finalResult = {
             success: true,
             result: result,
-            verification: {
+            verification: verification ? {
                 hash: verification.hash,
                 link: verification.link
-            },
-            protectionMode: enhancedValidation.shouldUseProtectedResult,
-            protectionReason: enhancedValidation.protectionReason,
+            } : null,
+            protectionMode: shouldUseProtectedResult,
+            protectionReason: shouldUseProtectedResult ? 'INSUFFICIENT_USERS' : 'NORMAL_OPERATION',
             timeline: timeline
         };
+
+        console.log('🎲 [RESULT_END] ==========================================');
+        console.log('🎲 [RESULT_END] Final result with verification:', {
+            result: finalResult.result,
+            protectionMode: finalResult.protectionMode,
+            protectionReason: finalResult.protectionReason
+        });
+
+        return finalResult;
 
     } catch (error) {
         logger.error('Error calculating result with verification', {
@@ -2613,38 +2627,34 @@ const markAllBetsAsLost = async (gameType, periodId) => {
  */
 const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'default') => {
     try {
-        const durationKey = duration === 30 ? '30s' :
-            duration === 60 ? '1m' :
-                duration === 180 ? '3m' :
-                    duration === 300 ? '5m' : '10m';
-
-        // Get all bet keys for this period and timeline
-        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${timeline}:${periodId}:*`);
+        // FIXED: Use correct Redis hash key pattern that matches bet storage
+        const betHashKey = `duewin:bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const betsData = await redisClient.hgetall(betHashKey);
         const uniqueUsers = new Set();
 
-        for (const key of betKeys) {
+        // Process all bets from the hash
+        for (const [betId, betJson] of Object.entries(betsData)) {
             try {
-                const betData = await redisClient.get(key);
-                if (betData) {
-                    const bet = JSON.parse(betData);
-                    if (bet.userId) {
-                        uniqueUsers.add(bet.userId);
-                    }
+                const bet = JSON.parse(betJson);
+                if (bet.userId) {
+                    uniqueUsers.add(bet.userId);
                 }
             } catch (parseError) {
+                console.warn('👥 [USER_COUNT] Failed to parse bet data:', parseError.message);
                 continue;
             }
         }
 
-        console.log('📊 Enhanced unique user count:', {
+        console.log('👥 [USER_COUNT] Enhanced unique user count:', {
             gameType,
             periodId,
             timeline,
             uniqueUserCount: uniqueUsers.size,
-            totalBetKeys: betKeys.length,
+            totalBets: Object.keys(betsData).length,
             threshold: ENHANCED_USER_THRESHOLD,
             uniqueUsers: Array.from(uniqueUsers),
-            betKeys: betKeys.slice(0, 5) // Show first 5 keys for debugging
+            betHashKey: betHashKey,
+            meetsThreshold: uniqueUsers.size >= ENHANCED_USER_THRESHOLD
         });
 
         return uniqueUsers.size;
@@ -4843,7 +4853,15 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
     const lockKey = `process_${gameType}_${duration}_${periodId}_${timeline}`;
     
     try {
-        console.log(`🎲 Processing game results for ${gameType} ${duration}s - ${periodId}`);
+        console.log('🎲 [PROCESS_START] ==========================================');
+        console.log('🎲 [PROCESS_START] Processing game results:', {
+            gameType,
+            duration,
+            periodId,
+            timeline,
+            timestamp: new Date().toISOString()
+        });
+        console.log('🎲 [PROCESS_START] ==========================================');
 
         // Memory lock
         if (globalProcessingLocks.has(lockKey)) {
@@ -4930,13 +4948,23 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                     };
                 }
                 
-                // Generate result using exposure-based selection
-                console.log(`✅ Generating NEW result with exposure-based optimization`);
-                
-                const resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId, timeline);
+                        // Generate result using exposure-based selection
+        console.log('🎯 [PROCESS_RESULT] Generating NEW result with exposure-based optimization');
+        console.log('🎯 [PROCESS_RESULT] Calling calculateResultWithVerification...');
+        
+        console.log('🎯 [PROCESS_RESULT] About to call calculateResultWithVerification with params:', {
+            gameType, duration, periodId, timeline
+        });
+        
+        const resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId, timeline);
                 const result = resultWithVerification.result;
                 
-                console.log(`✅ Generated result:`, result);
+                console.log('🎯 [PROCESS_RESULT] Result generated successfully:', {
+                    result: result,
+                    protectionMode: resultWithVerification.protectionMode,
+                    protectionReason: resultWithVerification.protectionReason,
+                    verification: resultWithVerification.verification
+                });
                 
                 // Save to database
                 let savedResult;
@@ -4990,15 +5018,23 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                     }, { transaction: useTransaction });
                 }
                 
+                console.log('🏆 [PROCESS_WINNERS] Processing winning bets...');
                 // Process winners
                 const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, useTransaction);
                 
+                console.log('🏆 [PROCESS_WINNERS] Winners processed:', {
+                    winnerCount: winners.length,
+                    winners: winners.map(w => ({ userId: w.userId, winnings: w.winnings }))
+                });
+                
+                console.log('🔄 [PROCESS_CLEANUP] Resetting period exposure...');
                 // Reset exposure for next period
                 await resetPeriodExposure(gameType, duration, periodId);
                 
                 if (shouldCommit) await useTransaction.commit();
                 
-                console.log(`✅ Complete result processing done`);
+                console.log('✅ [PROCESS_COMPLETE] Complete result processing done');
+                console.log('🎲 [PROCESS_END] ==========================================');
                 
                 return {
                     success: true,
@@ -5385,8 +5421,13 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
  */
 const processBet = async (betData) => {
     try {
+        console.log('🎯 [BET_START] ==========================================');
+        console.log('🎯 [BET_START] NEW BET RECEIVED:', betData);
+        console.log('🎯 [BET_START] ==========================================');
+
         const validation = await validateBetWithTimeline(betData);
         if (!validation.valid) {
+            console.log('❌ [BET_VALIDATION] Bet validation failed:', validation);
             return validation;
         }
 
@@ -5396,9 +5437,9 @@ const processBet = async (betData) => {
             periodId, betType, betValue, odds
         } = betData;
 
-        console.log('🔍 [BET_PROCESS] Starting bet processing with exposure tracking:', {
+        console.log('✅ [BET_VALIDATION] Bet validation passed:', {
             userId, gameType, duration, timeline, periodId,
-            grossBetAmount, platformFee, netBetAmount
+            grossBetAmount, platformFee, netBetAmount, odds
         });
 
         const models = await ensureModelsInitialized();
@@ -5459,7 +5500,15 @@ const processBet = async (betData) => {
 
             console.log('✅ [BET_PROCESS] Bet record created with platform fee');
 
+            console.log('💾 [BET_DATABASE] Bet stored in database successfully:', {
+                betId: betRecord.bet_id || betRecord.id,
+                userId,
+                periodId,
+                status: 'pending'
+            });
+
             // Store bet in Redis with exposure tracking
+            console.log('📊 [BET_EXPOSURE] Starting exposure tracking...');
             const redisStored = await storeBetInRedisWithTimeline({
                 ...betData,
                 grossBetAmount,
@@ -5469,6 +5518,7 @@ const processBet = async (betData) => {
             });
             
             if (!redisStored) {
+                console.log('❌ [BET_EXPOSURE] Redis storage failed');
                 await t.rollback();
                 return {
                     success: false,
@@ -5476,6 +5526,7 @@ const processBet = async (betData) => {
                     code: 'REDIS_STORAGE_FAILED'
                 };
             }
+            console.log('✅ [BET_EXPOSURE] Bet stored in Redis with exposure tracking');
 
             await t.commit();
 
@@ -5500,7 +5551,7 @@ const processBet = async (betData) => {
                 console.error('⚠️ Error processing activity reward:', activityError);
             }
 
-            return {
+            const response = {
                 success: true,
                 message: 'Bet placed successfully',
                 data: {
@@ -5525,6 +5576,15 @@ const processBet = async (betData) => {
                     }
                 }
             };
+
+            console.log('🎉 [BET_SUCCESS] Bet processed successfully:', {
+                betId: response.data.betId,
+                expectedWin: response.data.expectedWin,
+                walletBalanceAfter: response.data.walletBalanceAfter
+            });
+            console.log('🎯 [BET_END] ==========================================');
+
+            return response;
 
         } catch (error) {
             await t.rollback();
@@ -6144,7 +6204,6 @@ module.exports = {
     getPreCalculatedResults,
     logSuspiciousActivity,
     getAllMinimumCombinations,
-    checkEnhancedUserRequirement,
 
     // Cleanup and maintenance
     cleanupRedisData,
@@ -6176,15 +6235,15 @@ module.exports = {
     enhanceResultFormat,
 
     //User threshold
-    checkEnhancedUserRequirement,
-    analyzeOutcomeCoverage,
-    getBetsOnSpecificOutcome,
-    selectProtectedResult,
+    selectProtectedResultWithExposure,
     selectFallbackResult,
 
     //constants
     PLATFORM_FEE_RATE,
     ENHANCED_USER_THRESHOLD,
+
+    // Initialization
+    initializeGameCombinations,
 
     // Model management
     ensureModelsInitialized,
