@@ -34,6 +34,22 @@ const gameResultsLogger = winston.createLogger({
     ]
 });
 
+// Add after other logger imports
+const betDebugLogger = winston.createLogger({
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.printf(({ timestamp, level, message, ...meta }) => {
+            return `${timestamp} [${level.toUpperCase()}] ${message} ${Object.keys(meta).length ? JSON.stringify(meta) : ''}`;
+        })
+    ),
+    transports: [
+        new winston.transports.File({ filename: path.join('logs', 'bet-debug.log') }),
+        new winston.transports.Console()
+    ]
+});
+
+const generateTraceId = () => crypto.randomBytes(8).toString('hex');
+
 // Initialize models variable - will be populated after initialization
 let serviceModels = null;
 
@@ -749,7 +765,8 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                     
                     for (let num = 0; num <= 9; num++) {
                         const combo = global.wingoCombinations[num];
-                        if (combo && checkWinCondition(combo, betType, betValue)) {
+                        // Use the correct win checking logic for exposure tracking
+                        if (combo && checkWingoWin(betType, betValue, combo)) {
                             await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
                         }
                     }
@@ -3079,7 +3096,8 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
  */
 const calculateWingoWin = (bet, result, betType, betValue) => {
     try {
-        const betAmount = parseFloat(bet.betAmount || bet.bet_amount || 0);
+        // Use net bet amount (after platform fee) for payout calculations
+        const betAmount = parseFloat(bet.amount_after_tax || bet.netBetAmount || bet.betAmount || bet.bet_amount || 0);
 
         switch (betType) {
             case 'NUMBER':
@@ -3148,7 +3166,8 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
  */
 const calculateK3Win = (bet, result, betType, betValue) => {
     try {
-        const betAmount = parseFloat(bet.betAmount || bet.bet_amount || 0);
+        // Use net bet amount (after platform fee) for payout calculations
+        const betAmount = parseFloat(bet.amount_after_tax || bet.netBetAmount || bet.betAmount || bet.bet_amount || 0);
         const sum = result.sum || (result.dice_1 + result.dice_2 + result.dice_3);
 
         switch (betType) {
@@ -3248,7 +3267,8 @@ const calculateK3Win = (bet, result, betType, betValue) => {
  */
 const calculateFiveDWin = (bet, result, betType, betValue) => {
     try {
-        const betAmount = parseFloat(bet.betAmount || bet.bet_amount || 0);
+        // Use net bet amount (after platform fee) for payout calculations
+        const betAmount = parseFloat(bet.amount_after_tax || bet.netBetAmount || bet.betAmount || bet.bet_amount || 0);
 
         switch (betType) {
             case 'POSITION':
@@ -3427,7 +3447,7 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
                 const isWinner = checkBetWin(bet, result, gameType);
                 if (isWinner) {
                     // Calculate winnings
-                    const winnings = calculateWinnings(bet, gameType);
+                    const winnings = calculateWinnings(bet, result, gameType);
 
                     // Update user balance
                     await models.User.increment('wallet_balance', {
@@ -3747,20 +3767,82 @@ const checkK3Win = (betType, betValue, result) => {
  * @param {string} gameType - Game type
  * @returns {number} - Winnings amount
  */
-const calculateWinnings = (bet, gameType) => {
+const calculateWinnings = (bet, result, gameType) => {
     try {
-        const odds = bet.odds || calculateOdds(gameType, bet.bet_type.split(':')[0], bet.bet_type.split(':')[1]);
-        // Use amount_after_tax instead of bet_amount for winnings calculation
-        const winnings = bet.amount_after_tax * odds;
+        // First check if the bet actually won
+        const [betType, betValue] = bet.bet_type.split(':');
+        let isWinner = false;
+        
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                isWinner = checkWingoWin(betType, betValue, result);
+                break;
+            case 'fived':
+            case '5d':
+                isWinner = checkFiveDWin(betType, betValue, result);
+                break;
+            case 'k3':
+                isWinner = checkK3Win(betType, betValue, result);
+                break;
+        }
+        
+        // If bet didn't win, return 0
+        if (!isWinner) {
+            logger.info('Bet did not win, returning 0 winnings', {
+                betId: bet.bet_id,
+                betType: bet.bet_type,
+                gameType,
+                result
+            });
+            return 0;
+        }
+        
+        // FIXED: Use comprehensive payout functions for accurate calculations
+        let winnings = 0;
+        
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                winnings = calculateWingoWin(bet, result, betType, betValue);
+                break;
+            case 'fived':
+            case '5d':
+                winnings = calculateFiveDWin(bet, result, betType, betValue);
+                break;
+            case 'k3':
+                winnings = calculateK3Win(bet, result, betType, betValue);
+                break;
+            default:
+                logger.warn('Unknown game type in win calculation', { gameType });
+                winnings = 0;
+        }
 
-        logger.info('Calculated winnings', {
+        // Payout functions now return the correct amount directly
+        const grossBetAmount = parseFloat(bet.bet_amount || bet.betAmount || 0);
+        const netBetAmount = parseFloat(bet.amount_after_tax || 0);
+
+        console.log(`💰 [WINNINGS_CALC] Comprehensive calculation:`, {
             betId: bet.bet_id,
-            betAmount: bet.bet_amount,
-            amountAfterTax: bet.amount_after_tax,
-            taxAmount: bet.tax_amount,
-            odds,
+            grossBetAmount,
+            netBetAmount,
+            taxAmount: grossBetAmount - netBetAmount,
             winnings,
-            gameType
+            gameType,
+            betType,
+            betValue,
+            resultColor: result.color,
+            resultNumber: result.number
+        });
+
+        logger.info('Calculated winnings using comprehensive payout functions', {
+            betId: bet.bet_id,
+            grossBetAmount,
+            netBetAmount,
+            winnings,
+            gameType,
+            betType,
+            betValue
         });
 
         return winnings;
@@ -4282,6 +4364,7 @@ const calculateComplexWinAmount = (bet, result, gameType) => {
     try {
         const [betType, betValue] = bet.bet_type.split(':');
 
+        // Use comprehensive payout functions for accurate calculations
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
@@ -5528,9 +5611,9 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
             // Process each bet
             for (const bet of bets) {
                 try {
-                    const isWinner = checkBetWin(bet, result, gameType);
+                    const isWinner = await checkBetWin(bet, result, gameType);
                     if (isWinner) {
-                        const winnings = calculateWinnings(bet, gameType);
+                        const winnings = calculateWinnings(bet, result, gameType);
 
                         // Update user balance
                         await models.User.increment('wallet_balance', {
@@ -5798,6 +5881,105 @@ const processBet = async (betData) => {
  * @param {string} betValue - Value bet on
  * @returns {number} - Calculated odds
  */
+/**
+ * FIXED: Calculate odds based on RESULT, not bet type
+ * This ensures correct payouts for VIOLET combinations
+ */
+const calculateResultBasedOdds = (gameType, betType, betValue, result) => {
+    try {
+        console.log(`🎯 [ODDS_CALC] Calculating odds for:`, {
+            gameType,
+            betType,
+            betValue,
+            resultColor: result.color,
+            resultNumber: result.number
+        });
+
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                switch (betType) {
+                    case 'NUMBER':
+                        const numberOdds = 9.0;
+                        console.log(`🎯 [ODDS_CALC] NUMBER bet: ${numberOdds}x`);
+                        return numberOdds;
+                    case 'COLOR':
+                        // FIXED: Check if result is VIOLET
+                        if (result.color === 'red_violet' || result.color === 'green_violet') {
+                            // Result is VIOLET - check what was bet
+                            if (betValue === 'violet' || betValue === 'purple') {
+                                const violetOdds = 4.5;
+                                console.log(`🎯 [ODDS_CALC] VIOLET bet on VIOLET result: ${violetOdds}x`);
+                                return violetOdds; // VIOLET bet on VIOLET result = 4.5x
+                            } else {
+                                const colorOdds = 1.5;
+                                console.log(`🎯 [ODDS_CALC] RED/GREEN bet on VIOLET result: ${colorOdds}x`);
+                                return colorOdds; // RED/GREEN bet on VIOLET result = 1.5x
+                            }
+                        } else {
+                            // Result is pure RED/GREEN
+                            const pureOdds = 2.0;
+                            console.log(`🎯 [ODDS_CALC] Pure color result: ${pureOdds}x`);
+                            return pureOdds; // Standard odds for pure colors
+                        }
+                    case 'SIZE':
+                        const sizeOdds = 2.0;
+                        console.log(`🎯 [ODDS_CALC] SIZE bet: ${sizeOdds}x`);
+                        return sizeOdds;
+                    case 'PARITY':
+                        const parityOdds = 2.0;
+                        console.log(`🎯 [ODDS_CALC] PARITY bet: ${parityOdds}x`);
+                        return parityOdds;
+                    default:
+                        const defaultOdds = 1.0;
+                        console.log(`🎯 [ODDS_CALC] Default odds: ${defaultOdds}x`);
+                        return defaultOdds;
+                }
+
+            case 'fived':
+            case '5d':
+                switch (betType) {
+                    case 'POSITION':
+                        return 6.0; // 1:6 odds for specific position
+                    case 'SUM':
+                        return 10.0; // 1:10 odds for specific sum
+                    case 'DRAGON_TIGER':
+                        return 2.0;
+                    default:
+                        return 1.0;
+                }
+
+            case 'k3':
+                switch (betType) {
+                    case 'SUM':
+                        return 10.0;
+                    case 'MATCHING_DICE':
+                        return betValue === 'triplet' ? 30.0 : 3.0;
+                    case 'STRAIGHT':
+                        return 6.0;
+                    case 'SIZE':
+                        return 2.0;
+                    case 'PARITY':
+                        return 2.0;
+                    default:
+                        return 1.0;
+                }
+
+            default:
+                return 1.0;
+        }
+    } catch (error) {
+        logger.error('Error calculating result-based odds', {
+            error: error.message,
+            gameType,
+            betType,
+            betValue,
+            result
+        });
+        return 1.0;
+    }
+};
+
 const calculateOdds = (gameType, betType, betValue) => {
     try {
         switch (gameType.toLowerCase()) {
@@ -5807,7 +5989,14 @@ const calculateOdds = (gameType, betType, betValue) => {
                     case 'NUMBER':
                         return 9.0; // 1:9 odds for specific number
                     case 'COLOR':
-                        return betValue === 'red_violet' || betValue === 'green_violet' ? 1.5 : 2.0;
+                        // For exposure tracking, use the maximum possible odds
+                        if (betValue === 'violet' || betValue === 'purple') {
+                            return 4.5; // Violet bet on violet result = 4.5x
+                        } else if (betValue === 'red' || betValue === 'green') {
+                            return 2.0; // Red/Green bet on pure color = 2.0x (max exposure)
+                        } else {
+                            return 2.0; // Default
+                        }
                     case 'SIZE':
                         return 2.0;
                     case 'PARITY':

@@ -245,6 +245,14 @@ const schedulerGameTick = async (gameType, duration) => {
             console.log(`   - Current: ${currentPeriodInfo.periodId}`);
             console.log(`   - Transition time: ${now.toISOString()}`);
             
+            // 🎯 WINGO-SPECIFIC LOGGING
+            if (gameType.toLowerCase() === 'wingo') {
+                console.log(`🎯 [WINGO_SCHEDULER] PERIOD TRANSITION DETECTED`);
+                console.log(`🎯 [WINGO_SCHEDULER] Previous: ${cachedCurrent?.periodId || 'NONE'}`);
+                console.log(`🎯 [WINGO_SCHEDULER] Current: ${currentPeriodInfo.periodId}`);
+                console.log(`🎯 [WINGO_SCHEDULER] Duration: ${duration}s`);
+            }
+            
             // Process previous period if it exists
             if (cachedCurrent && cachedCurrent.periodId !== currentPeriodInfo.periodId) {
                 try {
@@ -255,15 +263,44 @@ const schedulerGameTick = async (gameType, duration) => {
                     console.log(`   - Should have ended: ${prevPeriodEndTime.toISOString()}`);
                     console.log(`   - Time since end: ${timeSincePrevEnd.toFixed(2)}s`);
                     
+                    // 🎯 WINGO-SPECIFIC LOGGING
+                    if (gameType.toLowerCase() === 'wingo') {
+                        console.log(`🎯 [WINGO_SCHEDULER] Previous period validation:`);
+                        console.log(`🎯 [WINGO_SCHEDULER] - Period: ${cachedCurrent.periodId}`);
+                        console.log(`🎯 [WINGO_SCHEDULER] - Should have ended: ${prevPeriodEndTime.toISOString()}`);
+                        console.log(`🎯 [WINGO_SCHEDULER] - Time since end: ${timeSincePrevEnd.toFixed(2)}s`);
+                    }
+                    
                     // Process previous period if timing is reasonable
                     if (timeSincePrevEnd >= -2 && timeSincePrevEnd <= 60) {
                         console.log(`✅ Processing previous period ${cachedCurrent.periodId} (valid timing)`);
+                        
+                        // 🎯 WINGO-SPECIFIC LOGGING
+                        if (gameType.toLowerCase() === 'wingo') {
+                            console.log(`🎯 [WINGO_SCHEDULER] ✅ PROCESSING PREVIOUS PERIOD`);
+                            console.log(`🎯 [WINGO_SCHEDULER] Period: ${cachedCurrent.periodId}`);
+                            console.log(`🎯 [WINGO_SCHEDULER] Timing: ${timeSincePrevEnd.toFixed(2)}s since end`);
+                        }
+                        
                         await processSchedulerPeriodEnd(gameType, duration, cachedCurrent.periodId);
                     } else {
                         console.warn(`⚠️ Skipping previous period ${cachedCurrent.periodId}: Invalid timing (${timeSincePrevEnd.toFixed(2)}s since end)`);
+                        
+                        // 🎯 WINGO-SPECIFIC LOGGING
+                        if (gameType.toLowerCase() === 'wingo') {
+                            console.log(`🎯 [WINGO_SCHEDULER] ⚠️ SKIPPING PREVIOUS PERIOD`);
+                            console.log(`🎯 [WINGO_SCHEDULER] Period: ${cachedCurrent.periodId}`);
+                            console.log(`🎯 [WINGO_SCHEDULER] Reason: Invalid timing (${timeSincePrevEnd.toFixed(2)}s since end)`);
+                        }
                     }
                 } catch (timingError) {
                     console.error(`❌ Error validating previous period timing:`, timingError.message);
+                    
+                    // 🎯 WINGO-SPECIFIC LOGGING
+                    if (gameType.toLowerCase() === 'wingo') {
+                        console.log(`🎯 [WINGO_SCHEDULER] ❌ TIMING VALIDATION ERROR`);
+                        console.log(`🎯 [WINGO_SCHEDULER] Error: ${timingError.message}`);
+                    }
                 }
             }
             
@@ -527,6 +564,15 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
           console.log(`🎲 SCHEDULER: Calling gameLogicService.processGameResults...`);
           console.log(`🎲 SCHEDULER: Parameters: gameType=${gameType}, duration=${duration}, periodId=${periodId}, timeline=default`);
           
+          // 🎯 WINGO-SPECIFIC LOGGING
+          if (gameType.toLowerCase() === 'wingo') {
+              console.log(`🎯 [WINGO_SCHEDULER] ==========================================`);
+              console.log(`🎯 [WINGO_SCHEDULER] WINGO RESULT PROCESSING STARTED`);
+              console.log(`🎯 [WINGO_SCHEDULER] Period: ${periodId}, Duration: ${duration}s`);
+              console.log(`🎯 [WINGO_SCHEDULER] Time since period end: ${finalTimingCheck.toFixed(2)}s`);
+              console.log(`🎯 [WINGO_SCHEDULER] ==========================================`);
+          }
+          
           // Process NEW results using gameLogicService with explicit timeline
           console.log(`🎲 SCHEDULER: About to call processGameResults...`);
           const gameResult = await gameLogicService.processGameResults(
@@ -537,6 +583,24 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
           );
           console.log(`🎲 SCHEDULER: processGameResults returned:`, gameResult);
           
+          // 🎯 WINGO-SPECIFIC LOGGING
+          if (gameType.toLowerCase() === 'wingo') {
+              console.log(`🎯 [WINGO_SCHEDULER] processGameResults completed:`);
+              console.log(`🎯 [WINGO_SCHEDULER] - Success: ${gameResult.success}`);
+              console.log(`🎯 [WINGO_SCHEDULER] - Source: ${gameResult.source}`);
+              console.log(`🎯 [WINGO_SCHEDULER] - Protection Mode: ${gameResult.protectionMode}`);
+              console.log(`🎯 [WINGO_SCHEDULER] - Protection Reason: ${gameResult.protectionReason}`);
+              if (gameResult.gameResult) {
+                  console.log(`🎯 [WINGO_SCHEDULER] - Result: ${JSON.stringify(gameResult.gameResult)}`);
+              }
+              if (gameResult.winners && gameResult.winners.length > 0) {
+                  console.log(`🎯 [WINGO_SCHEDULER] - Winners count: ${gameResult.winners.length}`);
+                  console.log(`🎯 [WINGO_SCHEDULER] - First few winners:`, gameResult.winners.slice(0, 3));
+              } else {
+                  console.log(`🎯 [WINGO_SCHEDULER] - No winners found`);
+              }
+          }
+          
           console.log(`🎲 SCHEDULER: processGameResults completed for ${periodId}:`, {
               success: gameResult.success,
               source: gameResult.source,
@@ -545,6 +609,11 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
           });
           
           if (gameResult.success) {
+              // 🎯 WINGO-SPECIFIC LOGGING
+              if (gameType.toLowerCase() === 'wingo') {
+                  console.log(`🎯 [WINGO_SCHEDULER] Publishing result to WebSocket...`);
+              }
+              
               await publishPeriodResult(
                   gameType, 
                   duration, 
@@ -557,14 +626,36 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                   'new'
               );
               
+              // 🎯 WINGO-SPECIFIC LOGGING
+              if (gameType.toLowerCase() === 'wingo') {
+                  console.log(`🎯 [WINGO_SCHEDULER] ==========================================`);
+                  console.log(`🎯 [WINGO_SCHEDULER] WINGO RESULT PROCESSING COMPLETED`);
+                  console.log(`🎯 [WINGO_SCHEDULER] Period: ${periodId}`);
+                  console.log(`🎯 [WINGO_SCHEDULER] Result: ${JSON.stringify(gameResult.gameResult)}`);
+                  console.log(`🎯 [WINGO_SCHEDULER] Winners: ${gameResult.winners ? gameResult.winners.length : 0}`);
+                  console.log(`🎯 [WINGO_SCHEDULER] ==========================================`);
+              }
+              
               console.log(`✅ SCHEDULER: NEW result processed for ${periodId}: ${JSON.stringify(gameResult.gameResult)}`);
               
           } else {
+              // 🎯 WINGO-SPECIFIC LOGGING
+              if (gameType.toLowerCase() === 'wingo') {
+                  console.log(`🎯 [WINGO_SCHEDULER] ❌ RESULT PROCESSING FAILED`);
+                  console.log(`🎯 [WINGO_SCHEDULER] Error: ${gameResult.message}`);
+              }
               throw new Error(gameResult.message || 'Failed to process results');
           }
           
       } catch (processError) {
           console.error(`❌ SCHEDULER: Result processing error for ${periodId}:`, processError.message);
+          
+          // 🎯 WINGO-SPECIFIC LOGGING
+          if (gameType.toLowerCase() === 'wingo') {
+              console.log(`🎯 [WINGO_SCHEDULER] ❌ ERROR DURING RESULT PROCESSING`);
+              console.log(`🎯 [WINGO_SCHEDULER] Error: ${processError.message}`);
+              console.log(`🎯 [WINGO_SCHEDULER] Stack: ${processError.stack}`);
+          }
           
           // Generate fallback result only if timing is still valid
           const fallbackTimingCheck = (new Date() - periodEndTime) / 1000;
@@ -572,7 +663,17 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
               try {
                   console.log(`🎲 SCHEDULER: Generating fallback result for ${periodId}`);
                   
+                  // 🎯 WINGO-SPECIFIC LOGGING
+                  if (gameType.toLowerCase() === 'wingo') {
+                      console.log(`🎯 [WINGO_SCHEDULER] Generating fallback result...`);
+                  }
+                  
                   const fallbackResult = await generateSchedulerFallbackResult(gameType);
+                  
+                  // 🎯 WINGO-SPECIFIC LOGGING
+                  if (gameType.toLowerCase() === 'wingo') {
+                      console.log(`🎯 [WINGO_SCHEDULER] Fallback result: ${JSON.stringify(fallbackResult)}`);
+                  }
                   
                   await publishPeriodResult(
                       gameType, 
@@ -586,14 +687,33 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                       'fallback'
                   );
                   
+                  // 🎯 WINGO-SPECIFIC LOGGING
+                  if (gameType.toLowerCase() === 'wingo') {
+                      console.log(`🎯 [WINGO_SCHEDULER] ✅ FALLBACK RESULT PUBLISHED`);
+                  }
+                  
                   console.log(`✅ SCHEDULER: Fallback result generated for ${periodId}`);
                   
               } catch (fallbackError) {
                   console.error(`❌ SCHEDULER: Fallback result generation failed for ${periodId}:`, fallbackError.message);
+                  
+                  // 🎯 WINGO-SPECIFIC LOGGING
+                  if (gameType.toLowerCase() === 'wingo') {
+                      console.log(`🎯 [WINGO_SCHEDULER] ❌ FALLBACK RESULT GENERATION FAILED`);
+                      console.log(`🎯 [WINGO_SCHEDULER] Error: ${fallbackError.message}`);
+                  }
+                  
                   await publishPeriodError(gameType, duration, periodId, 'Failed to generate result');
               }
           } else {
               console.error(`❌ SCHEDULER: Timing invalid for fallback (${fallbackTimingCheck.toFixed(2)}s)`);
+              
+              // 🎯 WINGO-SPECIFIC LOGGING
+              if (gameType.toLowerCase() === 'wingo') {
+                  console.log(`🎯 [WINGO_SCHEDULER] ❌ TIMING INVALID FOR FALLBACK`);
+                  console.log(`🎯 [WINGO_SCHEDULER] Time since end: ${fallbackTimingCheck.toFixed(2)}s`);
+              }
+              
               await publishPeriodError(gameType, duration, periodId, 'Timing validation failed');
           }
       } finally {
