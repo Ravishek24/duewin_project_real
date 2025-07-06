@@ -1,26 +1,5 @@
-const Redis = require('ioredis');
-
-// Create Redis client
-const redisClient = new Redis({
-    host: 'localhost',
-    port: 6379,
-    retryStrategy: function (times) {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
-    }
-});
-
-redisClient.on('error', (err) => {
-    console.error('Redis Client Error:', err);
-});
-
-redisClient.on('connect', () => {
-    console.log('Redis client connected');
-});
-
-redisClient.on('ready', () => {
-    console.log('Redis client ready');
-});
+const { updateBetExposure, storeBetInRedisWithTimeline, processBet, ensureModelsInitialized } = require('./services/gameLogicService');
+const redisClient = require('./config/redis');
 
 // Import the game logic functions (simplified versions for debugging)
 function checkWinCondition(combination, betType, betValue) {
@@ -62,259 +41,150 @@ const getColorForNumber = (number) => {
 
 async function debugCompleteFlow() {
     try {
-        console.log('🔍 [DEBUG] Starting complete flow debugging...');
-        
-        // Step 1: Check current Redis state
-        console.log('\n📊 [DEBUG] Step 1: Current Redis State');
-        const allKeys = await redisClient.keys('*');
-        const betKeys = allKeys.filter(key => key.includes('bets'));
-        const exposureKeys = allKeys.filter(key => key.includes('exposure'));
-        
-        console.log(`📊 [DEBUG] Total keys: ${allKeys.length}`);
-        console.log(`📊 [DEBUG] Bet keys: ${betKeys.length}`);
-        console.log(`📊 [DEBUG] Exposure keys: ${exposureKeys.length}`);
-        
-        if (betKeys.length === 0) {
-            console.log('❌ [DEBUG] No bet keys found - place a bet first!');
-            return;
+        console.log('🔧 [COMPLETE_DEBUG] ==========================================');
+        console.log('🔧 [COMPLETE_DEBUG] Testing complete production bet flow');
+        console.log('🔧 [COMPLETE_DEBUG] ==========================================');
+
+        // Initialize models
+        console.log('🔧 Initializing models...');
+        await ensureModelsInitialized();
+
+        const testData = {
+            gameType: 'wingo',
+            duration: 30,
+            timeline: 'default',
+            periodId: '20250706000001849',
+            userId: 13,
+            betType: 'COLOR',
+            betValue: 'red',
+            grossBetAmount: 100,
+            platformFee: 2,
+            netBetAmount: 98,
+            odds: 2
+        };
+
+        console.log('📊 [COMPLETE_DEBUG] Test data:', testData);
+
+        // Clear existing exposure data
+        const exposureKey = `exposure:${testData.gameType}:${testData.duration}:${testData.timeline}:${testData.periodId}`;
+        const deletedCount = await redisClient.del(exposureKey);
+        console.log('🧹 [COMPLETE_DEBUG] Cleared exposure key:', exposureKey, '- deleted count:', deletedCount);
+
+        // Test 1: Direct updateBetExposure call
+        console.log('\n🎯 [TEST 1] Testing direct updateBetExposure call...');
+        try {
+            await updateBetExposure(testData.gameType, testData.duration, testData.periodId, {
+                betType: testData.betType,
+                betValue: testData.betValue,
+                netBetAmount: testData.netBetAmount,
+                odds: testData.odds
+            }, testData.timeline);
+            
+            const exposuresAfterDirect = await redisClient.hgetall(exposureKey);
+            console.log('✅ [TEST 1] Direct updateBetExposure success');
+            console.log('📊 [TEST 1] Exposures after direct call:', exposuresAfterDirect);
+        } catch (error) {
+            console.error('❌ [TEST 1] Direct updateBetExposure failed:', error.message);
         }
-        
-        // Find the most recent period with bets
-        const recentBetKey = betKeys[betKeys.length - 1];
-        console.log(`📊 [DEBUG] Analyzing most recent period: ${recentBetKey}`);
-        
-        // Extract period info
-        const parts = recentBetKey.split(':');
-        const gameType = parts[1];
-        const duration = parts[2];
-        const timeline = parts[3];
-        const periodId = parts[4];
-        
-        console.log(`📊 [DEBUG] Period info: gameType=${gameType}, duration=${duration}, timeline=${timeline}, periodId=${periodId}`);
-        
-        // Step 2: Analyze bet data
-        console.log('\n📝 [DEBUG] Step 2: Analyzing Bet Data');
-        const betData = await redisClient.hgetall(recentBetKey);
-        console.log(`📝 [DEBUG] Bets found: ${Object.keys(betData).length}`);
-        
-        const uniqueUsers = new Set();
-        const betDetails = [];
-        
-        for (const [betId, betJson] of Object.entries(betData)) {
-            try {
-                const bet = JSON.parse(betJson);
-                uniqueUsers.add(bet.userId);
-                betDetails.push({
-                    betId,
-                    userId: bet.userId,
-                    betType: bet.betType,
-                    betValue: bet.betValue,
-                    betAmount: bet.betAmount,
-                    netBetAmount: bet.netBetAmount,
-                    odds: bet.odds
-                });
-                
-                console.log(`📝 [DEBUG] Bet ${betId}: User ${bet.userId}, ${bet.betType} ${bet.betValue}, ${bet.netBetAmount} cents, odds ${bet.odds}`);
-            } catch (parseError) {
-                console.log(`📝 [DEBUG] Failed to parse bet ${betId}: ${parseError.message}`);
-            }
-        }
-        
-        console.log(`📝 [DEBUG] Unique users: ${uniqueUsers.size} (${Array.from(uniqueUsers).join(', ')})`);
-        
-        // Step 3: Check protection threshold
-        console.log('\n🛡️ [DEBUG] Step 3: Protection Threshold Check');
-        const ENHANCED_USER_THRESHOLD = 2; // From your config
-        const meetsThreshold = uniqueUsers.size >= ENHANCED_USER_THRESHOLD;
-        
-        console.log(`🛡️ [DEBUG] Protection threshold: ${ENHANCED_USER_THRESHOLD}`);
-        console.log(`🛡️ [DEBUG] Unique users: ${uniqueUsers.size}`);
-        console.log(`🛡️ [DEBUG] Meets threshold: ${meetsThreshold ? '✅ YES' : '❌ NO'}`);
-        
-        if (!meetsThreshold) {
-            console.log('🛡️ [DEBUG] PROTECTION SHOULD ACTIVATE - Single user detected!');
-        } else {
-            console.log('🛡️ [DEBUG] Protection not needed - Multiple users detected');
-        }
-        
-        // Step 4: Analyze exposure data
-        console.log('\n💰 [DEBUG] Step 4: Analyzing Exposure Data');
-        const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
-        const exposureData = await redisClient.hgetall(exposureKey);
-        
-        console.log(`💰 [DEBUG] Exposure key: ${exposureKey}`);
-        console.log(`💰 [DEBUG] Exposure entries: ${Object.keys(exposureData).length}`);
-        
-        if (Object.keys(exposureData).length > 0) {
-            console.log('💰 [DEBUG] Exposure details:');
-            for (const [number, exposure] of Object.entries(exposureData)) {
-                console.log(`  ${number}: ${exposure} cents (${(exposure / 100).toFixed(2)}₹)`);
-            }
-        } else {
-            console.log('❌ [DEBUG] No exposure data found!');
-        }
-        
-        // Step 5: Verify exposure calculation
-        console.log('\n🧮 [DEBUG] Step 5: Verifying Exposure Calculation');
-        for (const betDetail of betDetails) {
-            const actualBetAmount = betDetail.netBetAmount || betDetail.betAmount || 0;
-            const expectedExposure = Math.round(actualBetAmount * betDetail.odds * 100);
+
+        // Clear for next test
+        await redisClient.del(exposureKey);
+        console.log('🧹 [TEST 1] Cleared exposure for next test');
+
+        // Test 2: storeBetInRedisWithTimeline call
+        console.log('\n🎯 [TEST 2] Testing storeBetInRedisWithTimeline call...');
+        try {
+            const redisResult = await storeBetInRedisWithTimeline(testData);
+            console.log('📊 [TEST 2] storeBetInRedisWithTimeline result:', redisResult);
             
-            console.log(`🧮 [DEBUG] Bet ${betDetail.betId} exposure calculation:`);
-            console.log(`  - Bet amount: ${actualBetAmount} cents`);
-            console.log(`  - Odds: ${betDetail.odds}`);
-            console.log(`  - Expected exposure: ${expectedExposure} cents`);
+            const exposuresAfterRedis = await redisClient.hgetall(exposureKey);
+            console.log('📊 [TEST 2] Exposures after storeBetInRedisWithTimeline:', exposuresAfterRedis);
             
-            if (betDetail.betType === 'NUMBER') {
-                const actualExposure = parseInt(exposureData[`number:${betDetail.betValue}`] || 0);
-                console.log(`  - Actual exposure for number ${betDetail.betValue}: ${actualExposure} cents`);
-                
-                if (actualExposure === expectedExposure) {
-                    console.log(`  ✅ Exposure calculation correct`);
-                } else {
-                    console.log(`  ❌ Exposure calculation wrong! Expected: ${expectedExposure}, Got: ${actualExposure}`);
-                }
-            } else if (betDetail.betType === 'COLOR') {
-                // Check exposure for all numbers that would win
-                const winningNumbers = [];
-                for (let num = 0; num <= 9; num++) {
-                    const combo = {
-                        number: num,
-                        color: getColorForNumber(num),
-                        size: num >= 5 ? 'Big' : 'Small',
-                        parity: num % 2 === 0 ? 'even' : 'odd'
-                    };
-                    
-                    if (checkWinCondition(combo, betDetail.betType, betDetail.betValue)) {
-                        winningNumbers.push(num);
-                    }
-                }
-                
-                console.log(`  - Winning numbers for ${betDetail.betType} ${betDetail.betValue}: [${winningNumbers.join(', ')}]`);
-                
-                let totalExposure = 0;
-                for (const num of winningNumbers) {
-                    const exposure = parseInt(exposureData[`number:${num}`] || 0);
-                    totalExposure += exposure;
-                    console.log(`  - Number ${num} exposure: ${exposure} cents`);
-                }
-                
-                if (totalExposure === expectedExposure) {
-                    console.log(`  ✅ Total exposure correct: ${totalExposure} cents`);
-                } else {
-                    console.log(`  ❌ Total exposure wrong! Expected: ${expectedExposure}, Got: ${totalExposure}`);
-                }
-            }
-        }
-        
-        // Step 6: Simulate protection logic
-        console.log('\n🎯 [DEBUG] Step 6: Simulating Protection Logic');
-        
-        if (!meetsThreshold) {
-            console.log('🎯 [DEBUG] PROTECTION MODE: Finding zero-exposure numbers...');
-            
-            const zeroExposureNumbers = [];
-            const exposureAnalysis = {};
-            
-            for (let num = 0; num <= 9; num++) {
-                const exposure = parseInt(exposureData[`number:${num}`] || 0);
-                exposureAnalysis[`number:${num}`] = `${(exposure / 100).toFixed(2)}₹`;
-                
-                if (exposure === 0) {
-                    zeroExposureNumbers.push(num);
-                }
-            }
-            
-            console.log('🎯 [DEBUG] Exposure analysis:');
-            for (const [number, exposure] of Object.entries(exposureAnalysis)) {
-                console.log(`  ${number}: ${exposure}`);
-            }
-            
-            console.log(`🎯 [DEBUG] Zero-exposure numbers: [${zeroExposureNumbers.join(', ')}]`);
-            
-            if (zeroExposureNumbers.length > 0) {
-                console.log('✅ [DEBUG] Protection can work - zero-exposure numbers available');
-                
-                // Check if user would lose on these numbers
-                for (const betDetail of betDetails) {
-                    console.log(`🎯 [DEBUG] Checking if user loses on zero-exposure numbers:`);
-                    for (const num of zeroExposureNumbers) {
-                        const combo = {
-                            number: num,
-                            color: getColorForNumber(num),
-                            size: num >= 5 ? 'Big' : 'Small',
-                            parity: num % 2 === 0 ? 'even' : 'odd'
-                        };
-                        
-                        const wins = checkWinCondition(combo, betDetail.betType, betDetail.betValue);
-                        console.log(`  Number ${num} (${combo.color}): ${wins ? '❌ USER WINS' : '✅ USER LOSES'}`);
-                    }
-                }
+            if (Object.keys(exposuresAfterRedis).length === 0) {
+                console.error('❌ [TEST 2] Exposure hash is empty - updateBetExposure was not called or failed');
             } else {
-                console.log('❌ [DEBUG] Protection cannot work - no zero-exposure numbers!');
-                console.log('❌ [DEBUG] This means the user bet on ALL possible numbers!');
+                console.log('✅ [TEST 2] storeBetInRedisWithTimeline successfully created exposures');
             }
-        } else {
-            console.log('🎯 [DEBUG] NORMAL MODE: Multiple users, normal result generation');
+        } catch (error) {
+            console.error('❌ [TEST 2] storeBetInRedisWithTimeline failed:', error.message);
+            console.error('❌ [TEST 2] Stack:', error.stack);
         }
-        
-        // Step 7: Check what result was actually generated
-        console.log('\n🎲 [DEBUG] Step 7: Checking Actual Result');
-        
-        // Look for result in Redis
-        const resultKeys = await redisClient.keys(`*result*${periodId}*`);
-        console.log(`🎲 [DEBUG] Result keys found: ${resultKeys.length}`);
-        
-        if (resultKeys.length > 0) {
-            console.log('🎲 [DEBUG] Result keys:');
-            resultKeys.forEach(key => console.log(`  - ${key}`));
-            
-            for (const resultKey of resultKeys) {
-                const resultData = await redisClient.get(resultKey);
-                console.log(`🎲 [DEBUG] Result data for ${resultKey}:`, resultData);
-            }
-        }
-        
-        // Check database for result
-        console.log('\n🎲 [DEBUG] Database result check:');
-        console.log('🎲 [DEBUG] You need to check the database for period:', periodId);
-        console.log('🎲 [DEBUG] Table: BetResultWingo');
-        console.log('🎲 [DEBUG] Column: bet_number');
-        console.log('🎲 [DEBUG] Value:', periodId);
-        
-        // Step 8: Final analysis
-        console.log('\n🎯 [DEBUG] FINAL ANALYSIS');
-        console.log(`📝 Bets: ${Object.keys(betData).length}`);
-        console.log(`👥 Unique users: ${uniqueUsers.size}`);
-        console.log(`💰 Exposure entries: ${Object.keys(exposureData).length}`);
-        console.log(`🛡️ Protection threshold met: ${meetsThreshold ? 'YES' : 'NO'}`);
-        
-        if (!meetsThreshold) {
-            const zeroExposureNumbers = [];
-            for (let num = 0; num <= 9; num++) {
-                const exposure = parseInt(exposureData[`number:${num}`] || 0);
-                if (exposure === 0) {
-                    zeroExposureNumbers.push(num);
+
+        // Clear for next test  
+        await redisClient.del(exposureKey);
+        console.log('🧹 [TEST 2] Cleared exposure for next test');
+
+        // Test 3: Check for any Redis errors during updateBetExposure
+        console.log('\n🎯 [TEST 3] Testing updateBetExposure with error monitoring...');
+        try {
+            // Monitor Redis commands
+            let redisCommands = [];
+            const originalHincrby = redisClient.hincrby;
+            redisClient.hincrby = async function(...args) {
+                redisCommands.push({ command: 'hincrby', args: args, timestamp: new Date().toISOString() });
+                try {
+                    const result = await originalHincrby.apply(this, args);
+                    redisCommands[redisCommands.length - 1].result = result;
+                    return result;
+                } catch (error) {
+                    redisCommands[redisCommands.length - 1].error = error.message;
+                    throw error;
                 }
-            }
+            };
+
+            await updateBetExposure(testData.gameType, testData.duration, testData.periodId, {
+                betType: testData.betType,
+                betValue: testData.betValue,
+                netBetAmount: testData.netBetAmount,
+                odds: testData.odds
+            }, testData.timeline);
+
+            // Restore original hincrby
+            redisClient.hincrby = originalHincrby;
+
+            console.log('📊 [TEST 3] Redis commands executed:', redisCommands);
             
-            console.log(`🎯 [DEBUG] Zero-exposure numbers available: ${zeroExposureNumbers.length}`);
-            
-            if (zeroExposureNumbers.length > 0) {
-                console.log('✅ [DEBUG] Protection logic should have worked');
-                console.log('❌ [DEBUG] But user still won - check result generation function!');
-            } else {
-                console.log('❌ [DEBUG] Protection cannot work - no zero-exposure numbers');
-                console.log('❌ [DEBUG] User bet on all possible outcomes!');
-            }
-        } else {
-            console.log('✅ [DEBUG] Protection not needed - multiple users');
+            const exposuresAfterMonitoring = await redisClient.hgetall(exposureKey);
+            console.log('📊 [TEST 3] Final exposures:', exposuresAfterMonitoring);
+
+        } catch (error) {
+            console.error('❌ [TEST 3] updateBetExposure with monitoring failed:', error.message);
         }
-        
+
+        // Test 4: Check Redis connection and permissions
+        console.log('\n🎯 [TEST 4] Testing Redis connection and permissions...');
+        try {
+            // Test basic Redis operations
+            await redisClient.set('test_key', 'test_value');
+            const testValue = await redisClient.get('test_key');
+            console.log('✅ [TEST 4] Basic Redis operations work:', testValue);
+            
+            // Test hash operations
+            await redisClient.hset('test_hash', 'test_field', 'test_value');
+            const hashValue = await redisClient.hget('test_hash', 'test_field');
+            console.log('✅ [TEST 4] Redis hash operations work:', hashValue);
+            
+            // Test hincrby specifically
+            await redisClient.hincrby('test_hash', 'number_field', 100);
+            const incrValue = await redisClient.hget('test_hash', 'number_field');
+            console.log('✅ [TEST 4] Redis hincrby operations work:', incrValue);
+            
+            // Cleanup
+            await redisClient.del('test_key', 'test_hash');
+            
+        } catch (error) {
+            console.error('❌ [TEST 4] Redis operations failed:', error.message);
+        }
+
+        console.log('\n🔧 [COMPLETE_DEBUG] ==========================================');
+        console.log('🔧 [COMPLETE_DEBUG] Complete flow testing finished');
+        console.log('🔧 [COMPLETE_DEBUG] ==========================================');
+
     } catch (error) {
-        console.error('❌ [DEBUG] Error during debugging:', error);
+        console.error('❌ [COMPLETE_DEBUG] Error during complete flow debug:', error.message);
+        console.error('❌ [COMPLETE_DEBUG] Stack:', error.stack);
     } finally {
-        redisClient.quit();
+        process.exit(0);
     }
 }
 

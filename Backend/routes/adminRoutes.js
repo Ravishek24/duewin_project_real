@@ -195,7 +195,8 @@ router.get('/games/wingo/active-periods', getActivePeriods);
 router.get('/games/wingo/current', getCurrentPeriod);
 router.get('/games/wingo/recent', getRecentPeriods);
 router.get('/games/wingo/stats', getWingoStats);
-router.post('/games/wingo/set-result', setWingoResult);
+// 🚨 DISABLED - This route had broken win/loss logic causing users to win when they should lose
+// router.post('/games/wingo/set-result', setWingoResult);
 
 // Payment Gateway Routes
 router.get('/payment-gateways', getAllPaymentGatewaysController);

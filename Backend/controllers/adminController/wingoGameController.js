@@ -428,6 +428,12 @@ const getWingoStats = async (req, res) => {
 
 // Set Wingo game result for a specific period
 const setWingoResult = async (req, res) => {
+    console.log('🚨 [BROKEN_CONTROLLER] ===== setWingoResult CALLED =====');
+    console.log('🚨 [BROKEN_CONTROLLER] This is the BUGGY controller causing the issues!');
+    console.log('🚨 [BROKEN_CONTROLLER] Period:', req.body.periodId);
+    console.log('🚨 [BROKEN_CONTROLLER] Result:', req.body.result);
+    console.log('🚨 [BROKEN_CONTROLLER] User:', req.user?.user_id);
+    
     try {
         const { periodId, result } = req.body;
 
@@ -529,27 +535,78 @@ const setWingoResult = async (req, res) => {
         // Process all pending bets for this period
         const pendingBets = await BetRecordWingo.findAll({
             where: {
-                period: periodId,
+                bet_number: periodId,  // FIXED: Use bet_number instead of period
                 status: 'pending'
             }
         });
 
+        console.log('🚨 [BROKEN_CONTROLLER] Found', pendingBets.length, 'pending bets');
+
         // Process each bet
         for (const bet of pendingBets) {
+            console.log('🚨 [BROKEN_CONTROLLER] Processing bet:', {
+                betId: bet.bet_id,
+                userId: bet.user_id,
+                betType: bet.bet_type,
+                betAmount: bet.bet_amount,
+                odds: bet.odds
+            });
+            
             let isWinner = false;
             let winAmount = 0;
 
-            // Check if bet matches result
-            if (bet.bet_type === 'number' && bet.bet_value === result.number.toString()) {
-                isWinner = true;
-                winAmount = bet.bet_amount * bet.odds;
-            } else if (bet.bet_type === 'color' && bet.bet_value === result.color) {
-                isWinner = true;
-                winAmount = bet.bet_amount * bet.odds;
-            } else if (bet.bet_type === 'size' && bet.bet_value === result.size) {
-                isWinner = true;
-                winAmount = bet.bet_amount * bet.odds;
+            // CRITICAL BUG: This logic is completely wrong!
+            console.log('🚨 [BROKEN_CONTROLLER] Using BROKEN win logic...');
+            
+            // Parse the correct bet format (COLOR:violet -> betType=COLOR, betValue=violet)
+            const [betType, betValue] = bet.bet_type.split(':');
+            console.log('🚨 [BROKEN_CONTROLLER] Parsed bet:', { betType, betValue });
+            console.log('🚨 [BROKEN_CONTROLLER] Result:', result);
+
+            // FIXED WIN LOGIC (temporarily for logging)
+            if (betType === 'NUMBER') {
+                if (result.number === parseInt(betValue)) {
+                    isWinner = true;
+                    winAmount = bet.bet_amount * bet.odds;
+                    console.log('🚨 [BROKEN_CONTROLLER] NUMBER WIN');
+                }
+            } else if (betType === 'COLOR') {
+                if (betValue === 'violet') {
+                    // Violet wins on 0 and 5 (red_violet and green_violet)
+                    if (result.color === 'red_violet' || result.color === 'green_violet') {
+                        isWinner = true;
+                        winAmount = bet.bet_amount * bet.odds;
+                        console.log('🚨 [BROKEN_CONTROLLER] VIOLET WIN');
+                    } else {
+                        console.log('🚨 [BROKEN_CONTROLLER] VIOLET LOSE - result color:', result.color);
+                    }
+                } else if (betValue === 'red') {
+                    if (result.color === 'red' || result.color === 'red_violet') {
+                        isWinner = true;
+                        winAmount = bet.bet_amount * bet.odds;
+                        console.log('🚨 [BROKEN_CONTROLLER] RED WIN');
+                    }
+                } else if (betValue === 'green') {
+                    if (result.color === 'green' || result.color === 'green_violet') {
+                        isWinner = true;
+                        winAmount = bet.bet_amount * bet.odds;
+                        console.log('🚨 [BROKEN_CONTROLLER] GREEN WIN');
+                    }
+                }
+            } else if (betType === 'SIZE') {
+                const isBig = result.number >= 5;
+                if ((betValue === 'big' && isBig) || (betValue === 'small' && !isBig)) {
+                    isWinner = true;
+                    winAmount = bet.bet_amount * bet.odds;
+                    console.log('🚨 [BROKEN_CONTROLLER] SIZE WIN');
+                }
             }
+
+            console.log('🚨 [BROKEN_CONTROLLER] Final result:', {
+                isWinner,
+                winAmount,
+                expected: isWinner ? 'WIN' : 'LOSE'
+            });
 
             // Update bet status
             await bet.update({
@@ -561,7 +618,8 @@ const setWingoResult = async (req, res) => {
             if (isWinner) {
                 const user = await User.findByPk(bet.user_id);
                 if (user) {
-                    await user.increment('balance', { by: winAmount });
+                    console.log('🚨 [BROKEN_CONTROLLER] Updating user balance by', winAmount);
+                    await user.increment('wallet_balance', { by: winAmount });
                 }
             }
         }
@@ -571,6 +629,12 @@ const setWingoResult = async (req, res) => {
             ...result,
             timeline: period.timeline || 'default'
         });
+
+        console.log('🚨 [BROKEN_CONTROLLER] ===== RESULT PROCESSING COMPLETE =====');
+        console.log('🚨 [BROKEN_CONTROLLER] This controller BYPASSED all protection logic!');
+        console.log('🚨 [BROKEN_CONTROLLER] No user threshold checks were performed!');
+        console.log('🚨 [BROKEN_CONTROLLER] No exposure tracking was used!');
+        console.log('🚨 [BROKEN_CONTROLLER] Single users can win when they should lose!');
 
         return res.status(200).json({
             success: true,

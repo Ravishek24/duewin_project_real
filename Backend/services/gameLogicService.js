@@ -698,51 +698,31 @@ async function get5DCombinationsBatch(diceValues) {
 
 async function updateBetExposure(gameType, duration, periodId, bet, timeline = 'default') {
     try {
-        console.log('📊 [EXPOSURE_START] ==========================================');
-        console.log('📊 [EXPOSURE_START] Updating bet exposure:', {
-            gameType,
-            duration,
-            periodId,
-            timeline,
-            betType: bet.betType,
-            betValue: bet.betValue,
-            netBetAmount: bet.netBetAmount,
-            odds: bet.odds
-        });
-        console.log('📊 [EXPOSURE_START] Full bet object received:', JSON.stringify(bet, null, 2));
-
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
-        console.log('🔍 [EXPOSURE_DEBUG] Writing to key:', exposureKey);
 
-        const { betType, betValue, netBetAmount, odds } = bet;
+        // CRITICAL FIX: Parse bet_type and calculate missing fields
+        let betType, betValue, odds;
+        
+        if (bet.bet_type) {
+            [betType, betValue] = bet.bet_type.split(':');
+            odds = bet.odds || calculateOdds(gameType, betType, betValue);
+        } else {
+            // Legacy format
+            betType = bet.betType;
+            betValue = bet.betValue;
+            odds = bet.odds;
+        }
         
         // CRITICAL FIX: Handle field name variations
-        const actualBetAmount = bet.netBetAmount || bet.betAmount || netBetAmount || 0;
-        console.log('🔍 [EXPOSURE_DEBUG] Bet amount resolved:', {
-            netBetAmount: bet.netBetAmount,
-            betAmount: bet.betAmount,
-            actualBetAmount: actualBetAmount
-        });
+        const actualBetAmount = bet.netBetAmount || bet.amount_after_tax || bet.betAmount || 0;
 
         // Calculate exposure (potential payout) - convert to integer for Redis
         const exposure = Math.round(actualBetAmount * odds * 100); // Convert to cents
-        console.log('🔍 [EXPOSURE_DEBUG] Exposure calculation:', {
-            actualBetAmount,
-            odds,
-            exposure,
-            exposureInRupees: exposure / 100
-        });
 
         // Ensure exposure is a valid integer
         if (isNaN(exposure) || exposure < 0) {
-            console.error('❌ [EXPOSURE_ERROR] Invalid exposure calculation:', { actualBetAmount, odds, exposure });
             throw new Error('Invalid exposure calculation');
         }
-
-        console.log('💰 [EXPOSURE_CALC] Exposure calculation:', {
-            actualBetAmount, odds, exposure, exposureInRupees: exposure / 100,
-            exposureKey: exposureKey
-        });
 
         // Update exposure based on game type
         switch (gameType.toLowerCase()) {
@@ -751,53 +731,35 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                 // For number bets, update specific number
                 if (betType === 'NUMBER') {
                     await redisClient.hincrby(exposureKey, `number:${betValue}`, exposure);
-                    console.log(`📊 Updated number exposure: number:${betValue} += ${exposure}`);
                 }
                 // For other bets, update all matching numbers
                 else {
-                    const updatedNumbers = [];
-                    
                     // Ensure combinations are initialized
                     if (!global.wingoCombinations) {
-                        console.log('⚠️ Wingo combinations not initialized, initializing now...');
                         await initializeGameCombinations();
                     }
                     
                     for (let num = 0; num <= 9; num++) {
                         const combo = global.wingoCombinations[num];
                         if (combo && checkWinCondition(combo, betType, betValue)) {
-                            console.log(`📊 Updating exposure for number ${num}: ${exposure} cents (type: ${typeof exposure})`);
-                            try {
-                                const result = await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
-                                console.log(`📊 Redis HINCRBY result for number ${num}:`, result);
-                                updatedNumbers.push(num);
-                            } catch (redisError) {
-                                console.error(`❌ Redis HINCRBY failed for number ${num}:`, redisError);
-                                throw redisError;
-                            }
+                            await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
                         }
                     }
-                    console.log(`📊 Updated color/size/parity exposure for numbers [${updatedNumbers.join(',')}] += ${exposure}`);
                 }
                 break;
 
             case 'k3':
                 // Update all combinations that would win
-                const updatedK3Combos = [];
-                
                 // Ensure combinations are initialized
                 if (!global.k3Combinations) {
-                    console.log('⚠️ K3 combinations not initialized, initializing now...');
                     await initializeGameCombinations();
                 }
                 
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
                     if (combo && checkK3WinCondition(combo, betType, betValue)) {
                         await redisClient.hincrby(exposureKey, `dice:${key}`, exposure);
-                        updatedK3Combos.push(key);
                     }
                 }
-                console.log(`📊 Updated K3 exposure for combinations [${updatedK3Combos.join(',')}] += ${exposure}`);
                 break;
 
             case 'fived':
@@ -806,28 +768,14 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                 // Store bet-level exposure for later calculation
                 const betKey = `${betType}:${betValue}`;
                 await redisClient.hincrby(exposureKey, `bet:${betKey}`, exposure);
-                console.log(`📊 Updated 5D bet exposure: bet:${betKey} += ${exposure}`);
                 break;
         }
 
         // Set expiry
         await redisClient.expire(exposureKey, duration + 300);
 
-        // Verify exposure was updated
-        const currentExposures = await redisClient.hgetall(exposureKey);
-        
-        // Convert cents to rupees for display
-        const exposuresInRupees = {};
-        for (const [key, value] of Object.entries(currentExposures)) {
-            exposuresInRupees[key] = `${(parseInt(value) / 100).toFixed(2)}₹`;
-        }
-        
-        console.log('✅ [EXPOSURE_VERIFY] Current exposures after update (in rupees):', exposuresInRupees);
-        console.log('📊 [EXPOSURE_END] ==========================================');
-
     } catch (error) {
         logger.error('Error updating bet exposure', { error: error.message, gameType, periodId });
-        console.error('❌ Exposure update failed:', error);
     }
 }
 
@@ -868,32 +816,22 @@ function checkK3WinCondition(combination, betType, betValue) {
 }
 async function getOptimalResultByExposure(gameType, duration, periodId, timeline = 'default') {
     try {
-        console.log('📊 [OPTIMAL_START] ==========================================');
-        console.log('📊 [OPTIMAL_START] Getting optimal result by exposure:', {
-            gameType, duration, periodId, timeline
-        });
-
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
-                console.log('🎲 [OPTIMAL_WINGO] Analyzing Wingo exposures...');
                 // Get all exposures
                 const wingoExposures = await redisClient.hgetall(exposureKey);
                 let minExposure = Infinity;
                 let optimalNumber = 0;
 
-                console.log('📊 [OPTIMAL_WINGO] Raw exposures from Redis:', wingoExposures);
-
                 // Check each number
                 for (let num = 0; num <= 9; num++) {
                     const exposure = parseInt(wingoExposures[`number:${num}`] || 0) / 100; // Convert from cents to rupees
-                    console.log(`📊 [OPTIMAL_WINGO] Number ${num}: ${exposure}₹ exposure`);
                     if (exposure < minExposure) {
                         minExposure = exposure;
                         optimalNumber = num;
-                        console.log(`📊 [OPTIMAL_WINGO] New minimum: Number ${num} with ${exposure}₹ exposure`);
                     }
                 }
 
@@ -2463,7 +2401,7 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         } else {
             console.log('📊 [RESULT_NORMAL] Using NORMAL exposure-based result selection');
             // Normal operation - use exposure-based result
-            result = await getOptimalResultByExposure(gameType, duration, periodId);
+            result = await getOptimalResultByExposure(gameType, duration, periodId, timeline);
         }
 
         console.log('🎯 [RESULT_FINAL] Selected result:', result);
@@ -4532,11 +4470,11 @@ async function storeBetInRedis(betData) {
         const totalKey = `${gameType}:${durationKey}:${periodId}:total`;
         await redisClient.incrbyfloat(totalKey, betAmount);
 
-        // Update exposure tracking
+        // Update exposure tracking - FIXED: Pass production format that actually works
         await updateBetExposure(gameType, duration, periodId, {
-            betType,
-            betValue,
-            netBetAmount: betAmount, // Use betAmount as netBetAmount for this function
+            bet_type: `${betType}:${betValue}`,    // Use production format: "COLOR:red"
+            amount_after_tax: betAmount,            // Use production field name
+            netBetAmount: betAmount,                // Keep legacy fallback
             odds
         }, 'default');
 
@@ -4766,11 +4704,11 @@ const storeBetInRedisWithTimeline = async (betData) => {
         const newGross = parseFloat(currentGross) + parseFloat(grossBetAmount);
         await redisClient.set(grossKey, newGross.toString());
 
-        // Update exposure tracking
+        // Update exposure tracking - FIXED: Pass production format that actually works
         await updateBetExposure(gameType, duration, periodId, {
-            betType,
-            betValue,
-            netBetAmount,
+            bet_type: `${betType}:${betValue}`,    // Use production format: "COLOR:red"
+            amount_after_tax: netBetAmount,         // Use production field name
+            netBetAmount,                           // Keep legacy fallback
             odds
         }, timeline);
 
@@ -4882,6 +4820,9 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
     const lockKey = `process_${gameType}_${duration}_${periodId}_${timeline}`;
     
     try {
+        console.log('✅ [GAMELOGIC_SERVICE] ===== CORRECT SYSTEM CALLED =====');
+        console.log('✅ [GAMELOGIC_SERVICE] This is the GOOD system with all protections!');
+        console.log('✅ [GAMELOGIC_SERVICE] Features: User threshold ✅ | Exposure tracking ✅ | Correct win logic ✅');
         console.log('🎲 [PROCESS_START] ==========================================');
         console.log('🎲 [PROCESS_START] Processing game results:', {
             gameType,
@@ -5543,7 +5484,10 @@ const processBet = async (betData) => {
                 grossBetAmount,
                 platformFee,
                 netBetAmount,
-                betAmount: netBetAmount
+                betAmount: netBetAmount,
+                // CRITICAL FIX: Pass production format for exposure tracking
+                bet_type: betTypeFormatted,  // "COLOR:red" format
+                amount_after_tax: netBetAmount  // Production field name
             });
             
             if (!redisStored) {
@@ -6273,6 +6217,11 @@ module.exports = {
 
     // Initialization
     initializeGameCombinations,
+
+    // Exposure management
+    updateBetExposure,
+    resetPeriodExposure,
+    getBetsFromHash,
 
     // Model management
     ensureModelsInitialized,
