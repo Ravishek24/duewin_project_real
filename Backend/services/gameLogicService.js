@@ -122,20 +122,28 @@ const RISK_THRESHOLDS = {
  * @param {number} number - Number (0-9)
  * @returns {string} - Corresponding color
  */
+/**
+ * FIXED: Get deterministic color based on number (corrected mapping)
+ * @param {number} number - Number (0-9)
+ * @returns {string} - Corresponding color
+ */
 const getColorForNumber = (number) => {
     const colorMap = {
-        0: 'red_violet',
-        1: 'green',
-        2: 'red',
-        3: 'green',
-        4: 'red',
-        5: 'green_violet',
-        6: 'red',
-        7: 'green',
-        8: 'red',
-        9: 'green'
+        0: 'red_violet',    // 0 is red + violet
+        1: 'green',         // 1 is green
+        2: 'red',           // 2 is red
+        3: 'green',         // 3 is green
+        4: 'red',           // 4 is red
+        5: 'green_violet',  // 5 is green + violet
+        6: 'red',           // 6 is red
+        7: 'green',         // 7 is green
+        8: 'red',           // 8 is red
+        9: 'green'          // 9 is green
     };
-    return colorMap[number];
+    
+    const color = colorMap[number];
+    console.log(`🎨 [COLOR_MAP] Number ${number} -> ${color}`);
+    return color;
 };
 
 /**
@@ -779,7 +787,41 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
     }
 }
 
-function checkWinCondition(combination, betType, betValue) {
+/**
+ * UPDATED: Check win condition - simplified to use direct result checking
+ * @param {Object} combination - Combination object (DEPRECATED - now uses direct result)
+ * @param {string} betType - Bet type
+ * @param {string} betValue - Bet value
+ * @param {Object} result - Game result (NEW PARAMETER)
+ * @returns {boolean} - Whether bet wins
+ */
+function checkWinCondition(combination, betType, betValue, result = null) {
+    // DEPRECATED: This function is now replaced by direct result checking
+    // Use checkWingoWin, checkFiveDWin, or checkK3Win instead
+    
+    if (result) {
+        // If result is provided, use direct checking
+        switch (betType) {
+            case 'NUMBER':
+                return result.number === parseInt(betValue);
+            case 'COLOR':
+                return checkColorWin(betValue, result.number, result.color);
+            case 'SIZE':
+                const isBig = result.number >= 5;
+                return (betValue.toLowerCase() === 'big' && isBig) || 
+                       (betValue.toLowerCase() === 'small' && !isBig);
+            case 'PARITY':
+                const isEven = result.number % 2 === 0;
+                return (betValue.toLowerCase() === 'even' && isEven) || 
+                       (betValue.toLowerCase() === 'odd' && !isEven);
+            default:
+                return false;
+        }
+    }
+    
+    // Legacy fallback (for backward compatibility)
+    if (!combination) return false;
+    
     switch (betType) {
         case 'NUMBER':
             return combination.number === parseInt(betValue);
@@ -3461,67 +3503,241 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
  * @param {string} gameType - Game type
  * @returns {boolean} - Whether bet is a winner
  */
+/**
+ * FIXED: Check if a bet is a winner - Direct result checking
+ * @param {Object} bet - Bet record
+ * @param {Object} result - Game result
+ * @param {string} gameType - Game type
+ * @returns {boolean} - Whether bet is a winner
+ */
 const checkBetWin = async (bet, result, gameType) => {
     try {
         const [betType, betValue] = bet.bet_type.split(':');
+        
+        console.log(`🔍 [WIN_CHECK] Checking bet win:`, {
+            betType, betValue, result, gameType
+        });
 
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
-                // Use in-memory combinations
-                if (!global.wingoCombinations) {
-                    console.log('⚠️ Wingo combinations not initialized, initializing now...');
-                    await initializeGameCombinations();
-                }
-                
-                const wingoCombo = global.wingoCombinations[result.number];
-                if (!wingoCombo) return false;
-                
-                return checkWinCondition(wingoCombo, betType, betValue);
+                return checkWingoWin(betType, betValue, result);
 
             case 'fived':
             case '5d':
-                // For 5D, check directly from result
-                if (betType === 'POSITION') {
-                    const [pos, value] = betValue.split('_');
-                    return result[pos] === parseInt(value);
-                } else if (betType === 'POSITION_SIZE') {
-                    const [pos, size] = betValue.split('_');
-                    const posValue = result[pos];
-                    return size === 'big' ? posValue >= 5 : posValue < 5;
-                } else if (betType === 'POSITION_PARITY') {
-                    const [pos, parity] = betValue.split('_');
-                    const posValue = result[pos];
-                    return parity === 'even' ? posValue % 2 === 0 : posValue % 2 === 1;
-                } else if (betType === 'SUM') {
-                    const sum = result.A + result.B + result.C + result.D + result.E;
-                    return sum === parseInt(betValue);
-                } else if (betType === 'SUM_SIZE') {
-                    const sum = result.A + result.B + result.C + result.D + result.E;
-                    return betValue === 'big' ? sum >= 22 : sum < 22;
-                } else if (betType === 'SUM_PARITY') {
-                    const sum = result.A + result.B + result.C + result.D + result.E;
-                    return betValue === 'even' ? sum % 2 === 0 : sum % 2 === 1;
-                }
-                break;
+                return checkFiveDWin(betType, betValue, result);
 
             case 'k3':
-                // Use in-memory combinations
-                const k3Key = `${result.dice_1},${result.dice_2},${result.dice_3}`;
-                const k3Combo = global.k3Combinations[k3Key];
-                if (!k3Combo) return false;
-                
-                return checkK3WinCondition(k3Combo, betType, betValue);
+                return checkK3Win(betType, betValue, result);
         }
 
         return false;
     } catch (error) {
-        logger.error('Error checking bet win', {
+        console.error('❌ Error checking bet win:', {
             error: error.message,
             betType: bet.bet_type,
-            gameType
+            gameType,
+            result
         });
         return false;
+    }
+};
+
+/**
+ * FIXED: Check Wingo/TRX_WIX win conditions directly
+ */
+const checkWingoWin = (betType, betValue, result) => {
+    console.log(`🎯 [WINGO_WIN] Checking: ${betType}:${betValue} vs result:`, result);
+    
+    switch (betType) {
+        case 'NUMBER':
+            const targetNumber = parseInt(betValue);
+            const isNumberWin = result.number === targetNumber;
+            console.log(`🔢 [NUMBER_CHECK] ${targetNumber} === ${result.number} = ${isNumberWin}`);
+            return isNumberWin;
+            
+        case 'COLOR':
+            const isColorWin = checkColorWin(betValue, result.number, result.color);
+            console.log(`🎨 [COLOR_CHECK] ${betValue} vs ${result.color} (number: ${result.number}) = ${isColorWin}`);
+            return isColorWin;
+            
+        case 'SIZE':
+            const isBig = result.number >= 5;
+            const isSizeWin = (betValue.toLowerCase() === 'big' && isBig) || 
+                             (betValue.toLowerCase() === 'small' && !isBig);
+            console.log(`📏 [SIZE_CHECK] ${betValue} vs ${isBig ? 'big' : 'small'} (number: ${result.number}) = ${isSizeWin}`);
+            return isSizeWin;
+            
+        case 'PARITY':
+            const isEven = result.number % 2 === 0;
+            const isParityWin = (betValue.toLowerCase() === 'even' && isEven) || 
+                               (betValue.toLowerCase() === 'odd' && !isEven);
+            console.log(`⚖️ [PARITY_CHECK] ${betValue} vs ${isEven ? 'even' : 'odd'} (number: ${result.number}) = ${isParityWin}`);
+            return isParityWin;
+            
+        default:
+            console.log(`❓ [UNKNOWN_BET_TYPE] ${betType}`);
+            return false;
+    }
+};
+
+/**
+ * FIXED: Check color win with proper violet logic
+ */
+const checkColorWin = (betValue, resultNumber, resultColor) => {
+    const betColor = betValue.toLowerCase();
+    
+    // Get the actual color for the number (deterministic)
+    const actualColor = getColorForNumber(resultNumber);
+    
+    console.log(`🎨 [COLOR_DETAIL] Bet: ${betColor}, Number: ${resultNumber}, Actual color: ${actualColor}, Result color: ${resultColor}`);
+    
+    switch (betColor) {
+        case 'red':
+            // Red bet wins on red numbers (2, 4, 6, 8) and red_violet (0)
+            return actualColor === 'red' || actualColor === 'red_violet';
+            
+        case 'green':
+            // Green bet wins on green numbers (1, 3, 7, 9) and green_violet (5)
+            return actualColor === 'green' || actualColor === 'green_violet';
+            
+        case 'violet':
+        case 'purple':
+            // Violet bet wins ONLY on violet numbers (0, 5)
+            return actualColor === 'red_violet' || actualColor === 'green_violet';
+            
+        default:
+            return false;
+    }
+};
+
+/**
+ * FIXED: Check 5D win conditions directly
+ */
+const checkFiveDWin = (betType, betValue, result) => {
+    console.log(`🎯 [5D_WIN] Checking: ${betType}:${betValue} vs result:`, result);
+    
+    switch (betType) {
+        case 'POSITION':
+            const [position, value] = betValue.split('_');
+            const positionValue = result[position];
+            const targetValue = parseInt(value);
+            const isPositionWin = positionValue === targetValue;
+            console.log(`📍 [POSITION_CHECK] ${position}:${targetValue} === ${positionValue} = ${isPositionWin}`);
+            return isPositionWin;
+            
+        case 'POSITION_SIZE':
+            const [pos, size] = betValue.split('_');
+            const posValue = result[pos];
+            const isBig = posValue >= 5;
+            const isPositionSizeWin = (size === 'big' && isBig) || (size === 'small' && !isBig);
+            console.log(`📏 [POSITION_SIZE_CHECK] ${pos}:${size} vs ${posValue} (${isBig ? 'big' : 'small'}) = ${isPositionSizeWin}`);
+            return isPositionSizeWin;
+            
+        case 'POSITION_PARITY':
+            const [position2, parity] = betValue.split('_');
+            const posValue2 = result[position2];
+            const isEven = posValue2 % 2 === 0;
+            const isPositionParityWin = (parity === 'even' && isEven) || (parity === 'odd' && !isEven);
+            console.log(`⚖️ [POSITION_PARITY_CHECK] ${position2}:${parity} vs ${posValue2} (${isEven ? 'even' : 'odd'}) = ${isPositionParityWin}`);
+            return isPositionParityWin;
+            
+        case 'SUM':
+            const sum = result.A + result.B + result.C + result.D + result.E;
+            const targetSum = parseInt(betValue);
+            const isSumWin = sum === targetSum;
+            console.log(`➕ [SUM_CHECK] ${targetSum} === ${sum} = ${isSumWin}`);
+            return isSumWin;
+            
+        case 'SUM_SIZE':
+            const totalSum = result.A + result.B + result.C + result.D + result.E;
+            const isSumBig = totalSum > 22;
+            const isSumSizeWin = (betValue === 'big' && isSumBig) || (betValue === 'small' && !isSumBig);
+            console.log(`📏 [SUM_SIZE_CHECK] ${betValue} vs ${totalSum} (${isSumBig ? 'big' : 'small'}) = ${isSumSizeWin}`);
+            return isSumSizeWin;
+            
+        case 'SUM_PARITY':
+            const sum2 = result.A + result.B + result.C + result.D + result.E;
+            const isSumEven = sum2 % 2 === 0;
+            const isSumParityWin = (betValue === 'even' && isSumEven) || (betValue === 'odd' && !isSumEven);
+            console.log(`⚖️ [SUM_PARITY_CHECK] ${betValue} vs ${sum2} (${isSumEven ? 'even' : 'odd'}) = ${isSumParityWin}`);
+            return isSumParityWin;
+            
+        default:
+            console.log(`❓ [UNKNOWN_5D_BET_TYPE] ${betType}`);
+            return false;
+    }
+};
+
+/**
+ * FIXED: Check K3 win conditions directly
+ */
+const checkK3Win = (betType, betValue, result) => {
+    console.log(`🎯 [K3_WIN] Checking: ${betType}:${betValue} vs result:`, result);
+    
+    const dice = [result.dice_1, result.dice_2, result.dice_3];
+    const sum = result.sum || dice.reduce((a, b) => a + b, 0);
+    
+    switch (betType) {
+        case 'SUM':
+            const targetSum = parseInt(betValue);
+            const isSumWin = sum === targetSum;
+            console.log(`➕ [K3_SUM_CHECK] ${targetSum} === ${sum} = ${isSumWin}`);
+            return isSumWin;
+            
+        case 'SUM_CATEGORY':
+            if (betValue === 'big') {
+                const isSumCategoryWin = sum >= 11;
+                console.log(`📏 [K3_SUM_CATEGORY_CHECK] big vs ${sum} (>= 11) = ${isSumCategoryWin}`);
+                return isSumCategoryWin;
+            } else if (betValue === 'small') {
+                const isSumCategoryWin = sum < 11;
+                console.log(`📏 [K3_SUM_CATEGORY_CHECK] small vs ${sum} (< 11) = ${isSumCategoryWin}`);
+                return isSumCategoryWin;
+            } else if (betValue === 'odd') {
+                const isSumParityWin = sum % 2 === 1;
+                console.log(`⚖️ [K3_SUM_PARITY_CHECK] odd vs ${sum} = ${isSumParityWin}`);
+                return isSumParityWin;
+            } else if (betValue === 'even') {
+                const isSumParityWin = sum % 2 === 0;
+                console.log(`⚖️ [K3_SUM_PARITY_CHECK] even vs ${sum} = ${isSumParityWin}`);
+                return isSumParityWin;
+            }
+            return false;
+            
+        case 'MATCHING_DICE':
+            if (betValue === 'triple_any') {
+                const isTripleWin = result.has_triple;
+                console.log(`🎲 [K3_TRIPLE_CHECK] triple_any vs has_triple:${result.has_triple} = ${isTripleWin}`);
+                return isTripleWin;
+            } else if (betValue === 'pair_any') {
+                const isPairWin = result.has_pair && !result.has_triple;
+                console.log(`🎲 [K3_PAIR_CHECK] pair_any vs has_pair:${result.has_pair}, has_triple:${result.has_triple} = ${isPairWin}`);
+                return isPairWin;
+            } else if (betValue.startsWith('triple_')) {
+                const targetNumber = parseInt(betValue.split('_')[1]);
+                const isSpecificTripleWin = result.has_triple && dice.every(d => d === targetNumber);
+                console.log(`🎲 [K3_SPECIFIC_TRIPLE_CHECK] triple_${targetNumber} vs dice:[${dice.join(',')}] = ${isSpecificTripleWin}`);
+                return isSpecificTripleWin;
+            }
+            return false;
+            
+        case 'PATTERN':
+            if (betValue === 'all_different') {
+                const unique = new Set(dice);
+                const isAllDifferentWin = unique.size === 3;
+                console.log(`🎲 [K3_ALL_DIFFERENT_CHECK] all_different vs dice:[${dice.join(',')}] unique:${unique.size} = ${isAllDifferentWin}`);
+                return isAllDifferentWin;
+            } else if (betValue === 'straight') {
+                const isStraightWin = result.is_straight;
+                console.log(`🎲 [K3_STRAIGHT_CHECK] straight vs is_straight:${result.is_straight} = ${isStraightWin}`);
+                return isStraightWin;
+            }
+            return false;
+            
+        default:
+            console.log(`❓ [UNKNOWN_K3_BET_TYPE] ${betType}`);
+            return false;
     }
 };
 

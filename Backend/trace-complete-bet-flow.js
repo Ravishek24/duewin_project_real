@@ -1,5 +1,5 @@
 const gameLogicService = require('./services/gameLogicService');
-const { redisClient } = require('./config/redis');
+const redis = require('redis');
 
 // Enhanced logging wrapper
 const createTracer = (functionName, originalFunction) => {
@@ -31,7 +31,7 @@ const createTracer = (functionName, originalFunction) => {
 };
 
 // Function to check Redis data at any point
-const checkRedisData = async (stepName, gameType, duration, timeline, periodId) => {
+const checkRedisData = async (stepName, gameType, duration, timeline, periodId, redisClient) => {
     console.log(`\n📊 [REDIS_CHECK_${stepName}] ==========================================`);
     try {
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
@@ -69,6 +69,18 @@ async function traceCompleteBetFlow() {
     console.log('🚀 TRACING COMPLETE REAL BET FLOW');
     console.log('==================================\n');
     
+    // Create Redis client for this trace
+    const redisClient = redis.createClient({
+        host: 'localhost',
+        port: 6379,
+        retryDelayOnFailover: 100,
+        enableReadyCheck: true,
+        maxRetriesPerRequest: 3,
+    });
+    
+    await redisClient.connect();
+    console.log('✅ Redis connected for tracing');
+    
     const betData = {
         userId: 13,
         gameType: 'wingo',
@@ -94,7 +106,7 @@ async function traceCompleteBetFlow() {
         await redisClient.del(betsKey);
         console.log('✅ [STEP_0] Initialization complete');
         
-        await checkRedisData('INITIAL', betData.gameType, betData.duration, betData.timeline, betData.periodId);
+        await checkRedisData('INITIAL', betData.gameType, betData.duration, betData.timeline, betData.periodId, redisClient);
         
         // Step 2: Trace validateBetWithTimeline
         console.log('\n🎯 [STEP_1] Tracing validateBetWithTimeline...');
@@ -105,7 +117,7 @@ async function traceCompleteBetFlow() {
             return;
         }
         
-        await checkRedisData('AFTER_VALIDATION', betData.gameType, betData.duration, betData.timeline, betData.periodId);
+        await checkRedisData('AFTER_VALIDATION', betData.gameType, betData.duration, betData.timeline, betData.periodId, redisClient);
         
         // Step 3: Prepare the exact data that processBet will use
         const { grossBetAmount, platformFee, netBetAmount } = validation.amounts;
@@ -133,7 +145,7 @@ async function traceCompleteBetFlow() {
         
         const redisStored = await createTracer('storeBetInRedisWithTimeline', gameLogicService.storeBetInRedisWithTimeline)(redisStoreData);
         
-        await checkRedisData('AFTER_REDIS_STORE', betData.gameType, betData.duration, betData.timeline, betData.periodId);
+        await checkRedisData('AFTER_REDIS_STORE', betData.gameType, betData.duration, betData.timeline, betData.periodId, redisClient);
         
         // Step 5: Trace updateBetExposure directly with the exact data it receives
         console.log('\n🎯 [STEP_4] Tracing updateBetExposure directly...');
@@ -156,7 +168,7 @@ async function traceCompleteBetFlow() {
             betData.timeline
         );
         
-        await checkRedisData('AFTER_EXPOSURE_UPDATE', betData.gameType, betData.duration, betData.timeline, betData.periodId);
+        await checkRedisData('AFTER_EXPOSURE_UPDATE', betData.gameType, betData.duration, betData.timeline, betData.periodId, redisClient);
         
         // Step 6: Test protection logic
         console.log('\n🎯 [STEP_5] Testing protection logic...');
@@ -207,26 +219,18 @@ async function traceCompleteBetFlow() {
     } catch (error) {
         console.error('❌ [FLOW_ERROR] Flow trace failed:', error.message);
         console.error('Stack:', error.stack);
+    } finally {
+        await redisClient.quit();
+        console.log('🔌 Redis connection closed');
     }
 }
 
 // Add Redis connection check
 async function initializeTracer() {
     try {
-        if (!redisClient.isReady) {
-            console.log('🔌 Connecting to Redis...');
-            await redisClient.connect();
-        }
-        console.log('✅ Redis ready for tracing');
-        
         await traceCompleteBetFlow();
-        
     } catch (error) {
         console.error('❌ Tracer initialization failed:', error.message);
-    } finally {
-        if (redisClient.isReady) {
-            await redisClient.quit();
-        }
     }
 }
 
