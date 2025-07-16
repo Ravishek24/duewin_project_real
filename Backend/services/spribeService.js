@@ -288,7 +288,8 @@ const findTransactionByProviderTxId = async (providerTxId) => {
     if (!transaction) {
       return {
         success: false,
-        message: 'Transaction not found'
+        message: 'Transaction not found',
+        transaction: null
       };
     }
     
@@ -301,7 +302,8 @@ const findTransactionByProviderTxId = async (providerTxId) => {
     
     return {
       success: false,
-      message: 'Error finding transaction'
+      message: 'Error finding transaction',
+      transaction: null
     };
   }
 };
@@ -1109,13 +1111,17 @@ const handleWithdraw = async (withdrawData) => {
     if (!user) {
       return { code: 401, message: 'User not found' };
     }
-    // --- SESSION VALIDATION ---
+    // --- SESSION VALIDATION (FIXED) ---
     const SpribeGameSession = require('../models/SpribeGameSession');
-    const session = await SpribeGameSession.findOne({ where: { user_id, session_token } });
+    const session = await SpribeGameSession.findOne({ where: { user_id, session_token, status: 'active' } });
     if (!session) {
       return { code: 401, message: 'User token is invalid' };
     }
-    if (!session.isValid()) {
+    // Check if session is expired (4 hours from creation)
+    const sessionAge = Date.now() - new Date(session.created_at || session.started_at).getTime();
+    const maxSessionAge = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+    if (sessionAge > maxSessionAge) {
+      await session.update({ status: 'expired' });
       return { code: 403, message: 'User token is expired' };
     }
 
@@ -1260,13 +1266,17 @@ const handleDeposit = async (depositData) => {
     if (!user) {
       return { code: 401, message: 'User not found' };
     }
-    // --- SESSION VALIDATION ---
+    // --- SESSION VALIDATION (FIXED) ---
     const SpribeGameSession = require('../models/SpribeGameSession');
-    const session = await SpribeGameSession.findOne({ where: { user_id, session_token } });
+    const session = await SpribeGameSession.findOne({ where: { user_id, session_token, status: 'active' } });
     if (!session) {
       return { code: 401, message: 'User token is invalid' };
     }
-    if (!session.isValid()) {
+    // Check if session is expired (4 hours from creation)
+    const sessionAge = Date.now() - new Date(session.created_at || session.started_at).getTime();
+    const maxSessionAge = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+    if (sessionAge > maxSessionAge) {
+      await session.update({ status: 'expired' });
       return { code: 403, message: 'User token is expired' };
     }
 
@@ -1369,13 +1379,17 @@ const handleRollback = async (rollbackData) => {
     if (!user) {
       return { code: 401, message: 'User not found' };
     }
-    // --- SESSION VALIDATION ---
+    // --- SESSION VALIDATION (FIXED) ---
     const SpribeGameSession = require('../models/SpribeGameSession');
-    const session = await SpribeGameSession.findOne({ where: { user_id, session_token } });
+    const session = await SpribeGameSession.findOne({ where: { user_id, session_token, status: 'active' } });
     if (!session) {
       return { code: 401, message: 'User token is invalid' };
     }
-    if (!session.isValid()) {
+    // Check if session is expired (4 hours from creation)
+    const sessionAge = Date.now() - new Date(session.created_at || session.started_at).getTime();
+    const maxSessionAge = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+    if (sessionAge > maxSessionAge) {
+      await session.update({ status: 'expired' });
       return { code: 403, message: 'User token is expired' };
     }
 
