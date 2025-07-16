@@ -382,7 +382,7 @@ const getBalance = async (userId, currency = 'USD') => {
     }
     
     // Convert between EUR and USD
-    const conversionRate = 1.08; // 1 EUR = 1.08 USD
+    const conversionRate = 1.0; // 1 EUR = 1.08 USD
     
     if (wallet.currency === 'EUR' && currency === 'USD') {
       const usdBalance = balance * conversionRate;

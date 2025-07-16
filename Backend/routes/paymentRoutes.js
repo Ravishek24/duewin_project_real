@@ -54,11 +54,6 @@ router.post('/withdrawal/initiate', auth, requirePhoneVerification, initiateWith
 // Payment status
 router.get('/status/:order_id', auth, getPaymentStatusController);
 
-// Callback routes for OKPAY (public, accessed by payment gateway)
-// Apply IP whitelisting to protect callbacks
-router.post('/okpay/payin-callback', paymentCallbackWhitelist, okPayCallbackController);
-router.post('/okpay/payout-callback', paymentCallbackWhitelist, payOutCallbackController);
-
 // Callback routes for WePayGlobal (public, accessed by payment gateway)
 // Apply IP whitelisting to protect callbacks
 router.post('/wepay/payin-callback', paymentCallbackWhitelist, wePayCollectionCallbackController);

@@ -38,15 +38,15 @@ const createSequelizeInstance = () => {
                 updatedAt: 'updated_at'
             },
             pool: {
-                max: 20,        // Increased from 5 to handle concurrent operations
-                min: 5,         // Maintain minimum connections
-                acquire: 15000, // Reduced acquire timeout
-                idle: 10000,
-                evict: 5000,    // Add connection eviction
+                max: 50,        // Increased for scheduler load
+                min: 10,        // Increased minimum connections
+                acquire: 60000, // Increased timeout to 60 seconds for scheduler
+                idle: 30000,    // Increased idle timeout
+                evict: 60000,   // Increased eviction timeout
                 handleDisconnects: true
             },
             retry: {
-                max: 3,
+                max: 5,            // Increased retry attempts
                 match: [
                     /SequelizeConnectionError/,
                     /SequelizeDeadlockError/,     // Add deadlock detection
@@ -55,6 +55,7 @@ const createSequelizeInstance = () => {
                     /SequelizeHostNotReachableError/,
                     /SequelizeInvalidConnectionError/,
                     /SequelizeConnectionTimedOutError/,
+                    /ConnectionAcquireTimeoutError/,  // Added specific timeout error
                     /TimeoutError/
                 ]
             }

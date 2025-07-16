@@ -12,7 +12,7 @@ const getProfileController = async (req, res) => {
             const response = {
                 ...result,
                 data: {
-                    ...result.user,
+                    ...result.user.dataValues,
                     member_detail: `MEMBER${result.user.user_name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`
                 }
             };

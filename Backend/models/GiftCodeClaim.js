@@ -28,6 +28,11 @@ class GiftCodeClaim extends Model {
                 type: DataTypes.DATE,
                 allowNull: false,
                 defaultValue: DataTypes.NOW
+            },
+            claimed_ip: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'IP address when gift code was claimed'
             }
         }, {
             sequelize,

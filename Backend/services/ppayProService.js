@@ -212,10 +212,14 @@ async function createPpayProDepositOrder(userId, orderId, params, notifyUrl, gat
 // Process PPayPro deposit callback
 async function processPpayProDepositCallback(callbackData) {
     try {
+        // Log all received callback data for deposit
+        console.log('[PPAYPRO][Deposit Callback] Received Data:', JSON.stringify(callbackData, null, 2));
         // 1. Verify signature
         const receivedSign = callbackData.sign;
         const calculatedSign = generatePpayProSignature(callbackData);
+        console.log('[PPAYPRO][Deposit Callback] Calculated Signature:', calculatedSign);
         if (receivedSign !== calculatedSign) {
+            console.log('[PPAYPRO][Deposit Callback] Signature mismatch!');
             return { success: false, message: 'Invalid signature' };
         }
         // 2. Extract order details
@@ -355,10 +359,14 @@ async function createPpayProWithdrawalOrder(userId, orderId, params, notifyUrl, 
 // Process PPayPro withdrawal callback
 async function processPpayProWithdrawalCallback(callbackData) {
     try {
+        // Log all received callback data for withdrawal
+        console.log('[PPAYPRO][Withdrawal Callback] Received Data:', JSON.stringify(callbackData, null, 2));
         // 1. Verify signature
         const receivedSign = callbackData.sign;
         const calculatedSign = generatePpayProSignature(callbackData);
+        console.log('[PPAYPRO][Withdrawal Callback] Calculated Signature:', calculatedSign);
         if (receivedSign !== calculatedSign) {
+            console.log('[PPAYPRO][Withdrawal Callback] Signature mismatch!');
             return { success: false, message: 'Invalid signature' };
         }
         // 2. Extract order details

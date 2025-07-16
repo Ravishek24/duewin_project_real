@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const { recordVipExperience } = require('../services/autoVipService');
 const { processSelfRebate } = require('../services/selfRebateService');
 const { processBetForActivityReward } = require('../services/activityRewardsService');
+const fiveDProtectionService = require('./fiveDProtectionService');
 // CONSTANTS - Add to top of file
 const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
 const ENHANCED_USER_THRESHOLD = 100; // New minimum user threshold
@@ -49,6 +50,86 @@ const betDebugLogger = winston.createLogger({
 });
 
 const generateTraceId = () => crypto.randomBytes(8).toString('hex');
+
+/**
+ * Get K3 result type categorization for exposure logging
+ * @param {number} d1 - First dice
+ * @param {number} d2 - Second dice
+ * @param {number} d3 - Third dice
+ * @returns {string} - Result type description
+ */
+const getK3ResultType = (d1, d2, d3) => {
+    const dice = [d1, d2, d3].sort((a, b) => a - b);
+    const sum = d1 + d2 + d3;
+
+    // Check for triple
+    if (d1 === d2 && d2 === d3) {
+        return `Triple_${d1} (Sum:${sum})`;
+    }
+
+    // Check for pair
+    if (d1 === d2 || d2 === d3 || d1 === d3) {
+        const pairValue = d1 === d2 ? d1 : d3;
+        const singleValue = d1 === d2 ? d3 : d1;
+        return `Pair_${pairValue}_${singleValue} (Sum:${sum})`;
+    }
+
+    // Check for straight (consecutive)
+    if (dice[1] === dice[0] + 1 && dice[2] === dice[1] + 1) {
+        return `Straight_${dice[0]}-${dice[1]}-${dice[2]} (Sum:${sum})`;
+    }
+
+    // All different
+    return `AllDifferent_${dice[0]}-${dice[1]}-${dice[2]} (Sum:${sum})`;
+};
+
+/**
+ * Get K3 exposure type description for logging
+ * @param {string} betType - Bet type
+ * @param {string} betValue - Bet value
+ * @returns {string} - Exposure type description
+ */
+const getK3ExposureType = (betType, betValue) => {
+    switch (betType) {
+        case 'SUM':
+            return `SUM bet on ${betValue} - affects combinations with sum ${betValue}`;
+        case 'SUM_CATEGORY':
+            if (betValue === 'big') {
+                return 'SUM_CATEGORY big - affects combinations with sum 11-18';
+            } else if (betValue === 'small') {
+                return 'SUM_CATEGORY small - affects combinations with sum 3-10';
+            } else if (betValue === 'odd') {
+                return 'SUM_CATEGORY odd - affects combinations with odd sum';
+            } else if (betValue === 'even') {
+                return 'SUM_CATEGORY even - affects combinations with even sum';
+            }
+            return `SUM_CATEGORY ${betValue}`;
+        case 'MATCHING_DICE':
+            if (betValue === 'triple_any') {
+                return 'MATCHING_DICE triple_any - affects all triple combinations (6 combinations)';
+            } else if (betValue === 'pair_any') {
+                return 'MATCHING_DICE pair_any - affects all pair combinations (90 combinations)';
+            } else if (betValue.startsWith('triple_')) {
+                const number = betValue.split('_')[1];
+                return `MATCHING_DICE triple_${number} - affects specific triple ${number},${number},${number}`;
+            } else if (betValue.startsWith('pair_')) {
+                const [pairNum, singleNum] = betValue.split('_').slice(1);
+                return `MATCHING_DICE pair_${pairNum}_${singleNum} - affects specific pair ${pairNum},${pairNum},${singleNum}`;
+            }
+            return `MATCHING_DICE ${betValue}`;
+        case 'PATTERN':
+            if (betValue === 'all_different') {
+                return 'PATTERN all_different - affects combinations with all different dice (120 combinations)';
+            } else if (betValue === 'straight') {
+                return 'PATTERN straight - affects consecutive combinations (4 combinations)';
+            } else if (betValue === 'two_different') {
+                return 'PATTERN two_different - affects pair combinations (90 combinations)';
+            }
+            return `PATTERN ${betValue}`;
+        default:
+            return `Unknown bet type: ${betType}`;
+    }
+};
 
 // Initialize models variable - will be populated after initialization
 let serviceModels = null;
@@ -156,7 +237,7 @@ const getColorForNumber = (number) => {
         8: 'red',           // 8 is red
         9: 'green'          // 9 is green
     };
-    
+
     const color = colorMap[number];
     console.log(`🎨 [COLOR_MAP] Number ${number} -> ${color}`);
     return color;
@@ -655,7 +736,14 @@ async function lazy5DLoader(diceValue) {
             sum_size: combination.sum_size,
             sum_parity: combination.sum_parity,
             position_flags: combination.position_flags,
-            winning_conditions: JSON.parse(combination.winning_conditions)
+            winning_conditions: typeof combination.winning_conditions === 'string' ? (() => {
+                try {
+                    return JSON.parse(combination.winning_conditions);
+                } catch (parseError) {
+                    console.error('Error parsing winning_conditions JSON in lazy5DLoader:', parseError);
+                    return {};
+                }
+            })() : combination.winning_conditions
         };
 
         // Cache for 1 hour
@@ -705,7 +793,14 @@ async function get5DCombinationsBatch(diceValues) {
                     sum_size: combo.sum_size,
                     sum_parity: combo.sum_parity,
                     position_flags: combo.position_flags,
-                    winning_conditions: JSON.parse(combo.winning_conditions)
+                    winning_conditions: typeof combo.winning_conditions === 'string' ? (() => {
+                        try {
+                            return JSON.parse(combo.winning_conditions);
+                        } catch (parseError) {
+                            console.error('Error parsing winning_conditions JSON in get5DCombinationsBatch:', parseError);
+                            return {};
+                        }
+                    })() : combo.winning_conditions
                 };
 
                 await redisClient.setex(`5d:combo:${combo.dice_value}`, 3600, JSON.stringify(result));
@@ -725,13 +820,13 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
         console.log('🔍 [EXPOSURE_DEBUG] updateBetExposure called with:', {
             gameType, duration, periodId, timeline, bet
         });
-        
+
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
         console.log('🔍 [EXPOSURE_DEBUG] Exposure key:', exposureKey);
 
         // CRITICAL FIX: Parse bet_type and calculate missing fields
         let betType, betValue;
-        
+
         if (bet.bet_type) {
             [betType, betValue] = bet.bet_type.split(':');
         } else {
@@ -739,7 +834,7 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
             betType = bet.betType;
             betValue = bet.betValue;
         }
-        
+
         // CRITICAL FIX: Handle field name variations
         const actualBetAmount = bet.netBetAmount || bet.amount_after_tax || bet.betAmount || 0;
 
@@ -761,21 +856,21 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                 // For other bets, update all matching numbers with correct odds
                 else {
                     console.log('🔍 [EXPOSURE_DEBUG] Processing COLOR/SIZE/PARITY bet');
-                    
+
                     // Ensure combinations are initialized
                     if (!global.wingoCombinations) {
                         console.log('🔍 [EXPOSURE_DEBUG] Initializing wingo combinations...');
                         await initializeGameCombinations();
                     }
-                    
+
                     console.log('🔍 [EXPOSURE_DEBUG] Checking numbers 0-9 for bet:', { betType, betValue });
-                    
+
                     for (let num = 0; num <= 9; num++) {
                         const combo = global.wingoCombinations[num];
                         // Use the correct win checking logic for exposure tracking
                         if (combo && checkWingoWin(betType, betValue, combo)) {
                             console.log(`🔍 [EXPOSURE_DEBUG] Number ${num} (${combo.color}) wins for bet ${betType}:${betValue}`);
-                            
+
                             // Calculate correct odds for this specific number
                             let correctOdds;
                             if (betType === 'COLOR') {
@@ -808,13 +903,13 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                                 // For other bet types, use standard odds
                                 correctOdds = calculateOdds(gameType, betType, betValue);
                             }
-                            
+
                             console.log(`🔍 [EXPOSURE_DEBUG] Number ${num}: odds=${correctOdds}, betAmount=${actualBetAmount}`);
-                            
+
                             // Calculate exposure with correct odds
                             const exposure = Math.round(actualBetAmount * correctOdds * 100); // Convert to cents
                             console.log(`🔍 [EXPOSURE_DEBUG] Adding exposure ${exposure} to number ${num}`);
-                            
+
                             await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
                         } else {
                             console.log(`🔍 [EXPOSURE_DEBUG] Number ${num} (${combo?.color}) does NOT win for bet ${betType}:${betValue}`);
@@ -824,20 +919,96 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                 break;
 
             case 'k3':
-                // Update all combinations that would win
+                // Update all combinations that would win with detailed payout logging
                 // Ensure combinations are initialized
                 if (!global.k3Combinations) {
                     await initializeGameCombinations();
                 }
-                
+
+                // Use the corrected bet type for odds calculation
                 const k3Odds = calculateOdds(gameType, betType, betValue);
+                console.log(`🎲 [K3_ODDS_CALCULATION] Calculating odds for ${betType}:${betValue} = ${k3Odds}x`);
                 const k3Exposure = Math.round(actualBetAmount * k3Odds * 100);
-                
+
+                console.log(`🎲 [K3_EXPOSURE_DETAILS] K3 bet exposure calculation:`, {
+                    betType: betType,
+                    betValue: betValue,
+                    betAmount: actualBetAmount,
+                    odds: k3Odds,
+                    exposure: k3Exposure,
+                    exposureKey: exposureKey
+                });
+
+                let winningCombinations = 0;
+                const exposureBreakdown = {};
+                const realTimeExposure = {};
+
+                console.log(`🎲 [K3_REAL_EXPOSURE_START] Starting real-time exposure calculation for ${betType}:${betValue}`);
+                console.log(`🎲 [K3_REAL_EXPOSURE_INFO] Bet Amount: ₹${actualBetAmount}, Odds: ${k3Odds}x, Exposure per winning combination: ₹${k3Exposure / 100}`);
+
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
                     if (combo && checkK3WinCondition(combo, betType, betValue)) {
                         await redisClient.hincrby(exposureKey, `dice:${key}`, k3Exposure);
+                        winningCombinations++;
+
+                        // Track exposure breakdown by result type
+                        const [d1, d2, d3] = key.split(',').map(n => parseInt(n));
+                        const sum = d1 + d2 + d3;
+                        const resultType = getK3ResultType(d1, d2, d3);
+
+                        if (!exposureBreakdown[resultType]) {
+                            exposureBreakdown[resultType] = {
+                                combinations: [],
+                                totalExposure: 0
+                            };
+                        }
+
+                        exposureBreakdown[resultType].combinations.push(key);
+                        exposureBreakdown[resultType].totalExposure += k3Exposure;
+
+                        // Real-time exposure tracking
+                        realTimeExposure[key] = {
+                            dice: [d1, d2, d3],
+                            sum: sum,
+                            resultType: resultType,
+                            exposure: k3Exposure / 100, // Convert from cents to rupees
+                            payout: (k3Exposure / 100) * k3Odds
+                        };
+
+                        // Log each winning combination in real-time
+                        console.log(`🎲 [K3_WINNING_COMBO] ${key} → [${d1},${d2},${d3}] (Sum:${sum}) → ${resultType} → Exposure: ₹${k3Exposure / 100} → Payout: ₹${(k3Exposure / 100) * k3Odds}`);
                     }
                 }
+
+                console.log(`🎲 [K3_REAL_EXPOSURE_END] Real-time exposure calculation completed!`);
+                console.log(`🎲 [K3_EXPOSURE_SUMMARY] K3 exposure summary for ${betType}:${betValue}:`, {
+                    totalCombinations: Object.keys(global.k3Combinations).length,
+                    winningCombinations: winningCombinations,
+                    winPercentage: ((winningCombinations / Object.keys(global.k3Combinations).length) * 100).toFixed(2) + '%',
+                    totalExposure: k3Exposure * winningCombinations,
+                    totalExposureRupees: (k3Exposure * winningCombinations) / 100,
+                    totalPotentialPayout: (k3Exposure * winningCombinations * k3Odds) / 100,
+                    exposureBreakdown: exposureBreakdown,
+                    realTimeExposure: Object.keys(realTimeExposure).slice(0, 10).map(key => ({
+                        combination: key,
+                        ...realTimeExposure[key]
+                    })),
+                    sampleWinningResults: Object.keys(exposureBreakdown).slice(0, 5).map(type => ({
+                        resultType: type,
+                        combinations: exposureBreakdown[type].combinations.slice(0, 3),
+                        exposure: exposureBreakdown[type].totalExposure,
+                        exposureRupees: exposureBreakdown[type].totalExposure / 100
+                    }))
+                });
+
+                // Show detailed breakdown by result type
+                console.log(`🎲 [K3_EXPOSURE_BREAKDOWN] Detailed breakdown by result type:`);
+                Object.entries(exposureBreakdown).forEach(([resultType, data]) => {
+                    console.log(`  📊 ${resultType}:`);
+                    console.log(`    - Combinations: ${data.combinations.length}`);
+                    console.log(`    - Total Exposure: ₹${data.totalExposure / 100}`);
+                    console.log(`    - Sample: ${data.combinations.slice(0, 3).join(', ')}`);
+                });
                 break;
 
             case 'fived':
@@ -848,6 +1019,27 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                 const fiveDExposure = Math.round(actualBetAmount * fiveDOdds * 100);
                 const betKey = `${betType}:${betValue}`;
                 await redisClient.hincrby(exposureKey, `bet:${betKey}`, fiveDExposure);
+                
+                // 🎯 ENHANCED 5D EXPOSURE LOGGING WITH UNIQUE EMOJIS
+                console.log(`🎯 [5D_BET_PLACED] 🎲 5D Bet Exposure Updated:`, {
+                    periodId, gameType, duration, timeline,
+                    betType, betValue, betAmount: actualBetAmount,
+                    odds: fiveDOdds, exposure: fiveDExposure,
+                    exposureKey, betKey: `bet:${betKey}`,
+                    exposureRupees: `${(fiveDExposure / 100).toFixed(2)}₹`
+                });
+                
+                // 🚀 ENHANCED: Remove winning combinations from zero-exposure set
+                try {
+                    await fiveDProtectionService.removeCombinationFromZeroExposure(
+                        gameType, duration, periodId, timeline,
+                        betType, betValue
+                    );
+                    console.log(`⚡ [ENHANCED_5D_BET] Removed winning combinations for bet: ${betType}:${betValue}`);
+                } catch (error) {
+                    console.log(`⚠️ [ENHANCED_5D_BET] Error removing combinations: ${error.message}`);
+                    // Continue with normal processing even if enhanced system fails
+                }
                 break;
         }
 
@@ -875,7 +1067,7 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
 function checkWinCondition(combination, betType, betValue, result = null) {
     // DEPRECATED: This function is now replaced by direct result checking
     // Use checkWingoWin, checkFiveDWin, or checkK3Win instead
-    
+
     if (result) {
         // If result is provided, use direct checking
         switch (betType) {
@@ -885,20 +1077,20 @@ function checkWinCondition(combination, betType, betValue, result = null) {
                 return checkColorWin(betValue, result.number, result.color);
             case 'SIZE':
                 const isBig = result.number >= 5;
-                return (betValue.toLowerCase() === 'big' && isBig) || 
-                       (betValue.toLowerCase() === 'small' && !isBig);
+                return (betValue.toLowerCase() === 'big' && isBig) ||
+                    (betValue.toLowerCase() === 'small' && !isBig);
             case 'PARITY':
                 const isEven = result.number % 2 === 0;
-                return (betValue.toLowerCase() === 'even' && isEven) || 
-                       (betValue.toLowerCase() === 'odd' && !isEven);
+                return (betValue.toLowerCase() === 'even' && isEven) ||
+                    (betValue.toLowerCase() === 'odd' && !isEven);
             default:
                 return false;
         }
     }
-    
+
     // Legacy fallback (for backward compatibility)
     if (!combination) return false;
-    
+
     switch (betType) {
         case 'NUMBER':
             return combination.number === parseInt(betValue);
@@ -923,14 +1115,38 @@ function checkWinCondition(combination, betType, betValue, result = null) {
 
 function checkK3WinCondition(combination, betType, betValue) {
     const conditions = combination.winning_conditions;
+    
+    // Special handling for SUM_MULTIPLE bets
+    if (betType === 'SUM_MULTIPLE') {
+        const sumValues = betValue.split(',').map(s => s.trim());
+        console.log(`🎲 [K3_MULTIPLE_WIN_CHECK] Checking SUM_MULTIPLE: ${sumValues.join(',')} vs combination:`, combination);
+        
+        // Check if any of the bet sum values match the combination's sum
+        for (const sumValue of sumValues) {
+            const checkValue = `SUM:${sumValue}`;
+            for (const conditionGroup of Object.values(conditions)) {
+                if (Array.isArray(conditionGroup) && conditionGroup.includes(checkValue)) {
+                    console.log(`🎲 [K3_MULTIPLE_WIN_FOUND] SUM_MULTIPLE bet wins with sum ${sumValue}`);
+                    return true;
+                }
+            }
+        }
+        console.log(`🎲 [K3_MULTIPLE_WIN_NOT_FOUND] SUM_MULTIPLE bet loses - no matching sums`);
+        return false;
+    }
+    
+    // Standard handling for other bet types
     const checkValue = `${betType}:${betValue}`;
+    console.log(`🎲 [K3_WIN_CHECK] Checking standard bet: ${checkValue} vs combination:`, combination);
 
     // Check in all condition arrays
     for (const conditionGroup of Object.values(conditions)) {
         if (Array.isArray(conditionGroup) && conditionGroup.includes(checkValue)) {
+            console.log(`🎲 [K3_WIN_FOUND] Standard bet wins with ${checkValue}`);
             return true;
         }
     }
+    console.log(`🎲 [K3_WIN_NOT_FOUND] Standard bet loses - no matching conditions`);
     return false;
 }
 async function getOptimalResultByExposure(gameType, duration, periodId, timeline = 'default') {
@@ -965,11 +1181,11 @@ async function getOptimalResultByExposure(gameType, duration, periodId, timeline
                     console.log('⚠️ [OPTIMAL_WINGO] Wingo combinations not initialized, initializing now...');
                     await initializeGameCombinations();
                 }
-                
+
                 const result = global.wingoCombinations[optimalNumber];
                 console.log('📊 [OPTIMAL_END] ==========================================');
                 console.log('📊 [OPTIMAL_END] Final optimal result:', result);
-                
+
                 return result;
 
             case 'k3':
@@ -992,7 +1208,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId, timeline
                     console.log('⚠️ K3 combinations not initialized, initializing now...');
                     await initializeGameCombinations();
                 }
-                
+
                 return global.k3Combinations[optimalKey];
 
             case 'fived':
@@ -1025,19 +1241,73 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
         } else if (totalBets > 50000) {
             strategy = 'SMART_SAMPLING';
         }
+        
+        console.log('🎯 [5D_STRATEGY] Selected strategy:', {
+            strategy,
+            totalBets,
+            periodId,
+            timeline
+        });
+
+        // Check if protection should be applied (A_1-9 bet but A_0 not bet)
+        const aBets = Object.keys(betExposures).filter(key => 
+            key.startsWith('bet:POSITION:A_') && key !== 'bet:POSITION:A_0'
+        );
+        const hasA0Bet = Object.keys(betExposures).some(key => key === 'bet:POSITION:A_0');
+        const hasA1to9Bets = aBets.some(bet => bet.match(/A_[1-9]/));
+        const shouldApplyProtection = hasA1to9Bets && !hasA0Bet;
+        
+        // Enhanced protection for low user count scenarios
+        const userCountResult = await getUniqueUserCount('5d', duration, periodId, timeline);
+        const isLowUserCount = userCountResult.uniqueUserCount < ENHANCED_USER_THRESHOLD;
+        
+        if (isLowUserCount) {
+            console.log('🛡️ [5D_LOW_USER_PROTECTION] Low user count detected:', {
+                userCount: userCountResult.uniqueUserCount,
+                threshold: ENHANCED_USER_THRESHOLD,
+                shouldApplyProtection: true
+            });
+        }
+        
+        console.log('🔍 [5D_PROTECTION_DEBUG] Exposure analysis:', {
+            totalBets,
+            strategy,
+            aBets: aBets.length,
+            hasA0Bet,
+            hasA1to9Bets,
+            shouldApplyProtection,
+            exposureKeys: Object.keys(betExposures).filter(k => k.startsWith('bet:POSITION:A_')),
+            allExposureKeys: Object.keys(betExposures)
+        });
+        
+        if (shouldApplyProtection) {
+            console.log('🛡️ [5D_PROTECTION] Protection condition detected: A_1-9 bet, A_0 not bet');
+        }
 
         const models = await ensureModelsInitialized();
+        const { getSequelizeInstance } = require('../config/db');
+        const sequelize = await getSequelizeInstance();
 
         switch (strategy) {
             case 'FULL_SCAN':
                 // For low volume, check all combinations
-                const result = await models.sequelize.query(`
+                let fullScanQuery = `
                     SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e, 
                            sum_value, sum_size, sum_parity, winning_conditions
                     FROM game_combinations_5d
-                    ORDER BY RAND()
-                    LIMIT 10000
-                `, { type: models.sequelize.QueryTypes.SELECT });
+                `;
+                
+                // Apply protection logic if needed
+                if (shouldApplyProtection) {
+                    console.log('🛡️ [5D_PROTECTION] Applying protection in FULL_SCAN: forcing A=0');
+                    fullScanQuery += ` WHERE dice_a = 0`;
+                }
+                
+                fullScanQuery += ` ORDER BY RAND() LIMIT 10000`;
+                
+                const result = await sequelize.query(fullScanQuery, { 
+                    type: sequelize.QueryTypes.SELECT 
+                });
 
                 let minExposure = Infinity;
                 let optimalResult = null;
@@ -1054,7 +1324,7 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
 
             case 'SMART_SAMPLING':
                 // Sample based on sum distribution
-                const sumResult = await models.sequelize.query(`
+                let smartSamplingQuery = `
                     SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
                            sum_value, sum_size, sum_parity, winning_conditions
                     FROM game_combinations_5d
@@ -1064,9 +1334,19 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                         ORDER BY probability ASC 
                         LIMIT 10
                     )
-                    ORDER BY RAND()
-                    LIMIT 1000
-                `, { type: models.sequelize.QueryTypes.SELECT });
+                `;
+                
+                // Apply protection logic if needed
+                if (shouldApplyProtection) {
+                    console.log('🛡️ [5D_PROTECTION] Applying protection in SMART_SAMPLING: forcing A=0');
+                    smartSamplingQuery += ` AND dice_a = 0`;
+                }
+                
+                smartSamplingQuery += ` ORDER BY RAND() LIMIT 1000`;
+                
+                const sumResult = await sequelize.query(smartSamplingQuery, { 
+                    type: sequelize.QueryTypes.SELECT 
+                });
 
                 let minSampleExposure = Infinity;
                 let optimalSampleResult = null;
@@ -1084,7 +1364,7 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
             case 'STATISTICAL_SAMPLING':
                 // Use position-based optimization
                 const unbetPositions = findUnbetPositions(betExposures);
-
+                
                 let query = `
                     SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
                            sum_value, sum_size, sum_parity, winning_conditions
@@ -1092,18 +1372,24 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     WHERE 1=1
                 `;
 
-                // Add conditions for unbet positions
-                if (unbetPositions.A.length > 0) {
-                    query += ` AND dice_a IN (${unbetPositions.A.join(',')})`;
-                }
-                if (unbetPositions.B.length > 0) {
-                    query += ` AND dice_b IN (${unbetPositions.B.join(',')})`;
+                // Apply protection logic: if A_1-9 are bet but A_0 is not, prioritize A=0
+                if (shouldApplyProtection && unbetPositions.A.includes(0)) {
+                    console.log('🛡️ [5D_PROTECTION] Applying protection in STATISTICAL_SAMPLING: forcing A=0');
+                    query += ` AND dice_a = 0`;
+                } else {
+                    // Add conditions for unbet positions
+                    if (unbetPositions.A.length > 0) {
+                        query += ` AND dice_a IN (${unbetPositions.A.join(',')})`;
+                    }
+                    if (unbetPositions.B.length > 0) {
+                        query += ` AND dice_b IN (${unbetPositions.B.join(',')})`;
+                    }
                 }
 
                 query += ` ORDER BY RAND() LIMIT 100`;
 
-                const statResult = await models.sequelize.query(query, {
-                    type: models.sequelize.QueryTypes.SELECT
+                const statResult = await sequelize.query(query, {
+                    type: sequelize.QueryTypes.SELECT
                 });
 
                 if (statResult.length > 0) {
@@ -1111,14 +1397,14 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                 }
 
                 // Fallback to random low probability
-                const fallbackResult = await models.sequelize.query(`
+                const fallbackResult = await sequelize.query(`
                     SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
                            sum_value, sum_size, sum_parity, winning_conditions
                     FROM game_combinations_5d
                     WHERE sum_value IN (0, 1, 2, 3, 4, 41, 42, 43, 44, 45)
                     ORDER BY RAND()
                     LIMIT 1
-                `, { type: models.sequelize.QueryTypes.SELECT });
+                `, { type: sequelize.QueryTypes.SELECT });
 
                 return format5DResult(fallbackResult[0]);
         }
@@ -1131,8 +1417,28 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
 
 async function calculate5DExposure(combination, betExposures) {
     let totalExposure = 0;
-    const winningConditions = JSON.parse(combination.winning_conditions);
-
+    
+    // Debug logging to understand the issue
+    console.log('🔍 [5D_EXPOSURE_DEBUG] calculate5DExposure called with:', {
+        combinationType: typeof combination,
+        winningConditionsType: typeof combination.winning_conditions,
+        winningConditionsValue: combination.winning_conditions,
+        betExposuresKeys: Object.keys(betExposures)
+    });
+    
+    let winningConditions;
+    if (typeof combination.winning_conditions === 'string') {
+        try {
+            winningConditions = JSON.parse(combination.winning_conditions);
+        } catch (parseError) {
+            console.error('Error parsing winning_conditions JSON:', parseError);
+            console.error('Raw winning_conditions:', combination.winning_conditions);
+            // Fallback to empty object
+            winningConditions = {};
+        }
+    } else {
+        winningConditions = combination.winning_conditions;
+    }
     // Check each bet type
     for (const [betKey, exposure] of Object.entries(betExposures)) {
         if (!betKey.startsWith('bet:')) continue;
@@ -2089,7 +2395,7 @@ const getTotalBetsOnOutcome = async (gameType, duration, periodId, betType, betV
         // Use timeline-aware hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
         const betsData = await redisClient.hgetall(betHashKey);
-        
+
         let totalAmount = 0;
         for (const [betId, betJson] of Object.entries(betsData)) {
             const bet = JSON.parse(betJson);
@@ -2097,7 +2403,7 @@ const getTotalBetsOnOutcome = async (gameType, duration, periodId, betType, betV
                 totalAmount += parseFloat(bet.netBetAmount || 0);
             }
         }
-        
+
         return totalAmount;
     } catch (error) {
         logger.error('Error getting total bets on outcome', {
@@ -2170,14 +2476,14 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                 const wingoExposures = await redisClient.hgetall(exposureKey);
                 console.log('🔍 Raw exposures from Redis:', wingoExposures);
                 const zeroExposureNumbers = [];
-                
+
                 for (let num = 0; num <= 9; num++) {
                     const exposure = parseInt(wingoExposures[`number:${num}`] || 0);
                     if (exposure === 0) {
                         zeroExposureNumbers.push(num);
                     }
                 }
-                
+
                 // Log exposure analysis for debugging
                 const exposureAnalysis = {};
                 for (let num = 0; num <= 9; num++) {
@@ -2185,284 +2491,187 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                     exposureAnalysis[`number:${num}`] = `${(exposure / 100).toFixed(2)}₹`;
                 }
                 console.log('🔍 Exposure analysis for protection mode:', exposureAnalysis);
-                
+
                 // Randomly select from zero-exposure numbers
                 if (zeroExposureNumbers.length > 0) {
                     const randomIndex = Math.floor(Math.random() * zeroExposureNumbers.length);
                     const selectedNumber = zeroExposureNumbers[randomIndex];
                     console.log(`🛡️ Protected: Using random zero-exposure number ${selectedNumber} from [${zeroExposureNumbers.join(',')}]`);
-                    
-                                    // Ensure combinations are initialized
-                if (!global.wingoCombinations) {
-                    console.log('⚠️ Wingo combinations not initialized, initializing now...');
-                    await initializeGameCombinations();
-                }
-                
-                return global.wingoCombinations[selectedNumber];
-                }
-                
-                // CRITICAL FIX: Never fall back to exposure-based selection in protection mode
-                // Instead, force a result that makes the user lose
-                console.log(`🛡️ CRITICAL: No zero-exposure numbers found, forcing user loss`);
-                
-                // Get all user bets to ensure we select a losing result
-                const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-                const betsData = await redisClient.hgetall(betHashKey);
-                const userBetOutcomes = new Set();
-                
-                // Collect all outcomes the user bet on
-                for (const [betId, betJson] of Object.entries(betsData)) {
-                    try {
-                        const bet = JSON.parse(betJson);
-                        if (bet.betType === 'COLOR' && bet.betValue === 'red') {
-                            // User bet on red - add red numbers
-                            userBetOutcomes.add(0); userBetOutcomes.add(2); 
-                            userBetOutcomes.add(4); userBetOutcomes.add(6); 
-                            userBetOutcomes.add(8);
-                        } else if (bet.betType === 'COLOR' && bet.betValue === 'green') {
-                            // User bet on green - add green numbers
-                            userBetOutcomes.add(1); userBetOutcomes.add(3); 
-                            userBetOutcomes.add(5); userBetOutcomes.add(7); 
-                            userBetOutcomes.add(9);
-                        } else if (bet.betType === 'NUMBER') {
-                            // User bet on specific number
-                            userBetOutcomes.add(parseInt(bet.betValue));
-                        }
-                    } catch (parseError) {
-                        continue;
-                    }
-                }
-                
-                // Find a number that the user did NOT bet on
-                const losingNumbers = [];
-                for (let num = 0; num <= 9; num++) {
-                    if (!userBetOutcomes.has(num)) {
-                        losingNumbers.push(num);
-                    }
-                }
-                
-                // If user bet on everything, use the number with lowest exposure
-                if (losingNumbers.length === 0) {
-                    console.log(`🛡️ User bet on all numbers, using lowest exposure number`);
-                    let minExposure = Infinity;
-                    let lowestExposureNumber = 0;
-                    
-                    for (let num = 0; num <= 9; num++) {
-                        const exposure = parseInt(wingoExposures[`number:${num}`] || 0);
-                        if (exposure < minExposure) {
-                            minExposure = exposure;
-                            lowestExposureNumber = num;
-                        }
-                    }
-                    
-                    console.log(`🛡️ Selected lowest exposure number: ${lowestExposureNumber}`);
-                    
+
+                    // Ensure combinations are initialized
                     if (!global.wingoCombinations) {
+                        console.log('⚠️ Wingo combinations not initialized, initializing now...');
                         await initializeGameCombinations();
                     }
-                    return global.wingoCombinations[lowestExposureNumber];
+
+                    return global.wingoCombinations[selectedNumber];
                 }
-                
-                // Select a random losing number
-                const randomLosingNumber = losingNumbers[Math.floor(Math.random() * losingNumbers.length)];
-                console.log(`🛡️ Selected losing number: ${randomLosingNumber} from [${losingNumbers.join(',')}]`);
-                
+
+                // CRITICAL FIX: When no zero-exposure numbers exist, ALWAYS select lowest exposure
+                console.log(`🛡️ CRITICAL: No zero-exposure numbers found, selecting lowest exposure number`);
+
+                // Find the number with the lowest exposure
+                let minWingoExposure = Infinity;
+                let lowestExposureNumber = 0;
+                let lowestExposureNumbers = [];
+
+                for (let num = 0; num <= 9; num++) {
+                    const exposure = parseInt(wingoExposures[`number:${num}`] || 0);
+                    if (exposure < minWingoExposure) {
+                        minWingoExposure = exposure;
+                        lowestExposureNumber = num;
+                        lowestExposureNumbers = [num];
+                    } else if (exposure === minWingoExposure) {
+                        lowestExposureNumbers.push(num);
+                    }
+                }
+
+                // Select randomly from numbers with lowest exposure
+                const selectedLowestNumber = lowestExposureNumbers[Math.floor(Math.random() * lowestExposureNumbers.length)];
+                console.log(`🛡️ Selected lowest exposure number: ${selectedLowestNumber} (exposure: ${minWingoExposure}) from [${lowestExposureNumbers.join(',')}]`);
+
                 if (!global.wingoCombinations) {
                     await initializeGameCombinations();
                 }
-                return global.wingoCombinations[randomLosingNumber];
+                return global.wingoCombinations[selectedLowestNumber];
 
             case 'k3':
                 // Find zero exposure combination
                 const k3Exposures = await redisClient.hgetall(exposureKey);
                 const zeroExposureK3 = [];
-                
+
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
                     const exposure = parseInt(k3Exposures[`dice:${key}`] || 0);
                     if (exposure === 0) {
                         zeroExposureK3.push({ key, combo });
                     }
                 }
-                
+
                 // Randomly select from zero-exposure combinations
                 if (zeroExposureK3.length > 0) {
                     const randomIndex = Math.floor(Math.random() * zeroExposureK3.length);
                     const selected = zeroExposureK3[randomIndex];
                     console.log(`🛡️ Protected: Using random zero-exposure K3 ${selected.key}`);
-                    
+
                     // Ensure combinations are initialized
                     if (!global.k3Combinations) {
                         console.log('⚠️ K3 combinations not initialized, initializing now...');
                         await initializeGameCombinations();
                     }
-                    
+
                     return selected.combo;
                 }
-                
-                // CRITICAL FIX: Never fall back to exposure-based selection in protection mode
-                console.log(`🛡️ CRITICAL: No zero-exposure K3 combinations found, forcing user loss`);
-                
-                // Get all user bets to ensure we select a losing result
-                const k3BetHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-                const k3BetsData = await redisClient.hgetall(k3BetHashKey);
-                const k3UserBetOutcomes = new Set();
-                
-                // Collect all outcomes the user bet on
-                for (const [betId, betJson] of Object.entries(k3BetsData)) {
-                    try {
-                        const bet = JSON.parse(betJson);
-                        if (bet.betType === 'SUM') {
-                            k3UserBetOutcomes.add(parseInt(bet.betValue));
-                        } else if (bet.betType === 'TRIPLE') {
-                            k3UserBetOutcomes.add(bet.betValue);
-                        }
-                    } catch (parseError) {
-                        continue;
-                    }
-                }
-                
-                // Find combinations that the user did NOT bet on
-                const k3LosingCombinations = [];
+
+                // CRITICAL FIX: When no zero-exposure K3 combinations exist, ALWAYS select lowest exposure
+                console.log(`🛡️ CRITICAL: No zero-exposure K3 combinations found, selecting lowest exposure combination`);
+
+                // Find the combination with the lowest exposure
+                let k3MinExposure = Infinity;
+                let k3LowestExposureKey = '1,1,1';
+                let k3LowestExposureKeys = [];
+
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
-                    const sum = combo.dice_a + combo.dice_b + combo.dice_c;
-                    const triple = combo.dice_a === combo.dice_b && combo.dice_b === combo.dice_c ? 
-                        `${combo.dice_a}${combo.dice_b}${combo.dice_c}` : null;
-                    
-                    const isLosing = !k3UserBetOutcomes.has(sum) && 
-                                   (!triple || !k3UserBetOutcomes.has(triple));
-                    
-                    if (isLosing) {
-                        k3LosingCombinations.push({ key, combo });
+                    const exposure = parseInt(k3Exposures[`dice:${key}`] || 0);
+                    if (exposure < k3MinExposure) {
+                        k3MinExposure = exposure;
+                        k3LowestExposureKey = key;
+                        k3LowestExposureKeys = [key];
+                    } else if (exposure === k3MinExposure) {
+                        k3LowestExposureKeys.push(key);
                     }
                 }
-                
-                // If user bet on everything, use the combination with lowest exposure
-                if (k3LosingCombinations.length === 0) {
-                    console.log(`🛡️ User bet on all K3 outcomes, using lowest exposure combination`);
-                    let minExposure = Infinity;
-                    let lowestExposureKey = '1,1,1';
-                    
-                    for (const [key, combo] of Object.entries(global.k3Combinations)) {
-                        const exposure = parseInt(k3Exposures[`dice:${key}`] || 0);
-                        if (exposure < minExposure) {
-                            minExposure = exposure;
-                            lowestExposureKey = key;
-                        }
-                    }
-                    
-                    console.log(`🛡️ Selected lowest exposure K3 combination: ${lowestExposureKey}`);
-                    return global.k3Combinations[lowestExposureKey];
-                }
-                
-                // Select a random losing combination
-                const randomLosingCombo = k3LosingCombinations[Math.floor(Math.random() * k3LosingCombinations.length)];
-                console.log(`🛡️ Selected losing K3 combination: ${randomLosingCombo.key}`);
-                
-                return randomLosingCombo.combo;
+
+                // Select randomly from combinations with lowest exposure
+                const selectedLowestKey = k3LowestExposureKeys[Math.floor(Math.random() * k3LowestExposureKeys.length)];
+                console.log(`🛡️ Selected lowest exposure K3 combination: ${selectedLowestKey} (exposure: ${k3MinExposure}) from [${k3LowestExposureKeys.join(',')}]`);
+
+                return global.k3Combinations[selectedLowestKey];
 
             case 'fived':
             case '5d':
-                // Query for zero-bet positions
-                const models = await ensureModelsInitialized();
-                const betExposures = await redisClient.hgetall(exposureKey);
-                const unbetPositions = findUnbetPositions(betExposures);
-
-                // Build query for combinations with unbet positions
-                let conditions = [];
-                for (const [pos, values] of Object.entries(unbetPositions)) {
-                    if (values.length > 0 && values.length < 10) {
-                        conditions.push(`dice_${pos.toLowerCase()} IN (${values.join(',')})`);
-                    }
-                }
-
-                if (conditions.length > 0) {
-                    const query = `
-                        SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
-                               sum_value, sum_size, sum_parity, winning_conditions
-                        FROM game_combinations_5d
-                        WHERE ${conditions.join(' OR ')}
-                        ORDER BY RAND()
-                        LIMIT 1
-                    `;
-
-                    const result = await models.sequelize.query(query, {
-                        type: models.sequelize.QueryTypes.SELECT
-                    });
-
-                    if (result.length > 0) {
-                        console.log(`🛡️ Protected: Using zero-exposure 5D combination`);
-                        return format5DResult(result[0]);
-                    }
-                }
-
-                // CRITICAL FIX: Never fall back to exposure-based selection in protection mode
-                console.log(`🛡️ CRITICAL: No zero-exposure 5D combinations found, forcing user loss`);
-                
-                // Get all user bets to ensure we select a losing result
-                const fivedBetHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-                const fivedBetsData = await redisClient.hgetall(fivedBetHashKey);
-                const fivedUserBetOutcomes = new Set();
-                
-                // Collect all outcomes the user bet on
-                for (const [betId, betJson] of Object.entries(fivedBetsData)) {
-                    try {
-                        const bet = JSON.parse(betJson);
-                        if (bet.betType === 'SUM') {
-                            fivedUserBetOutcomes.add(parseInt(bet.betValue));
-                        } else if (bet.betType === 'POSITION') {
-                            fivedUserBetOutcomes.add(`${bet.betValue}_${bet.position}`);
-                        }
-                    } catch (parseError) {
-                        continue;
-                    }
-                }
-                
-                // Find a combination that the user did NOT bet on
-                const fivedLosingCombinations = [];
-                
-                // Query for combinations with unbet positions or sums
-                let losingQuery = `
-                    SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
-                           sum_value, sum_size, sum_parity, winning_conditions
-                    FROM game_combinations_5d
-                    WHERE 1=1
-                `;
-                
-                // Add conditions for unbet sums
-                const unbetSums = [];
-                for (let sum = 0; sum <= 45; sum++) {
-                    if (!fivedUserBetOutcomes.has(sum)) {
-                        unbetSums.push(sum);
-                    }
-                }
-                
-                if (unbetSums.length > 0) {
-                    losingQuery += ` AND sum_value IN (${unbetSums.join(',')})`;
-                }
-                
-                losingQuery += ` ORDER BY RAND() LIMIT 100`;
-                
-                const losingResults = await models.sequelize.query(losingQuery, {
-                    type: models.sequelize.QueryTypes.SELECT
+                // 🛡️ ENHANCED 5D PROTECTION: Use exposure-based selection like Wingo/TRX
+                console.log('🛡️ [5D_PROTECTION_START] 🎲 5D Protection Mode Analysis:', {
+                    periodId, gameType, duration, timeline,
+                    exposureKey
                 });
+
+                // Get exposure data from Redis
+                const betExposures = await redisClient.hgetall(exposureKey);
+                console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Exposure Data Breakdown:', betExposures);
+
+                // Find zero exposure combinations
+                const models = await ensureModelsInitialized();
+                const { getSequelizeInstance } = require('../config/db');
+                const sequelize = await getSequelizeInstance();
                 
-                if (losingResults.length > 0) {
-                    console.log(`🛡️ Selected losing 5D combination with unbet sum`);
-                    return format5DResult(losingResults[0]);
-                }
-                
-                // Ultimate fallback: use lowest probability combination
-                console.log(`🛡️ User bet on all 5D outcomes, using lowest probability combination`);
-                const fallbackResult = await models.sequelize.query(`
+                // Get all possible 5D combinations from database
+                const allCombinations = await sequelize.query(`
                     SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
                            sum_value, sum_size, sum_parity, winning_conditions
                     FROM game_combinations_5d
-                    WHERE sum_value IN (0, 1, 2, 3, 4, 41, 42, 43, 44, 45)
                     ORDER BY RAND()
-                    LIMIT 1
-                `, { type: models.sequelize.QueryTypes.SELECT });
+                    LIMIT 1000
+                `, { type: sequelize.QueryTypes.SELECT });
+
+                console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Loaded', allCombinations.length, 'combinations for analysis');
+
+                // Find combinations with zero exposure
+                const zeroExposureCombinations = [];
+                for (const combo of allCombinations) {
+                    const exposure = await calculate5DExposure(combo, betExposures);
+                    if (exposure === 0) {
+                        zeroExposureCombinations.push(combo);
+                    }
+                }
+
+                console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Zero exposure combinations found:', zeroExposureCombinations.length);
+
+                // Randomly select from zero-exposure combinations
+                if (zeroExposureCombinations.length > 0) {
+                    const randomIndex = Math.floor(Math.random() * zeroExposureCombinations.length);
+                    const selectedCombo = zeroExposureCombinations[randomIndex];
+                    const formattedResult = format5DResult(selectedCombo);
+                    
+                    console.log(`🛡️ [5D_PROTECTION_SUCCESS] 🎲 5D Protected: Using random zero-exposure combination:`, {
+                        periodId, gameType, duration, timeline,
+                        selectedResult: formattedResult,
+                        protectionMethod: 'zero_exposure_selection',
+                        zeroExposureCount: zeroExposureCombinations.length
+                    });
+                    
+                    return formattedResult;
+                }
+
+                // CRITICAL FIX: When no zero-exposure combinations exist, select lowest exposure
+                console.log(`🛡️ [5D_PROTECTION_FALLBACK] 🎲 5D No zero-exposure combinations found, selecting lowest exposure combination`);
+
+                // Find combinations with lowest exposure
+                let min5DExposure = Infinity;
+                let lowest5DExposureCombinations = [];
+
+                for (const combo of allCombinations) {
+                    const exposure = await calculate5DExposure(combo, betExposures);
+                    if (exposure < min5DExposure) {
+                        min5DExposure = exposure;
+                        lowest5DExposureCombinations = [combo];
+                    } else if (exposure === min5DExposure) {
+                        lowest5DExposureCombinations.push(combo);
+                    }
+                }
+
+                // Select randomly from combinations with lowest exposure
+                const selectedLowestCombo = lowest5DExposureCombinations[Math.floor(Math.random() * lowest5DExposureCombinations.length)];
+                const formattedLowestResult = format5DResult(selectedLowestCombo);
                 
-                return format5DResult(fallbackResult[0]);
+                console.log(`🛡️ [5D_PROTECTION_SUCCESS] 🎲 5D Selected lowest exposure combination:`, {
+                    periodId, gameType, duration, timeline,
+                    selectedResult: formattedLowestResult,
+                    protectionMethod: 'lowest_exposure_selection',
+                    lowestExposure: min5DExposure,
+                    lowestExposureCount: lowest5DExposureCombinations.length
+                });
+
+                return formattedLowestResult;
 
             default:
                 throw new Error(`Unknown game type: ${gameType}`);
@@ -2490,6 +2699,10 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
  */
 async function calculateResultWithVerification(gameType, duration, periodId, timeline = 'default') {
     try {
+        // Import sequelize for database queries
+        const { getSequelizeInstance } = require('../config/db');
+        const sequelize = await getSequelizeInstance();
+        
         console.log('🎲 [RESULT_START] ==========================================');
         console.log('🎲 [RESULT_START] Calculating result for period:', {
             gameType, duration, periodId, timeline
@@ -2499,7 +2712,7 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         console.log('👥 [RESULT_USERS] Checking user count for protection...');
         const userCountResult = await getUniqueUserCount(gameType, duration, periodId, timeline);
         console.log('👥 [USER_COUNT] Enhanced unique user count:', userCountResult);
-        
+
         const shouldUseProtectedResult = userCountResult.uniqueUserCount < ENHANCED_USER_THRESHOLD;
         console.log('🔍 [RESULT_USERS] User count check result:', {
             gameType, periodId, timeline,
@@ -2513,11 +2726,135 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         if (shouldUseProtectedResult) {
             console.log('🛡️ [RESULT_PROTECTION] Using PROTECTED result selection');
             console.log('🛡️ [RESULT_PROTECTION] Reason: INSUFFICIENT_USERS');
+            console.log('🛡️ [RESULT_PROTECTION] User count:', userCountResult.uniqueUserCount, 'Threshold:', ENHANCED_USER_THRESHOLD);
             
-            // Use simplified protection logic with pre-generated combinations
-            result = await selectProtectedResultWithExposure(
-                gameType, duration, periodId, timeline
-            );
+            // Use our fixed protection logic for 5D games
+            if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                console.log('🛡️ [5D_PROTECTION] Using fixed 5D protection logic');
+                result = await selectProtectedResultWithExposure(gameType, duration, periodId, timeline);
+                
+                // If protection fails, use fallback
+                if (!result) {
+                    console.log('🛡️ [5D_PROTECTION_FALLBACK] Protection failed, using fallback result');
+                    result = await generateRandomResult(gameType);
+                }
+            } else {
+                // Use simplified protection logic with pre-generated combinations for other games
+                result = await selectProtectedResultWithExposure(
+                    gameType, duration, periodId, timeline
+                );
+                
+                // If protection fails, use fallback
+                if (!result) {
+                    console.log('🛡️ [PROTECTION_FALLBACK] Protection failed, using fallback result');
+                    result = await generateRandomResult(gameType);
+                }
+            }
+            
+            console.log('🛡️ [PROTECTION_RESULT] Selected protected result:', result);
+        } else if (['wingo', 'trx_wix'].includes(gameType.toLowerCase())) {
+            // STRICT 60/40 ENFORCEMENT FOR WINGO/TRX_WIX
+            const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+            const betsData = await redisClient.hgetall(betHashKey);
+            const bets = Object.values(betsData).map(betJson => {
+                try { return JSON.parse(betJson); } catch { return null; }
+            }).filter(Boolean);
+            const totalBetAmount = bets.reduce((sum, bet) => sum + parseFloat(bet.betAmount || bet.bet_amount || 0), 0);
+
+            let bestResult = null;
+            let bestPayoutPercent = -Infinity;
+            let lowestPayoutResult = null;
+            let lowestPayoutPercent = Infinity;
+
+            // Ensure combinations are initialized
+            if (!global.wingoCombinations) {
+                await initializeGameCombinations();
+            }
+
+            for (let num = 0; num <= 9; num++) {
+                const candidateResult = global.wingoCombinations[num];
+                let totalPayout = 0;
+                for (const bet of bets) {
+                    if (checkWingoWin(bet.betType, bet.betValue, candidateResult)) {
+                        totalPayout += calculateWingoWin(bet, candidateResult, bet.betType, bet.betValue);
+                    }
+                }
+                const payoutPercent = totalBetAmount > 0 ? (totalPayout / totalBetAmount) * 100 : 0;
+                if (payoutPercent <= 60 && payoutPercent > bestPayoutPercent) {
+                    bestPayoutPercent = payoutPercent;
+                    bestResult = candidateResult;
+                }
+                if (payoutPercent < lowestPayoutPercent) {
+                    lowestPayoutPercent = payoutPercent;
+                    lowestPayoutResult = candidateResult;
+                }
+            }
+            result = bestResult || lowestPayoutResult;
+            console.log('[STRICT_60_40] Selected result:', {
+                bestPayoutPercent,
+                lowestPayoutPercent,
+                resultNumber: result?.number
+            });
+        } else if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            // ENHANCED 5D PROCESSING WITH PRE-CALCULATION
+            console.log('🎯 [5D_RESULT_START] 🎲 5D Result Selection Started');
+
+            // Check if we have a pre-calculated result
+            const preCalculatedResult = await getPreCalculated5DResult(gameType, duration, periodId, timeline);
+            
+            if (preCalculatedResult) {
+                console.log('⚡ [5D_PRE_CALC_SUCCESS] Using pre-calculated result for instant display');
+                result = preCalculatedResult;
+            } else {
+                console.log('🔄 [5D_PRE_CALC_MISSING] No pre-calculated result, calculating now...');
+                
+                // Check if we should use enhanced system
+                const useEnhanced = await shouldUseEnhancedSystem(gameType, duration, periodId);
+                
+                if (useEnhanced) {
+                    console.log('⚡ [ENHANCED_5D_ENABLED] Using enhanced 5D system');
+                    
+                    // Try enhanced system with performance monitoring
+                    const enhancedStartTime = Date.now();
+                    const enhancedResult = await getEnhanced5DResult(gameType, duration, periodId, timeline);
+                    const enhancedTime = Date.now() - enhancedStartTime;
+                    
+                    if (enhancedResult) {
+                        console.log(`⚡ [ENHANCED_5D_SUCCESS] Enhanced system completed in ${enhancedTime}ms`);
+                        result = enhancedResult;
+                    } else {
+                        console.log('🔄 [ENHANCED_5D_FALLBACK] Enhanced system failed, using current system');
+                        
+                        // Fallback to current system with performance comparison
+                        const currentStartTime = Date.now();
+                        const currentResult = await getCurrent5DResult(gameType, duration, periodId, timeline);
+                        const currentTime = Date.now() - currentStartTime;
+                        
+                        // Track performance
+                        await track5DPerformance(enhancedTime, currentTime, false);
+                        
+                        result = currentResult;
+                    }
+                } else {
+                    console.log('🔄 [CURRENT_5D_SYSTEM] Using current 5D system');
+                    
+                    // Use current system
+                    const currentStartTime = Date.now();
+                    result = await getCurrent5DResult(gameType, duration, periodId, timeline);
+                    const currentTime = Date.now() - currentStartTime;
+                    
+                    console.log(`🔄 [CURRENT_5D_COMPLETE] Current system completed in ${currentTime}ms`);
+                }
+            }
+            
+            // Log final result summary
+            console.log('🎯 [5D_FINAL_RESULT] 🎲 5D Final Result Summary:', {
+                periodId, gameType, duration, timeline,
+                userCount: userCountResult.uniqueUserCount,
+                protectionMode: shouldUseProtectedResult,
+                selectedResult: result,
+                preCalculated: !!preCalculatedResult
+            });
         } else {
             console.log('📊 [RESULT_NORMAL] Using NORMAL exposure-based result selection');
             // Normal operation - use exposure-based result
@@ -2529,7 +2866,7 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         // Get verification only for TrxWix
         let verification = null;
         if (gameType.toLowerCase() === 'trx_wix') {
-            verification = await tronHashService.getResultWithVerification(result);
+            verification = await tronHashService.getResultWithVerification(result, duration);
         }
 
         const finalResult = {
@@ -2559,6 +2896,294 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         });
         throw error;
     }
+}
+
+/**
+ * Enhanced 5D result selection with performance monitoring
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {string} timeline - Timeline
+ * @returns {Object} - Enhanced result or null for fallback
+ */
+async function getEnhanced5DResult(gameType, duration, periodId, timeline) {
+    try {
+        console.log('⚡ [ENHANCED_5D] Attempting enhanced 5D result selection');
+        
+        // Check if enhanced system is available
+        const isEnhancedAvailable = await fiveDProtectionService.isSystemReady();
+        
+        if (!isEnhancedAvailable) {
+            console.log('⚠️ [ENHANCED_5D] Enhanced system not ready, will use fallback');
+            return null;
+        }
+        
+        // Use enhanced system
+        const enhancedResult = await fiveDProtectionService.getProtectedResult(
+            gameType, duration, periodId, timeline
+        );
+        
+        if (enhancedResult) {
+            console.log('✅ [ENHANCED_5D] Enhanced system result generated successfully');
+            return enhancedResult;
+        } else {
+            console.log('⚠️ [ENHANCED_5D] Enhanced system returned null, will use fallback');
+            return null;
+        }
+    } catch (error) {
+        console.log('❌ [ENHANCED_5D] Enhanced system error, will use fallback:', error.message);
+        return null;
+    }
+}
+
+/**
+ * Get current 5D result using existing logic
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {string} timeline - Timeline
+ * @returns {Object} - Current system result
+ */
+async function getCurrent5DResult(gameType, duration, periodId, timeline) {
+    try {
+        console.log('🔄 [CURRENT_5D] Using current 5D result selection');
+        
+        // Use existing protected result selection
+        const result = await selectProtectedResultWithExposure(
+            gameType, duration, periodId, timeline
+        );
+        
+        console.log('✅ [CURRENT_5D] Current system result generated successfully');
+        return result;
+    } catch (error) {
+        console.log('❌ [CURRENT_5D] Current system error:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Track 5D performance for monitoring
+ * @param {number} enhancedTime - Enhanced system time
+ * @param {number} currentTime - Current system time
+ * @param {boolean} success - Whether enhanced system succeeded
+ */
+async function track5DPerformance(enhancedTime, currentTime, success) {
+    try {
+        const performanceData = {
+            enhancedTime,
+            currentTime,
+            speedImprovement: currentTime / enhancedTime,
+            success,
+            timestamp: Date.now()
+        };
+        
+        await redisClient.lpush('5d_performance_log', JSON.stringify(performanceData));
+        await redisClient.ltrim('5d_performance_log', 0, 999); // Keep last 1000 entries
+        
+        console.log(`📊 [PERFORMANCE] Enhanced: ${enhancedTime}ms, Current: ${currentTime}ms, Improvement: ${(currentTime/enhancedTime).toFixed(1)}x, Success: ${success}`);
+    } catch (error) {
+        console.log('❌ [PERFORMANCE] Error tracking performance:', error.message);
+    }
+}
+
+/**
+ * Pre-calculate 5D result during bet freeze period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {string} timeline - Timeline
+ * @returns {Object} - Pre-calculated result
+ */
+async function preCalculate5DResult(gameType, duration, periodId, timeline) {
+    try {
+        console.log('⚡ [5D_PRE_CALC] Starting pre-calculation during bet freeze...');
+        
+        // Check if we should use enhanced system
+        const useEnhanced = await shouldUseEnhancedSystem(gameType, duration, periodId);
+        
+        let result;
+        let calculationTime;
+        
+        if (useEnhanced) {
+            console.log('⚡ [5D_PRE_CALC] Using enhanced system for pre-calculation');
+            
+            const startTime = Date.now();
+            result = await getEnhanced5DResult(gameType, duration, periodId, timeline);
+            calculationTime = Date.now() - startTime;
+            
+            if (result) {
+                console.log(`⚡ [5D_PRE_CALC] Enhanced pre-calculation completed in ${calculationTime}ms`);
+            } else {
+                console.log('🔄 [5D_PRE_CALC] Enhanced system failed, using current system');
+                const currentStartTime = Date.now();
+                result = await getCurrent5DResult(gameType, duration, periodId, timeline);
+                calculationTime = Date.now() - currentStartTime;
+            }
+        } else {
+            console.log('🔄 [5D_PRE_CALC] Using current system for pre-calculation');
+            
+            const startTime = Date.now();
+            result = await getCurrent5DResult(gameType, duration, periodId, timeline);
+            calculationTime = Date.now() - startTime;
+        }
+        
+        if (result) {
+            // Store pre-calculated result in Redis
+            const preCalcKey = `precalc_5d:${gameType}:${duration}:${timeline}:${periodId}`;
+            const preCalcData = {
+                result,
+                calculationTime,
+                useEnhanced,
+                calculatedAt: new Date().toISOString(),
+                periodId,
+                gameType,
+                duration,
+                timeline
+            };
+            
+            await redisClient.set(preCalcKey, JSON.stringify(preCalcData));
+            await redisClient.expire(preCalcKey, 300); // 5 minutes TTL
+            
+            console.log('✅ [5D_PRE_CALC] Pre-calculated result stored:', {
+                periodId,
+                calculationTime,
+                useEnhanced,
+                result: result
+            });
+            
+            return preCalcData;
+        } else {
+            console.log('❌ [5D_PRE_CALC] Failed to pre-calculate result');
+            return null;
+        }
+    } catch (error) {
+        console.error('❌ [5D_PRE_CALC] Error in pre-calculation:', error);
+        return null;
+    }
+}
+
+/**
+ * Get pre-calculated 5D result
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {string} timeline - Timeline
+ * @returns {Object|null} - Pre-calculated result or null
+ */
+async function getPreCalculated5DResult(gameType, duration, periodId, timeline) {
+    try {
+        const preCalcKey = `precalc_5d:${gameType}:${duration}:${timeline}:${periodId}`;
+        const preCalcData = await redisClient.get(preCalcKey);
+        
+        if (preCalcData) {
+            const parsed = JSON.parse(preCalcData);
+            console.log('✅ [5D_PRE_CALC] Retrieved pre-calculated result:', {
+                periodId,
+                calculationTime: parsed.calculationTime,
+                useEnhanced: parsed.useEnhanced
+            });
+            
+            // Clean up the pre-calculated data
+            await redisClient.del(preCalcKey);
+            
+            return parsed.result;
+        } else {
+            console.log('⚠️ [5D_PRE_CALC] No pre-calculated result found, will calculate now');
+            return null;
+        }
+    } catch (error) {
+        console.error('❌ [5D_PRE_CALC] Error retrieving pre-calculated result:', error);
+        return null;
+    }
+}
+
+/**
+ * Check if period is in bet freeze (last 5 seconds)
+ * @param {string} periodId - Period ID
+ * @param {number} duration - Duration in seconds
+ * @returns {boolean} - Whether period is in bet freeze
+ */
+function isInBetFreeze(periodId, duration) {
+    try {
+        const endTime = calculatePeriodEndTime(periodId, duration);
+        const now = new Date();
+        const timeRemaining = Math.max(0, (endTime - now) / 1000);
+        
+        // Bet freeze is last 5 seconds
+        return timeRemaining <= 5 && timeRemaining > 0;
+    } catch (error) {
+        console.error('❌ Error checking bet freeze status:', error);
+        return false;
+    }
+}
+
+/**
+ * Check if period has ended
+ * @param {string} periodId - Period ID
+ * @param {number} duration - Duration in seconds
+ * @returns {boolean} - Whether period has ended
+ */
+function hasPeriodEnded(periodId, duration) {
+    try {
+        const endTime = calculatePeriodEndTime(periodId, duration);
+        const now = new Date();
+        const timeSinceEnd = (now - endTime) / 1000;
+        
+        // Period has ended if more than 0 seconds have passed since end
+        return timeSinceEnd >= 0;
+    } catch (error) {
+        console.error('❌ Error checking period end status:', error);
+        return false;
+    }
+}
+
+/**
+ * Check if enhanced system should be used
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {boolean} - Whether to use enhanced system
+ */
+async function shouldUseEnhancedSystem(gameType, duration, periodId) {
+    // Only for 5D games
+    if (gameType.toLowerCase() !== '5d' && gameType.toLowerCase() !== 'fived') {
+        return false;
+    }
+    
+    // Check if enhanced system is enabled (can be controlled via environment variable)
+    const enhancedEnabled = process.env.FIVE_D_ENHANCED_ENABLED !== 'false'; // Default to true
+    if (!enhancedEnabled) {
+        console.log('⚙️ [ENHANCED_CONFIG] Enhanced system disabled via config');
+        return false;
+    }
+    
+    // Check system health
+    try {
+        const isHealthy = await fiveDProtectionService.isSystemReady();
+        if (!isHealthy) {
+            console.log('⚠️ [ENHANCED_HEALTH] Enhanced system not healthy');
+            return false;
+        }
+    } catch (error) {
+        console.log('❌ [ENHANCED_HEALTH] Error checking enhanced system health:', error.message);
+        return false;
+    }
+    
+    // Gradual rollout based on period ID (start with 10% of periods)
+    const periodHash = crypto.createHash('md5').update(periodId).digest('hex');
+    const periodNumber = parseInt(periodHash.substring(0, 8), 16);
+    const rolloutPercentage = periodNumber % 100;
+    const migrationPercentage = parseInt(process.env.FIVE_D_MIGRATION_PERCENTAGE) || 10; // Start with 10%
+    
+    const shouldUse = rolloutPercentage < migrationPercentage;
+    
+    if (shouldUse) {
+        console.log(`🎯 [ENHANCED_ROLLOUT] Period ${periodId} selected for enhanced system (${rolloutPercentage}% < ${migrationPercentage}%)`);
+    } else {
+        console.log(`🔄 [ENHANCED_ROLLOUT] Period ${periodId} using current system (${rolloutPercentage}% >= ${migrationPercentage}%)`);
+    }
+    
+    return shouldUse;
 }
 
 /**
@@ -2895,7 +3520,7 @@ const getBetDistribution = async (gameType, duration, periodId, timeline = 'defa
         // Get total bet amount using timeline-aware hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
         const betsData = await redisClient.hgetall(betHashKey);
-        
+
         let totalBetAmount = 0;
         for (const [betId, betJson] of Object.entries(betsData)) {
             const bet = JSON.parse(betJson);
@@ -3171,19 +3796,14 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
     try {
         // Use net bet amount (after platform fee) for payout calculations
         const betAmount = parseFloat(bet.amount_after_tax || bet.netBetAmount || bet.betAmount || bet.bet_amount || 0);
-        
+
         console.log(`💰 [CALC_WINGO_DEBUG] calculateWingoWin called with:`, {
             betType,
             betValue,
             resultColor: result.color,
             resultNumber: result.number,
             betAmount,
-            betFields: {
-                amount_after_tax: bet.amount_after_tax,
-                netBetAmount: bet.netBetAmount,
-                betAmount: bet.betAmount,
-                bet_amount: bet.bet_amount
-            }
+            betObject: bet // Log the entire bet object to see all fields
         });
 
         switch (betType) {
@@ -3200,11 +3820,16 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
                     betValue,
                     resultColor: result.color,
                     betAmount,
-                    gameType: 'wingo'
+                    gameType: 'wingo',
+                    resultColorType: typeof result.color,
+                    resultColorLength: result.color?.length,
+                    resultColorCharCodes: result.color ? Array.from(result.color).map(c => c.charCodeAt(0)) : null
                 });
-                
+
                 if (betValue === 'red') {
-                    console.log(`💰 [PAYOUT_DEBUG] Processing red bet against result color: ${result.color}`);
+                    console.log(`💰 [PAYOUT_DEBUG] Processing red bet against result color: "${result.color}"`);
+
+                    // Check exact string match
                     if (result.color === 'red') {
                         const payout = betAmount * 2.0;
                         console.log(`💰 [PAYOUT_DEBUG] Red bet on pure red: ${betAmount} × 2.0 = ${payout}`);
@@ -3212,13 +3837,15 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
                     } else if (result.color === 'red_violet') {
                         const payout = betAmount * 1.5;
                         console.log(`💰 [PAYOUT_DEBUG] Red bet on red_violet: ${betAmount} × 1.5 = ${payout}`);
-                        return payout; // Mixed color win
+                        console.log(`💰 [PAYOUT_CORRECT] THIS SHOULD BE THE RESULT FOR RED ON RED_VIOLET`);
+                        return payout; // Mixed color win - THIS SHOULD BE 1.5x
                     } else {
-                        console.log(`💰 [PAYOUT_DEBUG] Red bet loses on ${result.color}`);
+                        console.log(`💰 [PAYOUT_DEBUG] Red bet loses on "${result.color}"`);
+                        console.log(`💰 [PAYOUT_DEBUG] Color does not match 'red' or 'red_violet'`);
                         return 0;
                     }
                 } else if (betValue === 'green') {
-                    console.log(`💰 [PAYOUT_DEBUG] Processing green bet against result color: ${result.color}`);
+                    console.log(`💰 [PAYOUT_DEBUG] Processing green bet against result color: "${result.color}"`);
                     if (result.color === 'green') {
                         const payout = betAmount * 2.0;
                         console.log(`💰 [PAYOUT_DEBUG] Green bet on pure green: ${betAmount} × 2.0 = ${payout}`);
@@ -3228,21 +3855,21 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
                         console.log(`💰 [PAYOUT_DEBUG] Green bet on green_violet: ${betAmount} × 1.5 = ${payout}`);
                         return payout; // Mixed color win
                     } else {
-                        console.log(`💰 [PAYOUT_DEBUG] Green bet loses on ${result.color}`);
+                        console.log(`💰 [PAYOUT_DEBUG] Green bet loses on "${result.color}"`);
                         return 0;
                     }
                 } else if (betValue === 'violet') {
-                    console.log(`💰 [PAYOUT_DEBUG] Processing violet bet against result color: ${result.color}`);
+                    console.log(`💰 [PAYOUT_DEBUG] Processing violet bet against result color: "${result.color}"`);
                     if (result.color === 'red_violet' || result.color === 'green_violet') {
                         const payout = betAmount * 4.5;
                         console.log(`💰 [PAYOUT_DEBUG] Violet bet on mixed color: ${betAmount} × 4.5 = ${payout}`);
                         return payout; // Violet win
                     } else {
-                        console.log(`💰 [PAYOUT_DEBUG] Violet bet loses on ${result.color}`);
+                        console.log(`💰 [PAYOUT_DEBUG] Violet bet loses on "${result.color}"`);
                         return 0;
                     }
                 }
-                console.log(`💰 [PAYOUT_DEBUG] Unknown bet value: ${betValue} on ${result.color}`);
+                console.log(`💰 [PAYOUT_DEBUG] Unknown bet value: "${betValue}" on "${result.color}"`);
                 return 0;
 
             case 'SIZE':
@@ -3284,14 +3911,34 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
  */
 const calculateK3Win = (bet, result, betType, betValue) => {
     try {
+        console.log(`🎲 [K3_PAYOUT_START] Starting K3 payout calculation:`, {
+            betId: bet.bet_id,
+            betType: bet.bet_type,
+            betValue: betValue,
+            betAmount: bet.bet_amount,
+            amountAfterTax: bet.amount_after_tax,
+            netBetAmount: bet.netBetAmount
+        });
+
         // Use net bet amount (after platform fee) for payout calculations
         const betAmount = parseFloat(bet.amount_after_tax || bet.netBetAmount || bet.betAmount || bet.bet_amount || 0);
         const sum = result.sum || (result.dice_1 + result.dice_2 + result.dice_3);
+
+        console.log(`🎲 [K3_PAYOUT_DEBUG] Bet and result data:`, {
+            betAmount: betAmount,
+            dice: [result.dice_1, result.dice_2, result.dice_3],
+            sum: sum,
+            hasPair: result.has_pair,
+            hasTriple: result.has_triple,
+            isStraight: result.is_straight
+        });
 
         switch (betType) {
             case 'SUM':
                 // Specific sum bets with varying payouts
                 const targetSum = parseInt(betValue);
+                console.log(`🎲 [K3_SUM_CHECK] Checking SUM bet: ${targetSum} vs actual sum: ${sum}`);
+
                 if (sum === targetSum) {
                     // Complex payout structure based on sum probability
                     const payoutMultipliers = {
@@ -3304,34 +3951,158 @@ const calculateK3Win = (bet, result, betType, betValue) => {
                         9: 8.3, 12: 8.3,
                         10: 7.68, 11: 7.68
                     };
-                    return betAmount * (payoutMultipliers[targetSum] || 1.0);
+                    const multiplier = payoutMultipliers[targetSum] || 1.0;
+                    const payout = betAmount * multiplier;
+
+                    console.log(`🎲 [K3_SUM_WIN] SUM bet WON!`, {
+                        targetSum: targetSum,
+                        actualSum: sum,
+                        multiplier: multiplier,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+
+                    return payout;
+                } else {
+                    console.log(`🎲 [K3_SUM_LOSS] SUM bet LOST: ${targetSum} !== ${sum}`);
+                }
+                break;
+
+            case 'SUM_MULTIPLE':
+                // Multiple sum bets - check if actual sum matches any of the bet values
+                const sumValues = betValue.split(',').map(s => parseInt(s.trim()));
+                console.log(`🎲 [K3_MULTIPLE_SUM_CHECK] Checking SUM_MULTIPLE bet: ${sumValues.join(',')} vs actual sum: ${sum}`);
+
+                if (sumValues.includes(sum)) {
+                    // Use the correct multiplier for the winning sum
+                    const payoutMultipliers = {
+                        3: 207.36, 18: 207.36,
+                        4: 69.12, 17: 69.12,
+                        5: 34.56, 16: 34.56,
+                        6: 20.74, 15: 20.74,
+                        7: 13.83, 14: 13.83,
+                        8: 9.88, 13: 9.88,
+                        9: 8.3, 12: 8.3,
+                        10: 7.68, 11: 7.68
+                    };
+                    const multiplier = payoutMultipliers[sum] || 1.0;
+                    const payout = betAmount * multiplier;
+
+                    console.log(`🎲 [K3_MULTIPLE_SUM_WIN] SUM_MULTIPLE bet WON!`, {
+                        betValues: sumValues,
+                        winningSum: sum,
+                        actualSum: sum,
+                        multiplier: multiplier,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+
+                    return payout;
+                } else {
+                    console.log(`🎲 [K3_MULTIPLE_SUM_LOSS] SUM_MULTIPLE bet LOST: ${sum} not in ${sumValues.join(',')}`);
                 }
                 break;
 
             case 'SUM_CATEGORY':
                 // Sum categories - 2.0x payout
+                console.log(`🎲 [K3_SUM_CATEGORY_CHECK] Checking SUM_CATEGORY bet: ${betValue} vs sum: ${sum}`);
+
                 if (betValue === 'big' && sum >= 11) {
-                    return betAmount * 2.0;
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_CATEGORY_WIN] BIG bet WON! (sum ${sum} >= 11)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
                 } else if (betValue === 'small' && sum < 11) {
-                    return betAmount * 2.0;
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_CATEGORY_WIN] SMALL bet WON! (sum ${sum} < 11)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
                 } else if (betValue === 'odd' && sum % 2 === 1) {
-                    return betAmount * 2.0;
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_CATEGORY_WIN] ODD bet WON! (sum ${sum} is odd)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
                 } else if (betValue === 'even' && sum % 2 === 0) {
-                    return betAmount * 2.0;
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_CATEGORY_WIN] EVEN bet WON! (sum ${sum} is even)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
+                } else {
+                    console.log(`🎲 [K3_SUM_CATEGORY_LOSS] SUM_CATEGORY bet LOST:`, {
+                        betValue: betValue,
+                        sum: sum,
+                        isBig: sum >= 11,
+                        isOdd: sum % 2 === 1
+                    });
                 }
                 break;
 
             case 'MATCHING_DICE':
+                console.log(`🎲 [K3_MATCHING_DICE_CHECK] Checking MATCHING_DICE bet: ${betValue}`, {
+                    hasTriple: result.has_triple,
+                    hasPair: result.has_pair,
+                    dice: [result.dice_1, result.dice_2, result.dice_3]
+                });
+
                 if (betValue === 'triple_any' && result.has_triple) {
-                    return betAmount * 34.56; // Any triple
+                    const payout = betAmount * 34.56; // Any triple
+                    console.log(`🎲 [K3_MATCHING_DICE_WIN] TRIPLE_ANY bet WON!`, {
+                        betValue: betValue,
+                        dice: [result.dice_1, result.dice_2, result.dice_3],
+                        multiplier: 34.56,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
                 } else if (betValue === 'pair_any' && result.has_pair && !result.has_triple) {
-                    return betAmount * 13.83; // Any pair (not triple)
+                    const payout = betAmount * 13.83; // Any pair (not triple)
+                    console.log(`🎲 [K3_MATCHING_DICE_WIN] PAIR_ANY bet WON!`, {
+                        betValue: betValue,
+                        dice: [result.dice_1, result.dice_2, result.dice_3],
+                        multiplier: 13.83,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
                 } else if (betValue.startsWith('triple_') && result.has_triple) {
                     // Specific triple (e.g., triple_5 for three 5s)
                     const targetNumber = parseInt(betValue.split('_')[1]);
                     const dice = [result.dice_1, result.dice_2, result.dice_3];
+                    console.log(`🎲 [K3_SPECIFIC_TRIPLE_CHECK] Checking specific triple: ${targetNumber} vs dice: [${dice.join(',')}]`);
+
                     if (dice.every(d => d === targetNumber)) {
-                        return betAmount * 207.36; // Specific triple
+                        const payout = betAmount * 207.36; // Specific triple
+                        console.log(`🎲 [K3_MATCHING_DICE_WIN] SPECIFIC_TRIPLE bet WON!`, {
+                            betValue: betValue,
+                            targetNumber: targetNumber,
+                            dice: dice,
+                            multiplier: 207.36,
+                            betAmount: betAmount,
+                            payout: payout
+                        });
+                        return payout;
+                    } else {
+                        console.log(`🎲 [K3_MATCHING_DICE_LOSS] SPECIFIC_TRIPLE bet LOST: ${targetNumber} !== all dice`);
                     }
                 } else if (betValue.startsWith('pair_') && result.has_pair) {
                     // Specific pair with specific single
@@ -3342,30 +4113,111 @@ const calculateK3Win = (bet, result, betType, betValue) => {
                         return acc;
                     }, {});
 
+                    console.log(`🎲 [K3_SPECIFIC_PAIR_CHECK] Checking specific pair: ${pairNum} with single: ${singleNum}`, {
+                        dice: dice,
+                        counts: counts
+                    });
+
                     if (counts[pairNum] === 2 && counts[singleNum] === 1) {
-                        return betAmount * 6.91; // Specific pair with specific single
+                        const payout = betAmount * 69.12; // Specific pair with specific single
+                        console.log(`🎲 [K3_MATCHING_DICE_WIN] SPECIFIC_PAIR bet WON!`, {
+                            betValue: betValue,
+                            pairNumber: pairNum,
+                            singleNumber: singleNum,
+                            dice: dice,
+                            counts: counts,
+                            multiplier: 69.12,
+                            betAmount: betAmount,
+                            payout: payout
+                        });
+                        return payout;
+                    } else {
+                        console.log(`🎲 [K3_MATCHING_DICE_LOSS] SPECIFIC_PAIR bet LOST:`, {
+                            expectedPair: pairNum,
+                            expectedSingle: singleNum,
+                            actualCounts: counts
+                        });
                     }
+                } else {
+                    console.log(`🎲 [K3_MATCHING_DICE_LOSS] MATCHING_DICE bet LOST:`, {
+                        betValue: betValue,
+                        hasTriple: result.has_triple,
+                        hasPair: result.has_pair
+                    });
                 }
                 break;
 
             case 'PATTERN':
+                console.log(`🎲 [K3_PATTERN_CHECK] Checking PATTERN bet: ${betValue}`, {
+                    dice: [result.dice_1, result.dice_2, result.dice_3],
+                    isStraight: result.is_straight,
+                    hasPair: result.has_pair,
+                    hasTriple: result.has_triple
+                });
+
                 if (betValue === 'all_different') {
                     // All three dice different
                     const dice = [result.dice_1, result.dice_2, result.dice_3];
                     const unique = new Set(dice);
+                    console.log(`🎲 [K3_ALL_DIFFERENT_CHECK] Checking all_different: unique count = ${unique.size}`);
+
                     if (unique.size === 3) {
-                        return betAmount * 34.56;
+                        const payout = betAmount * 34.56;
+                        console.log(`🎲 [K3_PATTERN_WIN] ALL_DIFFERENT bet WON!`, {
+                            betValue: betValue,
+                            dice: dice,
+                            uniqueCount: unique.size,
+                            multiplier: 34.56,
+                            betAmount: betAmount,
+                            payout: payout
+                        });
+                        return payout;
+                    } else {
+                        console.log(`🎲 [K3_PATTERN_LOSS] ALL_DIFFERENT bet LOST: unique count ${unique.size} !== 3`);
                     }
                 } else if (betValue === 'straight' && result.is_straight) {
-                    return betAmount * 8.64; // Three consecutive numbers
+                    const payout = betAmount * 8.64; // Three consecutive numbers
+                    console.log(`🎲 [K3_PATTERN_WIN] STRAIGHT bet WON!`, {
+                        betValue: betValue,
+                        dice: [result.dice_1, result.dice_2, result.dice_3],
+                        isStraight: result.is_straight,
+                        multiplier: 8.64,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
                 } else if (betValue === 'two_different' && result.has_pair && !result.has_triple) {
-                    return betAmount * 6.91; // One pair
+                    const payout = betAmount * 69.12; // One pair
+                    console.log(`🎲 [K3_PATTERN_WIN] TWO_DIFFERENT bet WON!`, {
+                        betValue: betValue,
+                        dice: [result.dice_1, result.dice_2, result.dice_3],
+                        hasPair: result.has_pair,
+                        hasTriple: result.has_triple,
+                        multiplier: 69.12,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
+                } else {
+                    console.log(`🎲 [K3_PATTERN_LOSS] PATTERN bet LOST:`, {
+                        betValue: betValue,
+                        isStraight: result.is_straight,
+                        hasPair: result.has_pair,
+                        hasTriple: result.has_triple
+                    });
                 }
                 break;
         }
 
+        console.log(`🎲 [K3_PAYOUT_END] Bet LOST - no matching conditions found for betType: ${betType}, betValue: ${betValue}`);
         return 0; // Bet loses
     } catch (error) {
+        console.error(`🎲 [K3_PAYOUT_ERROR] Error calculating K3 win:`, {
+            error: error.message,
+            betType,
+            betValue,
+            betId: bet.bet_id
+        });
         logger.error('Error calculating K3 win', {
             error: error.message,
             betType,
@@ -3390,10 +4242,10 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
 
         switch (betType) {
             case 'POSITION':
-                // Bet on specific number in specific position - 2.0x payout
+                // Bet on specific number in specific position - 9.0x payout
                 const [position, number] = betValue.split('_');
                 if (result[position] === parseInt(number)) {
-                    return betAmount * 2.0;
+                    return betAmount * 9.0;
                 }
                 break;
 
@@ -3401,7 +4253,7 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
                 // Position size betting - 2.0x payout
                 const [pos, sizeType] = betValue.split('_');
                 const posValue = result[pos];
-                const isBig = posValue >= 5;
+                const isBig = posValue >= 5; // For 0-9 dice, 5-9 is big, 0-4 is small
                 if ((sizeType === 'big' && isBig) || (sizeType === 'small' && !isBig)) {
                     return betAmount * 2.0;
                 }
@@ -3651,7 +4503,7 @@ const processWinningBets = async (gameType, duration, periodId, result, t) => {
 const checkBetWin = async (bet, result, gameType) => {
     try {
         const [betType, betValue] = bet.bet_type.split(':');
-        
+
         console.log(`🔍 [WIN_CHECK] Checking bet win:`, {
             betType, betValue, result, gameType
         });
@@ -3686,33 +4538,33 @@ const checkBetWin = async (bet, result, gameType) => {
  */
 const checkWingoWin = (betType, betValue, result) => {
     console.log(`🎯 [WINGO_WIN] Checking: ${betType}:${betValue} vs result:`, result);
-    
+
     switch (betType) {
         case 'NUMBER':
             const targetNumber = parseInt(betValue);
             const isNumberWin = result.number === targetNumber;
             console.log(`🔢 [NUMBER_CHECK] ${targetNumber} === ${result.number} = ${isNumberWin}`);
             return isNumberWin;
-            
+
         case 'COLOR':
             const isColorWin = checkColorWin(betValue, result.number, result.color);
             console.log(`🎨 [COLOR_CHECK] ${betValue} vs ${result.color} (number: ${result.number}) = ${isColorWin}`);
             return isColorWin;
-            
+
         case 'SIZE':
             const isBig = result.number >= 5;
-            const isSizeWin = (betValue.toLowerCase() === 'big' && isBig) || 
-                             (betValue.toLowerCase() === 'small' && !isBig);
+            const isSizeWin = (betValue.toLowerCase() === 'big' && isBig) ||
+                (betValue.toLowerCase() === 'small' && !isBig);
             console.log(`📏 [SIZE_CHECK] ${betValue} vs ${isBig ? 'big' : 'small'} (number: ${result.number}) = ${isSizeWin}`);
             return isSizeWin;
-            
+
         case 'PARITY':
             const isEven = result.number % 2 === 0;
-            const isParityWin = (betValue.toLowerCase() === 'even' && isEven) || 
-                               (betValue.toLowerCase() === 'odd' && !isEven);
+            const isParityWin = (betValue.toLowerCase() === 'even' && isEven) ||
+                (betValue.toLowerCase() === 'odd' && !isEven);
             console.log(`⚖️ [PARITY_CHECK] ${betValue} vs ${isEven ? 'even' : 'odd'} (number: ${result.number}) = ${isParityWin}`);
             return isParityWin;
-            
+
         default:
             console.log(`❓ [UNKNOWN_BET_TYPE] ${betType}`);
             return false;
@@ -3724,26 +4576,26 @@ const checkWingoWin = (betType, betValue, result) => {
  */
 const checkColorWin = (betValue, resultNumber, resultColor) => {
     const betColor = betValue.toLowerCase();
-    
+
     // Get the actual color for the number (deterministic)
     const actualColor = getColorForNumber(resultNumber);
-    
+
     console.log(`🎨 [COLOR_DETAIL] Bet: ${betColor}, Number: ${resultNumber}, Actual color: ${actualColor}, Result color: ${resultColor}`);
-    
+
     switch (betColor) {
         case 'red':
             // Red bet wins on red numbers (2, 4, 6, 8) and red_violet (0)
             return actualColor === 'red' || actualColor === 'red_violet';
-            
+
         case 'green':
             // Green bet wins on green numbers (1, 3, 7, 9) and green_violet (5)
             return actualColor === 'green' || actualColor === 'green_violet';
-            
+
         case 'violet':
         case 'purple':
             // Violet bet wins ONLY on violet numbers (0, 5)
             return actualColor === 'red_violet' || actualColor === 'green_violet';
-            
+
         default:
             return false;
     }
@@ -3754,7 +4606,7 @@ const checkColorWin = (betValue, resultNumber, resultColor) => {
  */
 const checkFiveDWin = (betType, betValue, result) => {
     console.log(`🎯 [5D_WIN] Checking: ${betType}:${betValue} vs result:`, result);
-    
+
     switch (betType) {
         case 'POSITION':
             const [position, value] = betValue.split('_');
@@ -3763,15 +4615,15 @@ const checkFiveDWin = (betType, betValue, result) => {
             const isPositionWin = positionValue === targetValue;
             console.log(`📍 [POSITION_CHECK] ${position}:${targetValue} === ${positionValue} = ${isPositionWin}`);
             return isPositionWin;
-            
+
         case 'POSITION_SIZE':
             const [pos, size] = betValue.split('_');
             const posValue = result[pos];
-            const isBig = posValue >= 5;
+            const isBig = posValue >= 5; // For 0-9 dice, 5-9 is big, 0-4 is small
             const isPositionSizeWin = (size === 'big' && isBig) || (size === 'small' && !isBig);
             console.log(`📏 [POSITION_SIZE_CHECK] ${pos}:${size} vs ${posValue} (${isBig ? 'big' : 'small'}) = ${isPositionSizeWin}`);
             return isPositionSizeWin;
-            
+
         case 'POSITION_PARITY':
             const [position2, parity] = betValue.split('_');
             const posValue2 = result[position2];
@@ -3779,28 +4631,32 @@ const checkFiveDWin = (betType, betValue, result) => {
             const isPositionParityWin = (parity === 'even' && isEven) || (parity === 'odd' && !isEven);
             console.log(`⚖️ [POSITION_PARITY_CHECK] ${position2}:${parity} vs ${posValue2} (${isEven ? 'even' : 'odd'}) = ${isPositionParityWin}`);
             return isPositionParityWin;
-            
+
         case 'SUM':
             const sum = result.A + result.B + result.C + result.D + result.E;
             const targetSum = parseInt(betValue);
             const isSumWin = sum === targetSum;
             console.log(`➕ [SUM_CHECK] ${targetSum} === ${sum} = ${isSumWin}`);
             return isSumWin;
-            
+
         case 'SUM_SIZE':
             const totalSum = result.A + result.B + result.C + result.D + result.E;
             const isSumBig = totalSum > 22;
-            const isSumSizeWin = (betValue === 'big' && isSumBig) || (betValue === 'small' && !isSumBig);
-            console.log(`📏 [SUM_SIZE_CHECK] ${betValue} vs ${totalSum} (${isSumBig ? 'big' : 'small'}) = ${isSumSizeWin}`);
+            // Handle both formats: "small"/"big" and "SUM_small"/"SUM_big"
+            const sizeValue = betValue.startsWith('SUM_') ? betValue.split('_')[1] : betValue;
+            const isSumSizeWin = (sizeValue === 'big' && isSumBig) || (sizeValue === 'small' && !isSumBig);
+            console.log(`📏 [SUM_SIZE_CHECK] ${betValue} (extracted: ${sizeValue}) vs ${totalSum} (${isSumBig ? 'big' : 'small'}) = ${isSumSizeWin}`);
             return isSumSizeWin;
-            
+
         case 'SUM_PARITY':
             const sum2 = result.A + result.B + result.C + result.D + result.E;
             const isSumEven = sum2 % 2 === 0;
-            const isSumParityWin = (betValue === 'even' && isSumEven) || (betValue === 'odd' && !isSumEven);
-            console.log(`⚖️ [SUM_PARITY_CHECK] ${betValue} vs ${sum2} (${isSumEven ? 'even' : 'odd'}) = ${isSumParityWin}`);
+            // Handle both formats: "even"/"odd" and "SUM_even"/"SUM_odd"
+            const parityValue = betValue.startsWith('SUM_') ? betValue.split('_')[1] : betValue;
+            const isSumParityWin = (parityValue === 'even' && isSumEven) || (parityValue === 'odd' && !isSumEven);
+            console.log(`⚖️ [SUM_PARITY_CHECK] ${betValue} (extracted: ${parityValue}) vs ${sum2} (${isSumEven ? 'even' : 'odd'}) = ${isSumParityWin}`);
             return isSumParityWin;
-            
+
         default:
             console.log(`❓ [UNKNOWN_5D_BET_TYPE] ${betType}`);
             return false;
@@ -3811,70 +4667,102 @@ const checkFiveDWin = (betType, betValue, result) => {
  * FIXED: Check K3 win conditions directly
  */
 const checkK3Win = (betType, betValue, result) => {
-    console.log(`🎯 [K3_WIN] Checking: ${betType}:${betValue} vs result:`, result);
-    
+    console.log(`🎯 [K3_WIN_CHECK_START] Checking K3 win condition: ${betType}:${betValue} vs result:`, {
+        dice: [result.dice_1, result.dice_2, result.dice_3],
+        sum: result.sum,
+        hasPair: result.has_pair,
+        hasTriple: result.has_triple,
+        isStraight: result.is_straight
+    });
+
     const dice = [result.dice_1, result.dice_2, result.dice_3];
     const sum = result.sum || dice.reduce((a, b) => a + b, 0);
-    
+
     switch (betType) {
         case 'SUM':
             const targetSum = parseInt(betValue);
             const isSumWin = sum === targetSum;
             console.log(`➕ [K3_SUM_CHECK] ${targetSum} === ${sum} = ${isSumWin}`);
             return isSumWin;
-            
+
+        case 'SUM_MULTIPLE':
+            // Handle multiple sum values (comma-separated)
+            const sumValues = betValue.split(',').map(s => parseInt(s.trim()));
+            const isMultipleSumWin = sumValues.includes(sum);
+            console.log(`➕ [K3_MULTIPLE_SUM_CHECK] ${sumValues.join(',')} includes ${sum} = ${isMultipleSumWin}`);
+            return isMultipleSumWin;
+
         case 'SUM_CATEGORY':
-            if (betValue === 'big') {
+            const normalizedBetValue = betValue.toLowerCase();
+            if (normalizedBetValue === 'big') {
                 const isSumCategoryWin = sum >= 11;
                 console.log(`📏 [K3_SUM_CATEGORY_CHECK] big vs ${sum} (>= 11) = ${isSumCategoryWin}`);
                 return isSumCategoryWin;
-            } else if (betValue === 'small') {
+            } else if (normalizedBetValue === 'small') {
                 const isSumCategoryWin = sum < 11;
                 console.log(`📏 [K3_SUM_CATEGORY_CHECK] small vs ${sum} (< 11) = ${isSumCategoryWin}`);
                 return isSumCategoryWin;
-            } else if (betValue === 'odd') {
+            } else if (normalizedBetValue === 'odd') {
                 const isSumParityWin = sum % 2 === 1;
                 console.log(`⚖️ [K3_SUM_PARITY_CHECK] odd vs ${sum} = ${isSumParityWin}`);
                 return isSumParityWin;
-            } else if (betValue === 'even') {
+            } else if (normalizedBetValue === 'even') {
                 const isSumParityWin = sum % 2 === 0;
                 console.log(`⚖️ [K3_SUM_PARITY_CHECK] even vs ${sum} = ${isSumParityWin}`);
                 return isSumParityWin;
             }
+            console.log(`❓ [K3_UNKNOWN_SUM_CATEGORY] Unknown sum category: ${betValue}`);
             return false;
-            
+
         case 'MATCHING_DICE':
-            if (betValue === 'triple_any') {
+            const normalizedMatchingValue = betValue.toLowerCase();
+            if (normalizedMatchingValue === 'triple_any') {
                 const isTripleWin = result.has_triple;
                 console.log(`🎲 [K3_TRIPLE_CHECK] triple_any vs has_triple:${result.has_triple} = ${isTripleWin}`);
                 return isTripleWin;
-            } else if (betValue === 'pair_any') {
+            } else if (normalizedMatchingValue === 'pair_any') {
                 const isPairWin = result.has_pair && !result.has_triple;
                 console.log(`🎲 [K3_PAIR_CHECK] pair_any vs has_pair:${result.has_pair}, has_triple:${result.has_triple} = ${isPairWin}`);
                 return isPairWin;
-            } else if (betValue.startsWith('triple_')) {
-                const targetNumber = parseInt(betValue.split('_')[1]);
+            } else if (normalizedMatchingValue.startsWith('triple_')) {
+                const targetNumber = parseInt(normalizedMatchingValue.split('_')[1]);
                 const isSpecificTripleWin = result.has_triple && dice.every(d => d === targetNumber);
                 console.log(`🎲 [K3_SPECIFIC_TRIPLE_CHECK] triple_${targetNumber} vs dice:[${dice.join(',')}] = ${isSpecificTripleWin}`);
                 return isSpecificTripleWin;
+            } else if (normalizedMatchingValue.startsWith('pair_')) {
+                const [pairNum, singleNum] = normalizedMatchingValue.split('_').slice(1).map(n => parseInt(n));
+                const counts = dice.reduce((acc, val) => {
+                    acc[val] = (acc[val] || 0) + 1;
+                    return acc;
+                }, {});
+                const isSpecificPairWin = counts[pairNum] === 2 && counts[singleNum] === 1;
+                console.log(`🎲 [K3_SPECIFIC_PAIR_CHECK] pair_${pairNum}_${singleNum} vs counts:${JSON.stringify(counts)} = ${isSpecificPairWin}`);
+                return isSpecificPairWin;
             }
+            console.log(`❓ [K3_UNKNOWN_MATCHING_DICE] Unknown matching dice: ${betValue} (normalized: ${normalizedMatchingValue})`);
             return false;
-            
+
         case 'PATTERN':
-            if (betValue === 'all_different') {
+            const normalizedPatternValue = betValue.toLowerCase().replace('_', '');
+            if (normalizedPatternValue === 'alldifferent') {
                 const unique = new Set(dice);
                 const isAllDifferentWin = unique.size === 3;
                 console.log(`🎲 [K3_ALL_DIFFERENT_CHECK] all_different vs dice:[${dice.join(',')}] unique:${unique.size} = ${isAllDifferentWin}`);
                 return isAllDifferentWin;
-            } else if (betValue === 'straight') {
+            } else if (normalizedPatternValue === 'straight') {
                 const isStraightWin = result.is_straight;
                 console.log(`🎲 [K3_STRAIGHT_CHECK] straight vs is_straight:${result.is_straight} = ${isStraightWin}`);
                 return isStraightWin;
+            } else if (normalizedPatternValue === 'twodifferent') {
+                const isTwoDifferentWin = result.has_pair && !result.has_triple;
+                console.log(`🎲 [K3_TWO_DIFFERENT_CHECK] two_different vs has_pair:${result.has_pair}, has_triple:${result.has_triple} = ${isTwoDifferentWin}`);
+                return isTwoDifferentWin;
             }
+            console.log(`❓ [K3_UNKNOWN_PATTERN] Unknown pattern: ${betValue} (normalized: ${normalizedPatternValue})`);
             return false;
-            
+
         default:
-            console.log(`❓ [UNKNOWN_K3_BET_TYPE] ${betType}`);
+            console.log(`❓ [K3_UNKNOWN_BET_TYPE] Unknown bet type: ${betType}`);
             return false;
     }
 };
@@ -3887,14 +4775,23 @@ const checkK3Win = (betType, betValue, result) => {
  */
 const calculateWinnings = (bet, result, gameType) => {
     try {
+        console.log(`💰 [WINNINGS_START] Starting calculation for:`, {
+            betId: bet.bet_id,
+            gameType,
+            betType: bet.bet_type,
+            resultColor: result.color,
+            resultNumber: result.number
+        });
+
         // First check if the bet actually won
         const [betType, betValue] = bet.bet_type.split(':');
         let isWinner = false;
-        
+
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
                 isWinner = checkWingoWin(betType, betValue, result);
+                console.log(`💰 [WIN_CHECK] checkWingoWin returned: ${isWinner}`);
                 break;
             case 'fived':
             case '5d':
@@ -3904,21 +4801,16 @@ const calculateWinnings = (bet, result, gameType) => {
                 isWinner = checkK3Win(betType, betValue, result);
                 break;
         }
-        
+
         // If bet didn't win, return 0
         if (!isWinner) {
-            logger.info('Bet did not win, returning 0 winnings', {
-                betId: bet.bet_id,
-                betType: bet.bet_type,
-                gameType,
-                result
-            });
+            console.log(`💰 [NO_WIN] Bet did not win, returning 0`);
             return 0;
         }
-        
+
         // FIXED: Use comprehensive payout functions for accurate calculations
         let winnings = 0;
-        
+
         console.log(`💰 [WINNINGS_DEBUG] Bet data for payout calculation:`, {
             betId: bet.bet_id,
             betType: bet.bet_type,
@@ -3927,13 +4819,13 @@ const calculateWinnings = (bet, result, gameType) => {
             netBetAmount: bet.netBetAmount,
             betAmountField: bet.betAmount
         });
-        
+
         switch (gameType.toLowerCase()) {
             case 'wingo':
             case 'trx_wix':
-                console.log(`💰 [WINNINGS_DEBUG] Calling calculateWingoWin for ${gameType}`);
+                console.log(`💰 [CALLING_CALC] About to call calculateWingoWin`);
                 winnings = calculateWingoWin(bet, result, betType, betValue);
-                console.log(`💰 [WINNINGS_DEBUG] calculateWingoWin returned: ${winnings}`);
+                console.log(`💰 [CALC_RESULT] calculateWingoWin returned: ${winnings}`);
                 break;
             case 'fived':
             case '5d':
@@ -3951,28 +4843,7 @@ const calculateWinnings = (bet, result, gameType) => {
         const grossBetAmount = parseFloat(bet.bet_amount || bet.betAmount || 0);
         const netBetAmount = parseFloat(bet.amount_after_tax || 0);
 
-        console.log(`💰 [WINNINGS_CALC] Comprehensive calculation:`, {
-            betId: bet.bet_id,
-            grossBetAmount,
-            netBetAmount,
-            taxAmount: grossBetAmount - netBetAmount,
-            winnings,
-            gameType,
-            betType,
-            betValue,
-            resultColor: result.color,
-            resultNumber: result.number
-        });
-
-        logger.info('Calculated winnings using comprehensive payout functions', {
-            betId: bet.bet_id,
-            grossBetAmount,
-            netBetAmount,
-            winnings,
-            gameType,
-            betType,
-            betValue
-        });
+        console.log(`💰 [FINAL_WINNINGS] Final winnings calculated: ${winnings}`);
 
         return winnings;
     } catch (error) {
@@ -4459,7 +5330,7 @@ const getMinimumBetResult = async (gameType, duration, periodId) => {
     try {
         // Get result with zero or minimum exposure
         const result = await getOptimalResultByExposure(gameType, duration, periodId);
-        
+
         logger.info('Retrieved minimum exposure result', {
             gameType,
             duration,
@@ -4566,7 +5437,7 @@ const validateFallbackResult = async (result, gameType) => {
                 }
                 // Validate each dice value
                 ['A', 'B', 'C', 'D', 'E'].forEach(dice => {
-                    if (typeof result[dice] !== 'number' || result[dice] < 1 || result[dice] > 6) {
+                    if (typeof result[dice] !== 'number' || result[dice] < 0 || result[dice] > 9) {
                         warnings.push(`Invalid value for dice ${dice}`);
                     }
                 });
@@ -4696,7 +5567,7 @@ const generateFallbackResult = async (gameType) => {
 
             case 'fived':
             case '5d':
-                const dice = Array(5).fill(0).map(() => Math.floor(Math.random() * 6) + 1); // 1-6
+                const dice = Array(5).fill(0).map(() => Math.floor(Math.random() * 10)); // 0-9
                 return {
                     A: dice[0],
                     B: dice[1],
@@ -4778,10 +5649,10 @@ const generateRandomResult = async (gameType) => {
 
             case 'fived':
             case '5d':
-                // FIXED: Generate proper 5D result with all required fields
+                // FIXED: Generate proper 5D result with dice values 0-9
                 const dice = [];
                 for (let i = 0; i < 5; i++) {
-                    dice.push(Math.floor(Math.random() * 6) + 1); // 1-6
+                    dice.push(Math.floor(Math.random() * 10)); // 0-9 instead of 1-6
                 }
 
                 result = {
@@ -4794,8 +5665,10 @@ const generateRandomResult = async (gameType) => {
                 };
 
                 // Validate 5D result
-                if (!result.A || !result.B || !result.C || !result.D || !result.E) {
-                    throw new Error('Invalid 5D result generated');
+                if (result.A < 0 || result.A > 9 || result.B < 0 || result.B > 9 || 
+                    result.C < 0 || result.C > 9 || result.D < 0 || result.D > 9 || 
+                    result.E < 0 || result.E > 9) {
+                    throw new Error('Invalid 5D result generated - dice values must be 0-9');
                 }
                 break;
 
@@ -4803,7 +5676,7 @@ const generateRandomResult = async (gameType) => {
                 // FIXED: Generate proper K3 result with all required fields
                 const k3Dice = [];
                 for (let i = 0; i < 3; i++) {
-                    k3Dice.push(Math.floor(Math.random() * 6) + 1); // 1-6
+                    k3Dice.push(Math.floor(Math.random() * 6) + 1); // 1-6 for K3
                 }
 
                 const sum = k3Dice.reduce((a, b) => a + b, 0);
@@ -4941,7 +5814,7 @@ const validateBetWithTimeline = async (betData) => {
 
     try {
         // Basic validation
-        if (!userId || !gameType || !duration || !periodId || !betType || !betValue || !betAmount) {
+        if (!userId || !gameType || !duration || !periodId || !betType || betValue === undefined || !betAmount) {
             return {
                 valid: false,
                 message: 'Missing required bet information',
@@ -5246,7 +6119,7 @@ const selectFallbackResult = async (gameType, duration, periodId) => {
  */
 async function processGameResults(gameType, duration, periodId, timeline = 'default', transaction = null) {
     const lockKey = `process_${gameType}_${duration}_${periodId}_${timeline}`;
-    
+
     try {
         console.log('✅ [GAMELOGIC_SERVICE] ===== CORRECT SYSTEM CALLED =====');
         console.log('✅ [GAMELOGIC_SERVICE] This is the GOOD system with all protections!');
@@ -5281,13 +6154,13 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                 };
             }
         }
-        
+
         globalProcessingLocks.set(lockKey, { timestamp: Date.now(), processId: process.pid });
 
         const models = await ensureModelsInitialized();
         const useTransaction = transaction || await sequelize.transaction();
         const shouldCommit = !transaction;
-        
+
         try {
             // Check existing result
             let existingResult = await checkExistingResult(gameType, duration, periodId, timeline, useTransaction);
@@ -5303,12 +6176,12 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                     source: 'existing_db'
                 };
             }
-            
+
             // Redis lock
             const redisLockKey = `processing_lock_${gameType}_${duration}_${periodId}_${timeline}`;
             const redisLockValue = `${Date.now()}_${process.pid}`;
             const redisLockAcquired = await redisClient.set(redisLockKey, redisLockValue, 'EX', 30, 'NX');
-            
+
             if (!redisLockAcquired) {
                 console.log(`🔒 Redis lock failed, waiting...`);
                 if (shouldCommit) await useTransaction.rollback();
@@ -5330,7 +6203,7 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                 }
                 throw new Error('Failed to get result after Redis lock wait');
             }
-            
+
             try {
                 // Final check after Redis lock
                 existingResult = await checkExistingResult(gameType, duration, periodId, timeline, useTransaction);
@@ -5345,25 +6218,25 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         source: 'final_check'
                     };
                 }
-                
-                        // Generate result using exposure-based selection
-        console.log('🎯 [PROCESS_RESULT] Generating NEW result with exposure-based optimization');
-        console.log('🎯 [PROCESS_RESULT] Calling calculateResultWithVerification...');
-        
-        console.log('🎯 [PROCESS_RESULT] About to call calculateResultWithVerification with params:', {
-            gameType, duration, periodId, timeline
-        });
-        
-        const resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId, timeline);
+
+                // Generate result using exposure-based selection
+                console.log('🎯 [PROCESS_RESULT] Generating NEW result with exposure-based optimization');
+                console.log('🎯 [PROCESS_RESULT] Calling calculateResultWithVerification...');
+
+                console.log('🎯 [PROCESS_RESULT] About to call calculateResultWithVerification with params:', {
+                    gameType, duration, periodId, timeline
+                });
+
+                const resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId, timeline);
                 const result = resultWithVerification.result;
-                
+
                 console.log('🎯 [PROCESS_RESULT] Result generated successfully:', {
                     result: result,
                     protectionMode: resultWithVerification.protectionMode,
                     protectionReason: resultWithVerification.protectionReason,
                     verification: resultWithVerification.verification
                 });
-                
+
                 // Save to database
                 let savedResult;
                 if (gameType === 'wingo') {
@@ -5375,7 +6248,7 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         duration: duration,
                         timeline: timeline
                     }, { transaction: useTransaction });
-                    
+
                 } else if (gameType === 'fiveD' || gameType === '5d') {
                     savedResult = await models.BetResult5D.create({
                         bet_number: periodId,
@@ -5388,7 +6261,7 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         duration: duration,
                         timeline: timeline
                     }, { transaction: useTransaction });
-                    
+
                 } else if (gameType === 'k3') {
                     savedResult = await models.BetResultK3.create({
                         bet_number: periodId,
@@ -5404,7 +6277,7 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         duration: duration,
                         timeline: timeline
                     }, { transaction: useTransaction });
-                    
+
                 } else if (gameType === 'trx_wix') {
                     savedResult = await models.BetResultTrxWix.create({
                         period: periodId,
@@ -5415,25 +6288,25 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         timeline: timeline
                     }, { transaction: useTransaction });
                 }
-                
+
                 console.log('🏆 [PROCESS_WINNERS] Processing winning bets...');
                 // Process winners
                 const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, useTransaction);
-                
+
                 console.log('🏆 [PROCESS_WINNERS] Winners processed:', {
                     winnerCount: winners.length,
                     winners: winners.map(w => ({ userId: w.userId, winnings: w.winnings }))
                 });
-                
+
                 console.log('🔄 [PROCESS_CLEANUP] Resetting period exposure...');
                 // Reset exposure for next period
                 await resetPeriodExposure(gameType, duration, periodId);
-                
+
                 if (shouldCommit) await useTransaction.commit();
-                
+
                 console.log('✅ [PROCESS_COMPLETE] Complete result processing done');
                 console.log('🎲 [PROCESS_END] ==========================================');
-                
+
                 return {
                     success: true,
                     result: savedResult,
@@ -5444,7 +6317,7 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                     protectionMode: resultWithVerification.protectionMode,
                     protectionReason: resultWithVerification.protectionReason
                 };
-                
+
             } finally {
                 // Release Redis lock
                 try {
@@ -5456,12 +6329,12 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                     console.error('❌ Error releasing Redis lock:', lockError);
                 }
             }
-            
+
         } catch (error) {
             if (shouldCommit) await useTransaction.rollback();
             throw error;
         }
-        
+
     } catch (error) {
         console.error(`❌ Error processing game results:`, error);
         throw error;
@@ -5624,9 +6497,10 @@ const generateResultForTimeline = async (gameType, timeline) => {
 
             case 'fived':
             case '5d':
+                // FIXED: Use 0-9 dice values for 5D
                 const dice = [];
                 for (let i = 0; i < 5; i++) {
-                    dice.push(((Math.floor(Math.random() * 6) + 1) + timelineSeed) % 6 + 1);
+                    dice.push(((Math.floor(Math.random() * 10) + timelineSeed) % 10)); // 0-9
                 }
 
                 result = {
@@ -5691,6 +6565,7 @@ const generateResultForTimeline = async (gameType, timeline) => {
  */
 const processWinningBetsWithTimeline = async (gameType, duration, periodId, timeline, result, transaction = null) => {
     try {
+        console.log(`🔥🔥🔥 THIS IS THE REAL PAYOUT FUNCTION! 🔥🔥🔥`);
         console.log(`🔄 Processing winning bets for ${gameType} ${duration}s ${timeline} - ${periodId}`);
 
         const models = await ensureModelsInitialized();
@@ -5748,8 +6623,44 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                             betAmount: bet.bet_amount,
                             amountAfterTax: bet.amount_after_tax
                         });
+
+                        // Add K3 exposure logging similar to Wingo
+                        if (gameType.toLowerCase() === 'k3') {
+                            const [betType, betValue] = bet.bet_type.split(':');
+                            console.log(`🎲 [K3_EXPOSURE_PAYOUT] K3 bet WON - calculating exposure:`, {
+                                betId: bet.bet_id,
+                                betType: betType,
+                                betValue: betValue,
+                                betAmount: bet.amount_after_tax,
+                                result: {
+                                    dice: [result.dice_1, result.dice_2, result.dice_3],
+                                    sum: result.sum,
+                                    hasPair: result.has_pair,
+                                    hasTriple: result.has_triple,
+                                    isStraight: result.is_straight
+                                }
+                            });
+                        }
+
                         const winnings = calculateWinnings(bet, result, gameType);
                         console.log(`💰 [PAYOUT_END] calculateWinnings returned: ${winnings}`);
+
+                        // Add K3 exposure payout logging
+                        if (gameType.toLowerCase() === 'k3') {
+                            const [betType, betValue] = bet.bet_type.split(':');
+                            console.log(`🎲 [K3_EXPOSURE_PAYOUT_COMPLETE] K3 payout calculated:`, {
+                                betId: bet.bet_id,
+                                betType: betType,
+                                betValue: betValue,
+                                betAmount: bet.amount_after_tax,
+                                winnings: winnings,
+                                multiplier: winnings / bet.amount_after_tax,
+                                result: {
+                                    dice: [result.dice_1, result.dice_2, result.dice_3],
+                                    sum: result.sum
+                                }
+                            });
+                        }
 
                         // Update user balance
                         await models.User.increment('wallet_balance', {
@@ -5779,6 +6690,24 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
 
                         console.log(`✅ Processed winning bet for user ${bet.user_id} in ${timeline}: ₹${winnings}`);
                     } else {
+                        // Add K3 exposure logging for losing bets
+                        if (gameType.toLowerCase() === 'k3') {
+                            const [betType, betValue] = bet.bet_type.split(':');
+                            console.log(`🎲 [K3_EXPOSURE_LOSS] K3 bet LOST - no exposure:`, {
+                                betId: bet.bet_id,
+                                betType: betType,
+                                betValue: betValue,
+                                betAmount: bet.amount_after_tax,
+                                result: {
+                                    dice: [result.dice_1, result.dice_2, result.dice_3],
+                                    sum: result.sum,
+                                    hasPair: result.has_pair,
+                                    hasTriple: result.has_triple,
+                                    isStraight: result.is_straight
+                                }
+                            });
+                        }
+
                         // Mark bet as lost
                         await bet.update({
                             status: 'lost',
@@ -5796,6 +6725,24 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
 
             if (shouldCommit) {
                 await useTransaction.commit();
+            }
+
+            // Add K3 exposure summary logging
+            if (gameType.toLowerCase() === 'k3') {
+                const totalWinnings = winningBets.reduce((sum, bet) => sum + bet.winnings, 0);
+                const totalBetAmount = winningBets.reduce((sum, bet) => sum + bet.betAmount, 0);
+                console.log(`🎲 [K3_EXPOSURE_SUMMARY] K3 period payout summary for ${timeline}:`, {
+                    periodId: periodId,
+                    totalBets: bets.length,
+                    winningBets: winningBets.length,
+                    totalBetAmount: totalBetAmount,
+                    totalWinnings: totalWinnings,
+                    netExposure: totalWinnings - totalBetAmount,
+                    result: {
+                        dice: [result.dice_1, result.dice_2, result.dice_3],
+                        sum: result.sum
+                    }
+                });
             }
 
             console.log(`🎯 Processed ${winningBets.length} winning bets out of ${bets.length} total bets for ${timeline}`);
@@ -5830,17 +6777,111 @@ const processBet = async (betData) => {
         console.log('🎯 [BET_START] NEW BET RECEIVED:', betData);
         console.log('🎯 [BET_START] ==========================================');
 
+        // Add K3-specific logging at the very beginning
+        if (betData.gameType && betData.gameType.toLowerCase() === 'k3') {
+            console.log('🎲 [K3_BET_DETECTED] K3 bet detected at entry point!');
+            console.log('🎲 [K3_BET_DETECTED] Bet details:', {
+                gameType: betData.gameType,
+                betType: betData.betType,
+                betValue: betData.betValue,
+                betAmount: betData.betAmount,
+                userId: betData.userId,
+                periodId: betData.periodId
+            });
+        }
+
         const validation = await validateBetWithTimeline(betData);
         if (!validation.valid) {
             console.log('❌ [BET_VALIDATION] Bet validation failed:', validation);
+
+            // Add K3-specific validation failure logging
+            if (betData.gameType && betData.gameType.toLowerCase() === 'k3') {
+                console.log('🎲 [K3_VALIDATION_FAILED] K3 bet validation failed!');
+                console.log('🎲 [K3_VALIDATION_FAILED] Validation errors:', validation);
+            }
+
             return validation;
         }
 
         const { grossBetAmount, platformFee, netBetAmount } = validation.amounts;
         const {
             userId, gameType, duration, timeline = 'default',
-            periodId, betType, betValue, odds
+            periodId, betType: originalBetType, betValue, odds
         } = betData;
+
+        // FIX: Correct K3 bet type based on bet value
+        let betType = originalBetType;
+        if (gameType.toLowerCase() === 'k3') {
+            console.log(`🎲 [K3_BET_TYPE_CHECK] Checking bet type correction for K3 bet: ${originalBetType}:${betValue}`);
+
+            // Check if this is a SUM_CATEGORY bet that was incorrectly sent as SUM
+            if (originalBetType === 'SUM' && ['Small', 'Big', 'Odd', 'Even'].includes(betValue)) {
+                betType = 'SUM_CATEGORY';
+                console.log(`🔧 [K3_BET_TYPE_FIX] Correcting bet type from ${originalBetType} to ${betType} for value: ${betValue}`);
+            }
+            // Check if this is a PATTERN bet that was incorrectly sent as SUM
+            else if (originalBetType === 'SUM' && ['Straight', 'All_Different', 'Two_Different'].includes(betValue)) {
+                betType = 'PATTERN';
+                console.log(`🔧 [K3_BET_TYPE_FIX] Correcting bet type from ${originalBetType} to ${betType} for value: ${betValue}`);
+            }
+            // Check if this is a MATCHING_DICE bet that was incorrectly sent as SUM
+            else if (originalBetType === 'SUM' && (betValue.startsWith('Triple') || betValue.startsWith('Pair'))) {
+                betType = 'MATCHING_DICE';
+                console.log(`🔧 [K3_BET_TYPE_FIX] Correcting bet type from ${originalBetType} to ${betType} for value: ${betValue}`);
+            }
+            else {
+                console.log(`🎲 [K3_BET_TYPE_CHECK] No correction needed for ${originalBetType}:${betValue}`);
+            }
+        }
+
+        // Handle SUM_MULTIPLE bets by creating individual bet records
+        if (betType === 'SUM_MULTIPLE') {
+            console.log(`🎲 [K3_MULTIPLE_SUM_PROCESSING] Processing SUM_MULTIPLE bet: ${betValue}`);
+            
+            const sumValues = betValue.split(',').map(s => s.trim());
+            const amountPerValue = netBetAmount / sumValues.length;
+            
+            console.log(`🎲 [K3_MULTIPLE_SUM_DISTRIBUTION] Total amount: ₹${netBetAmount}, Values: ${sumValues.length}, Amount per value: ₹${amountPerValue}`);
+            
+            // Create individual bet records for each sum value
+            const individualBets = [];
+            for (const sumValue of sumValues) {
+                const individualOdds = calculateOdds(gameType, 'SUM', sumValue);
+                individualBets.push({
+                    ...betData,
+                    betType: 'SUM',
+                    betValue: sumValue,
+                    betAmount: amountPerValue,
+                    odds: individualOdds
+                });
+            }
+            
+            console.log(`🎲 [K3_MULTIPLE_SUM_CREATED] Created ${individualBets.length} individual bets:`, individualBets.map(bet => `${bet.betType}:${bet.betValue} (₹${bet.betAmount})`));
+            
+            // Process each individual bet
+            const results = [];
+            for (const individualBet of individualBets) {
+                const result = await processBet(individualBet);
+                results.push(result);
+            }
+            
+            // Return combined result
+            const allSuccessful = results.every(r => r.success);
+            const totalExpectedWin = results.reduce((sum, r) => sum + (r.data?.expectedWin || 0), 0);
+            
+            return {
+                success: allSuccessful,
+                message: allSuccessful ? 'Multiple sum bets placed successfully' : 'Some bets failed',
+                data: {
+                    ...betData,
+                    betType: 'SUM_MULTIPLE',
+                    betValue: betValue,
+                    expectedWin: totalExpectedWin,
+                    individualBets: results.length,
+                    breakdown: results.map(r => r.data)
+                }
+            };
+        }
 
         console.log('✅ [BET_VALIDATION] Bet validation passed:', {
             userId, gameType, duration, timeline, periodId,
@@ -5914,6 +6955,30 @@ const processBet = async (betData) => {
 
             // Store bet in Redis with exposure tracking
             console.log('📊 [BET_EXPOSURE] Starting exposure tracking...');
+
+            // Add K3-specific exposure tracking info
+            if (gameType.toLowerCase() === 'k3') {
+                console.log(`🎲 [K3_EXPOSURE_TRACKING] About to update K3 exposure in Redis for ${betType}:${betValue}`);
+                console.log(`🎲 [K3_EXPOSURE_TRACKING] Bet data being sent to Redis:`, {
+                    bet_type: betTypeFormatted,
+                    amount_after_tax: netBetAmount,
+                    gameType: gameType,
+                    duration: duration,
+                    periodId: periodId,
+                    timeline: timeline
+                });
+            }
+
+            // Add 5D-specific exposure tracking info
+            if (gameType.toLowerCase() === '5d' || gameType.toLowerCase() === 'fived') {
+                console.log(`🎯 [5D_BET_PROCESSING] 🎲 5D Bet Processing Started:`, {
+                    userId, periodId, gameType, duration, timeline,
+                    betType, betValue, betAmount: netBetAmount,
+                    bet_type: betTypeFormatted,
+                    amount_after_tax: netBetAmount
+                });
+            }
+
             const redisStored = await storeBetInRedisWithTimeline({
                 ...betData,
                 grossBetAmount,
@@ -5924,7 +6989,7 @@ const processBet = async (betData) => {
                 bet_type: betTypeFormatted,  // "COLOR:red" format
                 amount_after_tax: netBetAmount  // Production field name
             });
-            
+
             if (!redisStored) {
                 console.log('❌ [BET_EXPOSURE] Redis storage failed');
                 await t.rollback();
@@ -5935,6 +7000,53 @@ const processBet = async (betData) => {
                 };
             }
             console.log('✅ [BET_EXPOSURE] Bet stored in Redis with exposure tracking');
+
+            // Add K3-specific exposure confirmation
+            if (gameType.toLowerCase() === 'k3') {
+                console.log(`🎲 [K3_EXPOSURE_CONFIRMED] K3 exposure successfully updated in Redis for ${betType}:${betValue}`);
+                console.log(`🎲 [K3_EXPOSURE_CONFIRMED] Exposure key: exposure:k3:${duration}:${timeline}:${periodId}`);
+                console.log(`🎲 [K3_EXPOSURE_CONFIRMED] Bet amount: ₹${netBetAmount}, Odds: ${odds}x, Potential payout: ₹${netBetAmount * odds}`);
+            }
+
+            // Add 5D-specific exposure confirmation
+            if (gameType.toLowerCase() === '5d' || gameType.toLowerCase() === 'fived') {
+                console.log(`🎯 [5D_BET_SUCCESS] 🎲 5D Bet Successfully Processed:`, {
+                    userId, periodId, gameType, duration, timeline,
+                    betType, betValue, betAmount: netBetAmount,
+                    odds: odds, potentialPayout: `${(netBetAmount * odds).toFixed(2)}₹`,
+                    exposureKey: `exposure:${gameType}:${duration}:${timeline}:${periodId}`
+                });
+            }
+
+            // Add K3-specific exposure logging
+            if (gameType.toLowerCase() === 'k3') {
+                console.log('🎲 [K3_BET_EXPOSURE] K3 bet exposure details:', {
+                    betId: betRecord.bet_id || betRecord.id,
+                    userId: userId,
+                    periodId: periodId,
+                    timeline: timeline,
+                    betType: betType,
+                    betValue: betValue,
+                    betAmount: netBetAmount,
+                    odds: odds,
+                    expectedWin: netBetAmount * odds,
+                    exposureKey: `exposure:k3:${duration}:${timeline}:${periodId}`,
+                    exposureDetails: {
+                        betType: betType,
+                        betValue: betValue,
+                        combinationsAffected: '216 total K3 combinations',
+                        exposureCalculation: `${netBetAmount} × ${odds} = ${netBetAmount * odds}`,
+                        exposureType: getK3ExposureType(betType, betValue)
+                    }
+                });
+
+                // Add real-time exposure calculation for K3
+                console.log(`🎲 [K3_REAL_EXPOSURE_START] Real bet exposure calculation for ${betType}:${betValue}`);
+                console.log(`🎲 [K3_REAL_EXPOSURE_INFO] User ${userId} bet ₹${netBetAmount} on ${betType}:${betValue} with ${odds}x odds`);
+                console.log(`🎲 [K3_REAL_EXPOSURE_INFO] This bet will create exposure on winning combinations if result matches`);
+                console.log(`🎲 [K3_REAL_EXPOSURE_INFO] Potential payout: ₹${netBetAmount * odds} if bet wins`);
+                console.log(`🎲 [K3_REAL_EXPOSURE_INFO] Exposure key: exposure:k3:${duration}:${timeline}:${periodId}`);
+            }
 
             await t.commit();
 
@@ -6088,15 +7200,57 @@ const calculateResultBasedOdds = (gameType, betType, betValue, result) => {
             case 'k3':
                 switch (betType) {
                     case 'SUM':
-                        return 10.0;
+                        // SUM bets with varying payouts based on value
+                        const sumValue = parseInt(betValue);
+                        const sumMultipliers = {
+                            3: 207.36, 18: 207.36,
+                            4: 69.12, 17: 69.12,
+                            5: 34.56, 16: 34.56,
+                            6: 20.74, 15: 20.74,
+                            7: 13.83, 14: 13.83,
+                            8: 9.88, 13: 9.88,
+                            9: 8.3, 12: 8.3,
+                            10: 7.68, 11: 7.68
+                        };
+                        return sumMultipliers[sumValue] || 1.0;
+
+                    case 'SUM_CATEGORY':
+                        // Small/Big/Odd/Even bets - 2.0x payout
+                        return 2.0;
+
+                    case 'PATTERN':
+                        // Pattern bets with specific payouts
+                        switch (betValue) {
+                            case 'all_different':
+                                return 34.56;
+                            case 'straight':
+                                return 8.64;
+                            case 'two_different':
+                                return 69.12;
+                            default:
+                                return 1.0;
+                        }
+
                     case 'MATCHING_DICE':
-                        return betValue === 'triplet' ? 30.0 : 3.0;
+                        // Matching dice bets with specific payouts
+                        if (betValue === 'triple_any') {
+                            return 34.56; // Any triple
+                        } else if (betValue === 'pair_any') {
+                            return 69.12; // Any pair (not triple)
+                        } else if (betValue.startsWith('triple_')) {
+                            return 207.36; // Specific triple (e.g., triple_5)
+                        } else if (betValue.startsWith('pair_')) {
+                            return 69.12; // Specific pair with specific single
+                        } else {
+                            return 1.0;
+                        }
+
                     case 'STRAIGHT':
-                        return 6.0;
+                        return 8.64; // For backward compatibility
                     case 'SIZE':
-                        return 2.0;
+                        return 2.0; // For backward compatibility
                     case 'PARITY':
-                        return 2.0;
+                        return 2.0; // For backward compatibility
                     default:
                         return 1.0;
                 }
@@ -6105,6 +7259,7 @@ const calculateResultBasedOdds = (gameType, betType, betValue, result) => {
                 return 1.0;
         }
     } catch (error) {
+        
         logger.error('Error calculating result-based odds', {
             error: error.message,
             gameType,
@@ -6145,11 +7300,17 @@ const calculateOdds = (gameType, betType, betValue) => {
             case '5d':
                 switch (betType) {
                     case 'POSITION':
-                        return 6.0; // 1:6 odds for specific position
+                        return 9.0; // 1:9 odds for specific position (matches WebSocket)
+                    case 'POSITION_SIZE':
+                        return 2.0; // 2.0x odds for position size (big/small)
+                    case 'POSITION_PARITY':
+                        return 2.0; // 2.0x odds for position parity (odd/even)
+                    case 'SUM_SIZE':
+                        return 2.0; // 2.0x odds for sum size (big/small)
+                    case 'SUM_PARITY':
+                        return 2.0; // 2.0x odds for sum parity (odd/even)
                     case 'SUM':
-                        return 10.0; // 1:10 odds for specific sum
-                    case 'DRAGON_TIGER':
-                        return 2.0;
+                        return 2.0; // 2.0x odds for sum (WebSocket does not use 10.0)
                     default:
                         return 1.0;
                 }
@@ -6157,15 +7318,68 @@ const calculateOdds = (gameType, betType, betValue) => {
             case 'k3':
                 switch (betType) {
                     case 'SUM':
-                        return 10.0;
+                        // SUM bets with varying payouts based on value
+                        const sumValue = parseInt(betValue);
+                        const sumMultipliers = {
+                            3: 207.36, 18: 207.36,
+                            4: 69.12, 17: 69.12,
+                            5: 34.56, 16: 34.56,
+                            6: 20.74, 15: 20.74,
+                            7: 13.83, 14: 13.83,
+                            8: 9.88, 13: 9.88,
+                            9: 8.3, 12: 8.3,
+                            10: 7.68, 11: 7.68
+                        };
+                        return sumMultipliers[sumValue] || 1.0;
+
+                    case 'SUM_MULTIPLE':
+                        // For multiple sum bets, calculate average odds
+                        const sumValues = betValue.split(',').map(s => parseInt(s.trim()));
+                        const totalOdds = sumValues.reduce((sum, val) => {
+                            const multiplier = sumMultipliers[val] || 1.0;
+                            return sum + multiplier;
+                        }, 0);
+                        const averageOdds = totalOdds / sumValues.length;
+                        console.log(`🎲 [K3_MULTIPLE_ODDS] SUM_MULTIPLE odds calculation: ${sumValues.join(',')} = average ${averageOdds}x`);
+                        return averageOdds;
+
+                    case 'SUM_CATEGORY':
+                        // Small/Big/Odd/Even bets - 2.0x payout
+                        return 2.0;
+
+                    case 'PATTERN':
+                        // Pattern bets with specific payouts
+                        switch (betValue) {
+                            case 'all_different':
+                                return 34.56;
+                            case 'straight':
+                                return 8.64;
+                            case 'two_different':
+                                return 69.12;
+                            default:
+                                return 1.0;
+                        }
+
                     case 'MATCHING_DICE':
-                        return betValue === 'triplet' ? 30.0 : 3.0;
+                        // Matching dice bets with specific payouts
+                        if (betValue === 'triple_any') {
+                            return 34.56; // Any triple
+                        } else if (betValue === 'pair_any') {
+                            return 69.12; // Any pair (not triple)
+                        } else if (betValue.startsWith('triple_')) {
+                            return 207.36; // Specific triple (e.g., triple_5)
+                        } else if (betValue.startsWith('pair_')) {
+                            return 69.12; // Specific pair with specific single
+                        } else {
+                            return 1.0;
+                        }
+
                     case 'STRAIGHT':
-                        return 6.0;
+                        return 8.64; // For backward compatibility
                     case 'SIZE':
-                        return 2.0;
+                        return 2.0; // For backward compatibility
                     case 'PARITY':
-                        return 2.0;
+                        return 2.0; // For backward compatibility
                     default:
                         return 1.0;
                 }
@@ -6583,6 +7797,109 @@ const getUserGameBalance = async (userId) => {
 };
 
 /**
+ * Get detailed K3 exposure analysis for a period
+ * @param {string} gameType - Game type (should be 'k3')
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {string} timeline - Timeline (default: 'default')
+ * @returns {Promise<Object>} - Detailed exposure analysis
+ */
+const getK3ExposureAnalysis = async (gameType, duration, periodId, timeline = 'default') => {
+    try {
+        if (gameType.toLowerCase() !== 'k3') {
+            throw new Error('This function is only for K3 game type');
+        }
+
+        const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
+        const exposures = await redisClient.hgetall(exposureKey);
+
+        if (!exposures || Object.keys(exposures).length === 0) {
+            return {
+                periodId: periodId,
+                timeline: timeline,
+                totalExposure: 0,
+                message: 'No exposure data found for this period'
+            };
+        }
+
+        // Analyze exposures by result type
+        const exposureAnalysis = {};
+        let totalExposure = 0;
+        let totalCombinations = 0;
+
+        for (const [key, exposure] of Object.entries(exposures)) {
+            if (key.startsWith('dice:')) {
+                const diceKey = key.replace('dice:', '');
+                const [d1, d2, d3] = diceKey.split(',').map(n => parseInt(n));
+                const resultType = getK3ResultType(d1, d2, d3);
+                const exposureValue = parseInt(exposure) / 100; // Convert from cents
+
+                totalExposure += exposureValue;
+                totalCombinations++;
+
+                if (!exposureAnalysis[resultType]) {
+                    exposureAnalysis[resultType] = {
+                        combinations: [],
+                        totalExposure: 0,
+                        count: 0
+                    };
+                }
+
+                exposureAnalysis[resultType].combinations.push({
+                    dice: [d1, d2, d3],
+                    sum: d1 + d2 + d3,
+                    exposure: exposureValue
+                });
+                exposureAnalysis[resultType].totalExposure += exposureValue;
+                exposureAnalysis[resultType].count++;
+            }
+        }
+
+        // Sort by exposure (highest first)
+        const sortedAnalysis = Object.entries(exposureAnalysis)
+            .sort(([, a], [, b]) => b.totalExposure - a.totalExposure)
+            .map(([type, data]) => ({
+                resultType: type,
+                ...data,
+                averageExposure: data.totalExposure / data.count
+            }));
+
+        console.log(`🎲 [K3_EXPOSURE_ANALYSIS] Detailed K3 exposure analysis for ${periodId}:`, {
+            periodId: periodId,
+            timeline: timeline,
+            totalCombinations: totalCombinations,
+            totalExposure: totalExposure,
+            averageExposurePerCombination: totalExposure / totalCombinations,
+            topExposedResults: sortedAnalysis.slice(0, 10).map(item => ({
+                resultType: item.resultType,
+                totalExposure: item.totalExposure,
+                count: item.count,
+                averageExposure: item.averageExposure,
+                sampleCombinations: item.combinations.slice(0, 3).map(c => ({
+                    dice: c.dice,
+                    sum: c.sum,
+                    exposure: c.exposure
+                }))
+            }))
+        });
+
+        return {
+            periodId: periodId,
+            timeline: timeline,
+            totalCombinations: totalCombinations,
+            totalExposure: totalExposure,
+            averageExposurePerCombination: totalExposure / totalCombinations,
+            exposureBreakdown: sortedAnalysis,
+            topExposedResults: sortedAnalysis.slice(0, 10)
+        };
+
+    } catch (error) {
+        console.error('🎲 [K3_EXPOSURE_ANALYSIS_ERROR] Error analyzing K3 exposure:', error);
+        throw error;
+    }
+};
+
+/**
  * ENHANCED FUNCTION: WebSocket result broadcasting
  * ADD this function to gameLogicService.js
  */
@@ -6663,6 +7980,9 @@ module.exports = {
     calculateWingoWin,
     calculateK3Win,
     calculateFiveDWin,
+    checkWingoWin,
+    checkK3Win,
+    checkFiveDWin,
 
     // Bet processing
     storeBetInRedis,
@@ -6763,6 +8083,19 @@ module.exports = {
     updateBetExposure,
     resetPeriodExposure,
     getBetsFromHash,
+    getK3ExposureAnalysis,
+    format5DResult,
+    findUnbetPositions,
+    shouldUseEnhancedSystem,
+    getEnhanced5DResult,
+    getCurrent5DResult,
+    track5DPerformance,
+    
+    // 5D Pre-calculation helpers
+    preCalculate5DResult,
+    getPreCalculated5DResult,
+    isInBetFreeze,
+    hasPeriodEnded,
 
     // Model management
     ensureModelsInitialized,

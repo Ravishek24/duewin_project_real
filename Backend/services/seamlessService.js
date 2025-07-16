@@ -1,5 +1,5 @@
 const { cacheService } = require('./cacheService');
-const { isAdmin } = require('../middleware/authMiddleware');
+const { isAdmin } = require('../middlewares/authMiddleware');
 const axios = require('axios');
 const seamlessConfig = require('../config/seamlessConfig');
 const crypto = require('crypto');

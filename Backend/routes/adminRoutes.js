@@ -45,7 +45,7 @@ const {
     getProfitStats
 } = require('../controllers/adminController/gameProfitController');
 const { getTodayFinancialStats, getTotalFinancialStats, getCompleteFinancialStats } = require('../controllers/adminController/financialStatsController');
-const { getActivePeriods, getCurrentPeriod, getRecentPeriods, getWingoStats, setWingoResult } = require('../controllers/adminController/wingoGameController');
+const { getActivePeriods, getCurrentPeriod, getRecentPeriods, getWingoStats, setWingoResult, getPeriodStatusForOverride } = require('../controllers/adminController/wingoGameController');
 const { 
   getAllPendingRechargesController,
   getAllSuccessfulRechargesController,
@@ -195,8 +195,9 @@ router.get('/games/wingo/active-periods', getActivePeriods);
 router.get('/games/wingo/current', getCurrentPeriod);
 router.get('/games/wingo/recent', getRecentPeriods);
 router.get('/games/wingo/stats', getWingoStats);
-// 🚨 DISABLED - This route had broken win/loss logic causing users to win when they should lose
-// router.post('/games/wingo/set-result', setWingoResult);
+// 🔐 ENABLED - Safe admin override with proper game logic integration
+router.post('/games/wingo/set-result', setWingoResult);
+router.get('/games/wingo/period/:periodId/status', getPeriodStatusForOverride);
 
 // Payment Gateway Routes
 router.get('/payment-gateways', getAllPaymentGatewaysController);

@@ -129,6 +129,9 @@ const initiateWithdrawalController = async (req, res) => {
         const userId = req.user.user_id;
         const { amount, bank_account_id, usdt_account_id, withdrawal_type = 'BANK' } = req.body;
 
+        // Log withdrawal initiation attempt
+        console.log('[WITHDRAWAL INITIATION] User:', userId, 'Amount:', amount, 'Withdrawal Type:', withdrawal_type, 'Bank Account ID:', bank_account_id, 'USDT Account ID:', usdt_account_id, 'Time:', new Date().toISOString());
+
         if (!amount || parseFloat(amount) <= 0) {
             return res.status(400).json({
                 success: false,

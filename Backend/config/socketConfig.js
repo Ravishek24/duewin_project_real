@@ -359,7 +359,7 @@ const setupGameEventHandlers = () => {
                     return;
                 }
 
-                if (!gameType || !duration || !periodId || !betType || !betValue || !betAmount) {
+                if (!gameType || !duration || !periodId || !betType || betValue === undefined || !betAmount) {
                     socket.emit('betError', { message: 'Missing required bet information' });
                     return;
                 }

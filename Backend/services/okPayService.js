@@ -54,7 +54,7 @@ const OKPAY_CONFIG = {
 function calculateSignature(params) {
   // Filter out empty values and sign parameter
   const filteredParams = Object.entries(params)
-    .filter(([_, value]) => value !== undefined && value !== null && value !== '' && value !== 'sign')
+    .filter(([key, value]) => value !== undefined && value !== null && value !== '' && key !== 'sign')
     .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
 
   // Sort parameters by key (ASCII order)
@@ -140,7 +140,7 @@ const createOkPayCollectionOrder = async (userId, orderId, payType, amount, noti
             total_amount: amount,
             fee: 0,
             status: 'pending',
-            transaction_id: orderId
+            order_id: orderId  // Fixed: Use order_id instead of transaction_id
           });
           
           console.log('✅ WalletRecharge record created:', rechargeRecord.id);
@@ -187,10 +187,31 @@ const processOkPayCallback = async (callbackData) => {
   try {
     console.log('Received OKPAY callback:', callbackData);
 
+    // Debug: Log the exact parameters being used for signature calculation
+    const filteredParams = Object.entries(callbackData)
+      .filter(([key, value]) => value !== undefined && value !== null && value !== '' && key !== 'sign')
+      .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
+    
+    const sortedKeys = Object.keys(filteredParams).sort();
+    const stringA = sortedKeys.map(key => `${key}=${filteredParams[key]}`).join('&');
+    const stringSignTemp = `${stringA}&key=${OKPAY_CONFIG.key}`;
+    
+    console.log('🔍 Signature Debug Info:');
+    console.log('Filtered params:', filteredParams);
+    console.log('Sorted keys:', sortedKeys);
+    console.log('String A:', stringA);
+    console.log('String to sign:', stringSignTemp);
+    console.log('OKPAY_CONFIG.key:', OKPAY_CONFIG.key ? 'Present' : 'Missing');
+
     // Verify signature
     const receivedSign = callbackData.sign;
     const calculatedSign = calculateSignature(callbackData);
 
+    console.log('Received signature:', receivedSign);
+    console.log('Calculated signature:', calculatedSign);
+    console.log('Signatures match:', receivedSign === calculatedSign);
+
+    // Verify signature
     if (receivedSign !== calculatedSign) {
       console.error('OKPAY callback signature verification failed');
       return {
@@ -198,6 +219,8 @@ const processOkPayCallback = async (callbackData) => {
         message: 'Invalid signature'
       };
     }
+    
+    console.log('✅ Signature verification passed');
 
     // Extract order details
     const { out_trade_no: orderId, transaction_Id: transactionId, status } = callbackData;
@@ -206,9 +229,35 @@ const processOkPayCallback = async (callbackData) => {
     let order = null;
     try {
       if (WalletRecharge && typeof WalletRecharge.findOne === 'function') {
-        order = await WalletRecharge.findOne({
-          where: { id: orderId }
+        // Debug: Check what orders exist
+        console.log('🔍 Debug: Looking for order_id:', orderId);
+        
+        // Check all recent orders
+        const recentOrders = await WalletRecharge.findAll({
+          where: { 
+            order_id: { [require('sequelize').Op.like]: '%PIOK%' }
+          },
+          limit: 5,
+          order: [['created_at', 'DESC']]
         });
+        
+        console.log('🔍 Recent PIOK orders in WalletRecharge:');
+        recentOrders.forEach(o => {
+          console.log(`  - ID: ${o.id}, order_id: ${o.order_id}, status: ${o.status}, amount: ${o.amount}`);
+        });
+        
+        order = await WalletRecharge.findOne({
+          where: { order_id: orderId }
+        });
+        
+        if (!order) {
+          console.log('❌ Order not found in WalletRecharge table');
+          
+          // Check if it might be in a different table
+          console.log('🔍 Checking other possible tables...');
+        } else {
+          console.log('✅ Order found:', order.order_id, 'Status:', order.status);
+        }
       } else {
         console.error('WalletRecharge model not available for callback processing');
         return {

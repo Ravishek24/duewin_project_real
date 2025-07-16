@@ -24,7 +24,7 @@ const checkBetWin = async (bet, result, gameType) => {
 
 #############################################################################################
 ##########################################################################################
-
+     
 /**
  * FIXED: Check if a bet is a winner - Direct result checking
  * @param {Object} bet - Bet record

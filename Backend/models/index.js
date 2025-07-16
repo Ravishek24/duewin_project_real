@@ -91,6 +91,9 @@ const initializeModels = async () => {
             // Get the sequelize instance
             const sequelize = await getSequelizeInstance();
 
+            // Attach sequelize to models for external access
+            models.sequelize = sequelize;
+
             // Import all model files
             const modelFiles = [
                 // Core User & Authentication

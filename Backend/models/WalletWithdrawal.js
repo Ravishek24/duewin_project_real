@@ -21,6 +21,12 @@ class WalletWithdrawal extends Model {
                 type: DataTypes.DECIMAL(10, 2),
                 allowNull: false
             },
+            // Add order_id for unique withdrawal tracking
+            order_id: {
+                type: DataTypes.STRING,
+                allowNull: true,
+                comment: 'Unique order ID for withdrawal tracking'
+            },
             withdrawal_type: {
                 type: DataTypes.STRING(20),
                 allowNull: true,

@@ -1,10 +1,13 @@
 const { Worker, Queue } = require('bullmq');
+const { Sequelize } = require('sequelize');
 const { getWorkerModels } = require('../workers/workerInit');
 const queueConnections = require('../config/queueConfig');
 const redis = require('../config/redisConfig').redis;
 
 const worker = new Worker('withdrawals', async job => {
-  const { type, data } = job.data;
+  // Use job.name as the type, and job.data as the data
+  const type = job.name;
+  const data = job.data;
   
   try {
     const models = getWorkerModels(); // No async call - uses pre-initialized models
@@ -69,20 +72,25 @@ async function processWithdrawalWithRetry(data, models, maxRetries = 3) {
   if (!acquired) {
     throw new Error('Withdrawal already processing or processed');
   }
+  // Use the main sequelize instance from models
+  const sequelize = models.sequelize;
+  // Debug logs to diagnose ISOLATION_LEVELS error
+  console.log('DEBUG: models.sequelize =', sequelize);
+  console.log('DEBUG: Sequelize.Transaction =', Sequelize.Transaction);
   try {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const transaction = await models.User.sequelize.transaction({
-        isolationLevel: models.User.sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
+      const transaction = await sequelize.transaction({
+        isolationLevel: Sequelize.Transaction.ISOLATION_LEVELS.READ_COMMITTED
       });
       try {
         // 🚀 Use SELECT FOR UPDATE with SKIP LOCKED for advanced deadlock prevention
-        const lockedUsers = await models.sequelize.query(`
+        const lockedUsers = await sequelize.query(`
           SELECT user_id, wallet_balance FROM users 
           WHERE user_id = :userId 
           FOR UPDATE SKIP LOCKED
         `, {
           replacements: { userId },
-          type: models.sequelize.QueryTypes.SELECT,
+          type: sequelize.QueryTypes.SELECT,
           transaction
         });
         
@@ -112,11 +120,20 @@ async function processWithdrawalWithRetry(data, models, maxRetries = 3) {
           return { success: true, message: 'Withdrawal already processed' };
         }
         
+        // Fetch the first active payment gateway that supports withdrawals
+        const defaultGateway = await models.PaymentGateway.findOne({
+          where: { is_active: true, supports_withdrawal: true },
+          order: [['display_order', 'ASC']]
+        });
+        if (!defaultGateway) throw new Error('No active withdrawal gateway found');
+
         // Create withdrawal record
         const withdrawalData = {
           user_id: userId,
           amount: parseFloat(amount),
           order_id: orderId,
+          transaction_id: orderId, // Set transaction_id to orderId initially
+          payment_gateway_id: defaultGateway.gateway_id, // Set default gateway
           withdrawal_type: withdrawalType,
           status: 'pending',
           bank_account_id: bankAccountId,
@@ -165,8 +182,17 @@ async function processWithdrawalWithRetry(data, models, maxRetries = 3) {
     }
   } finally {
     // Only release lock if we still own it
-    const script = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`;
-    await redis.eval(script, 1, lockKey, lockValue);
+    try {
+      const currentValue = await redis.get(lockKey);
+      if (currentValue === lockValue) {
+        await redis.del(lockKey);
+        console.log(`🔓 Released withdrawal lock: ${lockKey}`);
+      } else {
+        console.log(`⚠️ Lock value mismatch for ${lockKey}, not releasing`);
+      }
+    } catch (error) {
+      console.error('❌ Error releasing withdrawal lock:', error);
+    }
   }
 }
 

@@ -370,10 +370,6 @@ const getAvailableDepositGateways = async () => {
     await initializeModels();
     
     const gateways = await PaymentGatewaySettings.findAll({
-      where: {
-        is_active: true,
-        is_deposit_enabled: true
-      },
       order: [['gateway_name', 'ASC']]
     });
 
@@ -381,8 +377,11 @@ const getAvailableDepositGateways = async () => {
       success: true,
       gateways: gateways.map(gateway => ({
         gateway_name: gateway.gateway_name,
-        min_amount: parseFloat(gateway.min_deposit),
-        max_amount: parseFloat(gateway.max_deposit)
+        min_amount: parseFloat(gateway.min_deposit_amount),
+        max_amount: parseFloat(gateway.max_deposit_amount),
+        is_active: gateway.is_active,
+        is_deposit_enabled: gateway.is_deposit_enabled,
+        gateway_id: gateway.gateway_id
       }))
     };
   } catch (error) {
@@ -403,17 +402,16 @@ const getAvailableWithdrawalGateways = async () => {
     await initializeModels();
     
     const gateways = await PaymentGatewaySettings.findAll({
-      where: {
-        is_active: true,
-        is_withdrawal_enabled: true
-      },
       order: [['gateway_name', 'ASC']]
     });
 
     return {
       success: true,
       gateways: gateways.map(gateway => ({
-        gateway_name: gateway.gateway_name
+        gateway_name: gateway.gateway_name,
+        is_active: gateway.is_active,
+        is_withdrawal_enabled: gateway.is_withdrawal_enabled,
+        gateway_id: gateway.gateway_id
       }))
     };
   } catch (error) {
@@ -576,7 +574,7 @@ const getPaymentGatewayStats = async () => {
       // Get today's deposits
       const todayDeposits = await WalletRecharge.sum('amount', {
         where: {
-          payment_gateway: gateway.code,
+          payment_gateway_id: gateway.gateway_id, // FIXED: use correct column
           created_at: {
             [Op.gte]: todayIST.toDate()
           },
@@ -587,7 +585,7 @@ const getPaymentGatewayStats = async () => {
       // Get total deposits
       const totalDeposits = await WalletRecharge.sum('amount', {
         where: {
-          payment_gateway: gateway.code,
+          payment_gateway_id: gateway.gateway_id, // FIXED: use correct column
           status: 'completed'
         }
       });
@@ -595,7 +593,7 @@ const getPaymentGatewayStats = async () => {
       // Get today's withdrawals
       const todayWithdrawals = await WalletWithdrawal.sum('amount', {
         where: {
-          payment_gateway: gateway.code,
+          payment_gateway_id: gateway.gateway_id, // FIXED: use correct column
           created_at: {
             [Op.gte]: todayIST.toDate()
           },
@@ -606,7 +604,7 @@ const getPaymentGatewayStats = async () => {
       // Get total withdrawals
       const totalWithdrawals = await WalletWithdrawal.sum('amount', {
         where: {
-          payment_gateway: gateway.code,
+          payment_gateway_id: gateway.gateway_id, // FIXED: use correct column
           status: 'completed'
         }
       });

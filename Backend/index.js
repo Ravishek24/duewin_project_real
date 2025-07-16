@@ -23,7 +23,7 @@ const PORT = process.env.SERVER_PORT || 8000;
 // Create HTTP server
 const server = http.createServer(app);
 
-// 🔥 FIXED: Enhanced CORS configuration for SPRIBE
+// 🔥 FIXED: Enhanced CORS configuration for SPRIBE and Frontend
 const corsOptions = {
     origin: function (origin, callback) {
         // Allow requests with no origin (like mobile apps or Postman)
@@ -35,21 +35,35 @@ const corsOptions = {
             '3.255.67.141', '52.30.236.39', '54.78.240.177'
         ];
         
-        // Your allowed origins
+        // Your allowed origins from environment variable
         const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(',') || [
             'http://localhost:3001',
+            'http://localhost:3000',
+            'https://duewingame-three.vercel.app',
+            'https://strikecolor1.com',
+            'https://www.strikecolor1.com'
         ]);
         
+        // Clean up origins (remove whitespace)
+        const cleanAllowedOrigins = allowedOrigins.map(origin => origin.trim());
+        
         // Check if origin is allowed or if it's from SPRIBE
-        if (allowedOrigins.includes(origin) || spribeIPs.some(ip => origin?.includes(ip))) {
+        const isAllowedOrigin = cleanAllowedOrigins.includes(origin);
+        const isSpribeIP = spribeIPs.some(ip => origin?.includes(ip));
+        
+        if (isAllowedOrigin || isSpribeIP) {
+            console.log(`✅ CORS: Allowed origin: ${origin} (Allowed: ${isAllowedOrigin}, Spribe: ${isSpribeIP})`);
             return callback(null, true);
         }
         
         // For development, allow all origins
         if (process.env.NODE_ENV !== 'production') {
+            console.log(`✅ CORS: Development mode - allowing origin: ${origin}`);
             return callback(null, true);
         }
         
+        console.log(`❌ CORS: Blocked origin: ${origin}`);
+        console.log(`📋 Allowed origins: ${cleanAllowedOrigins.join(', ')}`);
         callback(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -116,6 +130,21 @@ app.get('/security-test', (req, res) => {
     });
 });
 
+// CORS test endpoint
+app.get('/cors-test', (req, res) => {
+    res.json({ 
+        status: 'cors-test',
+        timestamp: new Date().toISOString(),
+        message: 'CORS test endpoint',
+        origin: req.headers.origin,
+        allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3001'],
+        nodeEnv: process.env.NODE_ENV
+    });
+});
+
+// Serve static files
+app.use(express.static('public'));
+
 // Basic root route
 app.get('/', (req, res) => {
     res.json({ 
@@ -123,6 +152,11 @@ app.get('/', (req, res) => {
         message: 'DueWin Backend Server is running!',
         timestamp: new Date().toISOString()
     });
+});
+
+// Admin dashboard route
+app.get('/admin', (req, res) => {
+    res.sendFile(__dirname + '/public/admin-dashboard.html');
 });
 
 // Variables to hold initialized components
@@ -155,6 +189,22 @@ const setupAppRoutes = () => {
         // Mount API routes
         app.use('/api', apiRoutes);
         
+        // Mount admin routes
+        try {
+            const adminRoutes = require('./routes/adminRoutes');
+            const adminExposureRoutes = require('./routes/adminExposureRoutes');
+            
+            app.use('/admin', adminRoutes);
+            app.use('/admin/exposure', adminExposureRoutes);
+            
+            // 🔥 ADDED: Mount admin exposure routes under /api prefix for frontend compatibility
+            app.use('/api/admin/exposure', adminExposureRoutes);
+            
+            console.log('✅ Admin routes configured successfully');
+        } catch (adminError) {
+            console.warn('⚠️ Admin routes setup failed:', adminError.message);
+        }
+        
         console.log('✅ Routes configured successfully');
         return true;
     } catch (error) {
@@ -186,6 +236,15 @@ const initializeWebSocketWithRedis = async () => {
         
         console.log('✅ Redis connected, initializing WebSocket...');
         const io = initializeWebSocket(server, true);
+        
+        // Initialize admin exposure monitoring
+        try {
+            const adminExposureService = require('./services/adminExposureService');
+            adminExposureService.startExposureMonitoring(io);
+            console.log('✅ Admin exposure monitoring initialized');
+        } catch (adminError) {
+            console.warn('⚠️ Admin exposure monitoring setup failed:', adminError.message);
+        }
         
         // Start monitoring after WebSocket is initialized
         startDiagnostic();

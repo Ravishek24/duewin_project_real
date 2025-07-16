@@ -130,7 +130,7 @@ const getGiftCodeByCode = async (req, res) => {
       include: [{ 
         model: User, 
         as: 'giftcodeclaimuser', 
-        attributes: ['user_id', 'user_name', 'email'] 
+        attributes: ['user_id', 'user_name', 'phone_no'] 
       }] 
     });
     
@@ -150,8 +150,9 @@ const getGiftCodeByCode = async (req, res) => {
         claimants: claims.map(c => ({ 
           user_id: c.user_id, 
           user_name: c.giftcodeclaimuser?.user_name, 
-          email: c.giftcodeclaimuser?.email, 
-          claimed_at: c.claimed_at 
+          phone_no: c.giftcodeclaimuser?.phone_no, 
+          claimed_at: c.claimed_at,
+          claimed_ip: c.claimed_ip
         }))
       }
     });
@@ -169,7 +170,7 @@ const getGiftCodeStatus = async (req, res) => {
     const { code } = req.params;
     const giftCode = await GiftCode.findOne({ where: { code } });
     if (!giftCode) return res.status(404).json({ success: false, message: 'Gift code not found' });
-    const claims = await GiftCodeClaim.findAll({ where: { gift_code_id: giftCode.id }, include: [{ model: User, as: 'giftcodeclaimuser', attributes: ['user_id', 'user_name', 'email'] }] });
+    const claims = await GiftCodeClaim.findAll({ where: { gift_code_id: giftCode.id }, include: [{ model: User, as: 'giftcodeclaimuser', attributes: ['user_id', 'user_name', 'phone_no'] }] });
     res.json({
       success: true,
       code: giftCode.code,
@@ -179,7 +180,7 @@ const getGiftCodeStatus = async (req, res) => {
       amount_per_user: giftCode.amount_per_user,
       created_by: giftCode.created_by,
       created_at: giftCode.created_at,
-      claimants: claims.map(c => ({ user_id: c.user_id, user_name: c.giftcodeclaimuser?.user_name, email: c.giftcodeclaimuser?.email, claimed_at: c.claimed_at }))
+      claimants: claims.map(c => ({ user_id: c.user_id, user_name: c.giftcodeclaimuser?.user_name, phone_no: c.giftcodeclaimuser?.phone_no, claimed_at: c.claimed_at, claimed_ip: c.claimed_ip }))
     });
   } catch (error) {
     console.error('Error in getGiftCodeStatus:', error);
@@ -204,8 +205,14 @@ const claimGiftCode = async (req, res) => {
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     user.wallet_balance = Number(user.wallet_balance) + Number(giftCode.amount_per_user);
     await user.save();
-    // Record claim
-    await GiftCodeClaim.create({ gift_code_id: giftCode.id, user_id, claimed_at: new Date() });
+    // Record claim with IP address
+    const claimed_ip = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+    await GiftCodeClaim.create({ 
+      gift_code_id: giftCode.id, 
+      user_id, 
+      claimed_at: new Date(),
+      claimed_ip: claimed_ip
+    });
     // Update claimed_count
     giftCode.claimed_count += 1;
     await giftCode.save();
@@ -259,6 +266,7 @@ const getUserGiftCodeHistory = async (req, res) => {
           gift_code: claim.giftCode.code,
           amount: claim.giftCode.amount_per_user,
           claimed_at: claim.claimed_at,
+          claimed_ip: claim.claimed_ip,
           gift_code_details: {
             total_amount: claim.giftCode.total_amount,
             max_claims: claim.giftCode.max_claims,
@@ -318,7 +326,7 @@ const getAllGiftCodes = async (req, res) => {
         include: [{
           model: User,
           as: 'giftcodeclaimuser',
-          attributes: ['user_id', 'user_name', 'email']
+          attributes: ['user_id', 'user_name', 'phone_no']
         }]
       }],
       order: [['created_at', 'DESC']],
@@ -347,8 +355,9 @@ const getAllGiftCodes = async (req, res) => {
           claimants: gc.claims.map(claim => ({
             user_id: claim.giftcodeclaimuser.user_id,
             user_name: claim.giftcodeclaimuser.user_name,
-            email: claim.giftcodeclaimuser.email,
-            claimed_at: claim.claimed_at
+            phone_no: claim.giftcodeclaimuser.phone_no,
+            claimed_at: claim.claimed_at,
+            claimed_ip: claim.claimed_ip
           }))
         })),
         pagination: {
@@ -446,7 +455,8 @@ const getGiftCodeStats = async (req, res) => {
           gift_code: claim.giftCode.code,
           user_name: claim.giftcodeclaimuser.user_name,
           amount: claim.giftCode.amount_per_user,
-          claimed_at: claim.claimed_at
+          claimed_at: claim.claimed_at,
+          claimed_ip: claim.claimed_ip
         }))
       }
     });

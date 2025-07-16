@@ -396,6 +396,20 @@ const initializePeriod = async (gameType, duration, periodId) => {
             });
             // Don't throw here - we still want the Redis initialization to succeed
         }
+        
+        // 🚀 ENHANCED: Initialize 5D zero-exposure candidates for new periods
+        if (gameType.toLowerCase() === '5d' || gameType.toLowerCase() === 'fived') {
+            try {
+                const fiveDProtectionService = require('./fiveDProtectionService');
+                await fiveDProtectionService.initializeZeroExposureCandidates(
+                    gameType, duration, periodId, 'default'
+                );
+                console.log('✅ [ENHANCED_5D] Zero-exposure candidates initialized for period:', periodId);
+            } catch (enhancedError) {
+                console.log('⚠️ [ENHANCED_5D] Error initializing zero-exposure candidates:', enhancedError.message);
+                // Don't throw here - period initialization should continue even if enhanced system fails
+            }
+        }
     } catch (error) {
         console.error('Error initializing period:', {
             error: error.message,

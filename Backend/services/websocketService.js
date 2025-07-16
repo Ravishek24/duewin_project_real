@@ -28,22 +28,22 @@ const {
  */
 const getMinBetAmount = (gameType) => {
     // Minimum bet amount is ₹1 (net amount after platform fee)
-    return 1;
+    return 0.50;
 };
 
 const getMaxBetAmount = (gameType) => {
     // Maximum bet amount is ₹1,00,000 (gross amount)
-    return 100000;
+    return 1000000000;
 };
 
 const getMaxBetsPerUser = (gameType) => {
     // Maximum 50 bets per user per period
-    return 50;
+    return 100;
 };
 
 const getMaxTotalBetPerPeriod = (gameType) => {
     // Maximum total bet amount per period (same as max bet amount)
-    return 100000;
+    return 1000000000;
 };
 
 // Import period service
@@ -149,13 +149,19 @@ const processWebSocketBet = async (socket, data) => {
     try {
         const { gameType, duration, betType, betValue, betAmount, timeline = 'default' } = data;
         const userId = socket.user.userId || socket.user.id;
+        const timestamp = new Date().toISOString();
 
-        console.log(`🎲 [WS_BET] User ${userId} placing bet:`, {
-            gameType, duration, betType, betValue, betAmount, timeline
-        });
+        console.log(`\n🎲 [WS_BET_PROCESS_START] ==========================================`);
+        console.log(`🎲 [WS_BET_PROCESS_START] Processing WebSocket bet for user ${userId} at ${timestamp}`);
+        console.log(`🎲 [WS_BET_PROCESS_START] Socket ID: ${socket.id}`);
+        console.log(`🎲 [WS_BET_PROCESS_START] Bet data:`, JSON.stringify(data, null, 2));
 
         // Validate input
-        if (!gameType || !duration || !betType || !betValue || !betAmount) {
+        console.log(`🔍 [WS_BET_VALIDATION] ==========================================`);
+        console.log(`🔍 [WS_BET_VALIDATION] Validating input parameters...`);
+        
+        if (!gameType || !duration || !betType || betValue === undefined || !betAmount) {
+            console.log(`❌ [WS_BET_VALIDATION] Missing required fields:`, { gameType, duration, betType, betValue, betAmount });
             socket.emit('betError', {
                 success: false,
                 message: 'Missing required fields'
@@ -165,6 +171,7 @@ const processWebSocketBet = async (socket, data) => {
 
         // Validate bet amount
         if (isNaN(betAmount) || parseFloat(betAmount) <= 0) {
+            console.log(`❌ [WS_BET_VALIDATION] Invalid bet amount: ${betAmount}`);
             socket.emit('betError', {
                 success: false,
                 message: 'Invalid bet amount'
@@ -172,9 +179,15 @@ const processWebSocketBet = async (socket, data) => {
             return { success: false, message: 'Invalid bet amount' };
         }
 
+        console.log(`✅ [WS_BET_VALIDATION] Input validation passed`);
+
         // Get current period
+        console.log(`⏰ [WS_BET_PERIOD] ==========================================`);
+        console.log(`⏰ [WS_BET_PERIOD] Getting current period for ${gameType} ${duration}s...`);
+        
         const currentPeriod = await periodService.getCurrentPeriod(gameType, duration, timeline);
         if (!currentPeriod || !currentPeriod.periodId) {
+            console.log(`❌ [WS_BET_PERIOD] No active betting period found`);
             socket.emit('betError', {
                 success: false,
                 message: 'No active betting period'
@@ -182,12 +195,20 @@ const processWebSocketBet = async (socket, data) => {
             return { success: false, message: 'No active betting period' };
         }
 
+        console.log(`✅ [WS_BET_PERIOD] Current period:`, JSON.stringify(currentPeriod, null, 2));
+
         // Check if betting is allowed (not in last 5 seconds)
         const now = Date.now();
         const periodEnd = currentPeriod.endTime;
         const timeRemaining = periodEnd - now;
         
+        console.log(`⏰ [WS_BET_TIMING] ==========================================`);
+        console.log(`⏰ [WS_BET_TIMING] Current time: ${new Date(now).toISOString()}`);
+        console.log(`⏰ [WS_BET_TIMING] Period end: ${new Date(periodEnd).toISOString()}`);
+        console.log(`⏰ [WS_BET_TIMING] Time remaining: ${timeRemaining}ms (${timeRemaining/1000}s)`);
+        
         if (timeRemaining < 5000) {
+            console.log(`❌ [WS_BET_TIMING] Betting closed - only ${timeRemaining}ms remaining`);
             socket.emit('betError', {
                 success: false,
                 message: 'Betting closed for this period'
@@ -195,9 +216,15 @@ const processWebSocketBet = async (socket, data) => {
             return { success: false, message: 'Betting closed for this period' };
         }
 
+        console.log(`✅ [WS_BET_TIMING] Betting is allowed - ${timeRemaining}ms remaining`);
+
         // Validate bet placement using new structure
+        console.log(`🔍 [WS_BET_PLACEMENT_VALIDATION] ==========================================`);
+        console.log(`🔍 [WS_BET_PLACEMENT_VALIDATION] Validating bet placement...`);
+        
         const validation = await validateBetPlacement(userId, gameType, duration, currentPeriod.periodId, betAmount, timeline);
         if (!validation.valid) {
+            console.log(`❌ [WS_BET_PLACEMENT_VALIDATION] Validation failed:`, validation.error);
             socket.emit('betError', {
                 success: false,
                 message: validation.error
@@ -205,9 +232,15 @@ const processWebSocketBet = async (socket, data) => {
             return { success: false, message: validation.error };
         }
 
+        console.log(`✅ [WS_BET_PLACEMENT_VALIDATION] Placement validation passed`);
+
         // Get odds
+        console.log(`💰 [WS_BET_ODDS] ==========================================`);
+        console.log(`💰 [WS_BET_ODDS] Calculating odds for bet type: ${betType}, value: ${betValue}`);
+        
         const odds = calculateOddsForBet(betType, betValue);
         if (!odds) {
+            console.log(`❌ [WS_BET_ODDS] Invalid bet type or value: ${betType}:${betValue}`);
             socket.emit('betError', {
                 success: false,
                 message: 'Invalid bet type or value'
@@ -215,8 +248,13 @@ const processWebSocketBet = async (socket, data) => {
             return { success: false, message: 'Invalid bet type or value' };
         }
 
+        console.log(`✅ [WS_BET_ODDS] Calculated odds: ${odds}x`);
+
         // Process the bet with new structure
-        const betResult = await gameLogicService.processBet({
+        console.log(`🎯 [WS_BET_GAME_LOGIC] ==========================================`);
+        console.log(`🎯 [WS_BET_GAME_LOGIC] Calling gameLogicService.processBet...`);
+        
+        const betDataForProcessing = {
             userId,
             gameType,
             duration,
@@ -226,9 +264,25 @@ const processWebSocketBet = async (socket, data) => {
             betValue,
             betAmount,
             odds
-        });
+        };
+        
+        console.log(`🎯 [WS_BET_GAME_LOGIC] Bet data for processing:`, JSON.stringify(betDataForProcessing, null, 2));
+        
+        const betResult = await gameLogicService.processBet(betDataForProcessing);
+
+        console.log(`📊 [WS_BET_GAME_LOGIC_RESULT] ==========================================`);
+        console.log(`📊 [WS_BET_GAME_LOGIC_RESULT] Game logic processing result:`, JSON.stringify(betResult, null, 2));
 
         if (betResult.success) {
+            console.log(`✅ [WS_BET_SUCCESS] ==========================================`);
+            console.log(`✅ [WS_BET_SUCCESS] Bet processed successfully by game logic`);
+            console.log(`✅ [WS_BET_SUCCESS] Bet ID: ${betResult.data.betId}`);
+            console.log(`✅ [WS_BET_SUCCESS] Gross amount: ₹${betResult.data.grossBetAmount}`);
+            console.log(`✅ [WS_BET_SUCCESS] Net amount: ₹${betResult.data.netBetAmount}`);
+            console.log(`✅ [WS_BET_SUCCESS] Platform fee: ₹${betResult.data.platformFee}`);
+            console.log(`✅ [WS_BET_SUCCESS] Expected win: ₹${betResult.data.expectedWin}`);
+            console.log(`✅ [WS_BET_SUCCESS] Wallet balance after: ₹${betResult.data.walletBalanceAfter}`);
+            
             socket.emit('betSuccess', {
                 success: true,
                 betId: betResult.data.betId,
@@ -248,8 +302,14 @@ const processWebSocketBet = async (socket, data) => {
             });
 
             // Update room with total bets using new hash structure
+            console.log(`📡 [WS_BET_BROADCAST] ==========================================`);
+            console.log(`📡 [WS_BET_BROADCAST] Updating room with total bets...`);
+            
             const roomId = getRoomId(gameType, duration, timeline);
             const totalBets = await getTotalBetsForPeriod(gameType, duration, currentPeriod.periodId, timeline);
+            
+            console.log(`📡 [WS_BET_BROADCAST] Room ID: ${roomId}`);
+            console.log(`📡 [WS_BET_BROADCAST] Total bets:`, JSON.stringify(totalBets, null, 2));
             
             io.to(roomId).emit('totalBetsUpdate', {
                 gameType,
@@ -260,9 +320,16 @@ const processWebSocketBet = async (socket, data) => {
                 timeline
             });
 
-            console.log(`✅ [WS_BET] Bet placed successfully for user ${userId}`);
+            console.log(`✅ [WS_BET_COMPLETE] ==========================================`);
+            console.log(`✅ [WS_BET_COMPLETE] Bet placed successfully for user ${userId}`);
+            console.log(`✅ [WS_BET_COMPLETE] Room updated with total bets`);
+            
             return { success: true, data: betResult.data };
         } else {
+            console.log(`❌ [WS_BET_GAME_LOGIC_FAILED] ==========================================`);
+            console.log(`❌ [WS_BET_GAME_LOGIC_FAILED] Game logic processing failed:`, betResult.message);
+            console.log(`❌ [WS_BET_GAME_LOGIC_FAILED] Error code:`, betResult.code);
+            
             socket.emit('betError', {
                 success: false,
                 message: betResult.message || 'Failed to place bet',
@@ -272,7 +339,12 @@ const processWebSocketBet = async (socket, data) => {
         }
 
     } catch (error) {
-        console.error('❌ [WS_BET] Error processing WebSocket bet:', error);
+        console.log(`💥 [WS_BET_ERROR] ==========================================`);
+        console.log(`💥 [WS_BET_ERROR] Unexpected error processing WebSocket bet for user ${socket.user?.userId || socket.user?.id}:`);
+        console.log(`💥 [WS_BET_ERROR] Error:`, error.message);
+        console.log(`💥 [WS_BET_ERROR] Stack:`, error.stack);
+        console.log(`💥 [WS_BET_ERROR] Bet data:`, JSON.stringify(data, null, 2));
+        
         socket.emit('betError', {
             success: false,
             message: 'Server error while processing bet'
@@ -281,24 +353,167 @@ const processWebSocketBet = async (socket, data) => {
     }
 };
 
-const mapClientBetType = (clientType) => {
-    const typeMapping = {
-        'color': 'COLOR',
-        'number': 'NUMBER',
-        'size': 'SIZE',
-        'parity': 'PARITY',
-        'odd': 'PARITY',
-        'even': 'PARITY',
-        'sum': 'SUM' // Add support for sum bets (k3 game)
-    };
+/**
+ * 5D ROOM: Dedicated mapping function for 5D game
+ */
+const mapFiveDBet = (betData) => {
+    const { type, selection, position } = betData;
+    const clientType = String(type || '').toLowerCase();
+    const clientSelection = String(selection || '').toLowerCase();
     
-    return typeMapping[String(clientType || '').toLowerCase()] || 'COLOR';
+    // Check if this is a sum bet (position is 'SUM' or 'sum')
+    if (position === 'SUM' || position === 'sum') {
+        // Sum-based bets
+        if (clientSelection === 'odd' || clientSelection === 'even') {
+            return {
+                betType: 'SUM_PARITY',
+                betValue: `SUM_${clientSelection}`,
+                odds: 2.0
+            };
+        } else {
+            return {
+                betType: 'SUM_SIZE',
+                betValue: `SUM_${clientSelection}`,
+                odds: 2.0
+            };
+        }
+    }
+    
+    // Position-based bets (A, B, C, D, E)
+    if (clientSelection === 'odd' || clientSelection === 'even') {
+        return {
+            betType: 'POSITION_PARITY',
+            betValue: `${position.toUpperCase()}_${clientSelection}`,
+            odds: 2.0
+        };
+    }
+    
+    switch (clientType) {
+        case 'size':
+            return {
+                betType: 'POSITION_SIZE',
+                betValue: `${position.toUpperCase()}_${clientSelection}`,
+                odds: 2.0
+            };
+        case 'number':
+            return {
+                betType: 'POSITION',
+                betValue: `${position.toUpperCase()}_${selection}`,
+                odds: 9.0
+            };
+        case 'parity':
+        case 'odd':
+        case 'even':
+            return {
+                betType: 'POSITION_PARITY',
+                betValue: `${position.toUpperCase()}_${clientSelection}`,
+                odds: 2.0
+            };
+        default:
+            return {
+                betType: 'POSITION',
+                betValue: `${position.toUpperCase()}_${selection}`,
+                odds: 9.0
+            };
+    }
+};
+
+/**
+ * WINGO/TRX_WIX ROOM: Dedicated mapping function for WINGO and TRX_WIX games
+ */
+const mapWingoBet = (betData) => {
+    const { type, selection } = betData;
+    const clientType = String(type || '').toLowerCase();
+    const clientSelection = String(selection || '').toLowerCase();
+    
+    switch (clientType) {
+        case 'number':
+            return {
+                betType: 'NUMBER',
+                betValue: clientSelection,
+                odds: 9.0
+            };
+        case 'color':
+            return {
+                betType: 'COLOR',
+                betValue: clientSelection,
+                odds: 2.0
+            };
+        case 'size':
+            return {
+                betType: 'SIZE',
+                betValue: clientSelection,
+                odds: 2.0
+            };
+        case 'parity':
+            return {
+                betType: 'PARITY',
+                betValue: clientSelection,
+                odds: 2.0
+            };
+        default:
+            // Default to number bet if type is not recognized
+            return {
+                betType: 'NUMBER',
+                betValue: clientSelection,
+                odds: 9.0
+            };
+    }
+};
+
+/**
+ * LEGACY: Keep for backward compatibility
+ */
+const mapClientBetType = (clientType, betData = {}) => {
+    const type = String(clientType || '').toLowerCase();
+    const selection = String(betData.selection || '').toLowerCase();
+    
+    // Check if this is a position-based bet (has position field)
+    if (betData.position && betData.position !== 'sum' && betData.position !== 'SUM') {
+        // Position-based bets (A, B, C, D, E)
+        // Check selection first to determine actual bet type
+        if (selection === 'odd' || selection === 'even') {
+            return 'POSITION_PARITY';
+        }
+        
+        switch (type) {
+            case 'size':
+                return 'POSITION_SIZE';
+            case 'parity':
+            case 'odd':
+            case 'even':
+                return 'POSITION_PARITY';
+            case 'number':
+                return 'POSITION';
+            default:
+                return 'POSITION';
+        }
+    } else {
+        // Sum-based bets (no position, position is 'sum', or position is 'SUM')
+        // Check selection first to determine actual bet type
+        if (selection === 'odd' || selection === 'even') {
+            return 'SUM_PARITY';
+        }
+        
+        switch (type) {
+            case 'size':
+                return 'SUM_SIZE';
+            case 'parity':
+            case 'odd':
+            case 'even':
+                return 'SUM_PARITY';
+            case 'sum':
+                return 'SUM';
+            default:
+                return 'SUM_SIZE';
+        }
+    }
 };
 
 /**
  * NEW: Transform client bet value to server format
  */
-const mapClientBetValue = (clientSelection, clientType) => {
+const mapClientBetValue = (clientSelection, clientType, betData = {}) => {
     // Handle different client formats - convert to string first
     const selection = String(clientSelection || '').toLowerCase();
     const type = String(clientType || '').toLowerCase();
@@ -314,27 +529,54 @@ const mapClientBetValue = (clientSelection, clientType) => {
         return colorMapping[selection] || 'green';
     }
     
-    // Size mapping
+    // Parity mapping - Handle both position-based and sum-based
+    // Check for parity first, even if type is "size" but selection is "odd"/"even"
+    if (type === 'parity' || type === 'odd' || type === 'even' || 
+        (type === 'size' && (selection === 'odd' || selection === 'even'))) {
+        const parityMapping = {
+            'odd': 'odd',
+            'even': 'even'
+        };
+        
+        // Check if this is a position-based bet
+        if (betData.position && betData.position !== 'sum' && betData.position !== 'SUM') {
+            // Position-based: A_odd, B_even, etc.
+            return `${betData.position.toUpperCase()}_${parityMapping[selection] || 'odd'}`;
+        } else {
+            // Sum-based: SUM_odd, SUM_even
+            return `SUM_${parityMapping[selection] || 'odd'}`;
+        }
+    }
+    
+    // Size mapping - Handle both position-based and sum-based
     if (type === 'size') {
         const sizeMapping = {
             'big': 'big',
             'small': 'small'
         };
-        return sizeMapping[selection] || 'small';
+        
+        // Check if this is a position-based bet
+        if (betData.position && betData.position !== 'sum' && betData.position !== 'SUM') {
+            // Position-based: A_small, B_big, etc.
+            return `${betData.position.toUpperCase()}_${sizeMapping[selection] || 'small'}`;
+        } else {
+            // Sum-based: SUM_small, SUM_big
+            return `SUM_${sizeMapping[selection] || 'small'}`;
+        }
     }
     
-    // Parity mapping
-    if (type === 'parity' || type === 'odd' || type === 'even') {
-        const parityMapping = {
-            'odd': 'odd',
-            'even': 'even'
-        };
-        return parityMapping[selection] || 'odd';
-    }
+
     
-    // Number mapping (direct pass-through)
+    // Number mapping - Handle both position-based and sum-based
     if (type === 'number') {
-        return String(clientSelection);
+        // Check if this is a position-based bet
+        if (betData.position && betData.position !== 'sum') {
+            // Position-based: A_5, B_3, etc.
+            return `${betData.position.toUpperCase()}_${clientSelection}`;
+        } else {
+            // Sum-based: just the number
+            return String(clientSelection);
+        }
     }
     
     // Sum mapping (for k3 game)
@@ -349,7 +591,7 @@ const mapClientBetValue = (clientSelection, clientType) => {
 /**
  * NEW: Calculate odds based on bet type
  */
-const calculateOddsForBet = (clientType, clientSelection) => {
+const calculateOddsForBet = (clientType, clientSelection, betData = {}) => {
     const type = String(clientType || '').toLowerCase();
     const selection = String(clientSelection || '').toLowerCase();
     
@@ -364,17 +606,35 @@ const calculateOddsForBet = (clientType, clientSelection) => {
             return 2.0; // Red/Green odds
             
         case 'size':
-            return 2.0; // Big/Small odds
+            // Check if this is a position-based bet
+            if (betData.position && betData.position !== 'sum') {
+                return 2.0; // Position-based size odds
+            } else {
+                return 1.98; // Sum-based size odds
+            }
             
         case 'parity':
         case 'odd':
         case 'even':
-            return 2.0; // Odd/Even odds
+            // Check if this is a position-based bet
+            if (betData.position && betData.position !== 'sum') {
+                return 2.0; // Position-based parity odds
+            } else {
+                return 1.98; // Sum-based parity odds
+            }
             
         case 'sum':
             return 9.0; // 1:9 odds for sum bets (k3 game)
             
         default:
+            // Check if selection indicates parity bet
+            if (selection === 'odd' || selection === 'even') {
+                if (betData.position && betData.position !== 'sum') {
+                    return 2.0; // Position-based parity odds
+                } else {
+                    return 1.98; // Sum-based parity odds
+                }
+            }
             return 2.0; // Default odds
     }
 };
@@ -547,6 +807,15 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
             transports: ['websocket', 'polling']
         });
 
+        // --- Ensure admin exposure monitoring is always initialized ---
+        try {
+            const adminExposureService = require('./adminExposureService');
+            adminExposureService.startExposureMonitoring(io);
+            console.log('✅ [WEBSOCKET] Admin exposure monitoring initialized from websocketService');
+        } catch (adminError) {
+            console.warn('⚠️ [WEBSOCKET] Admin exposure monitoring setup failed:', adminError.message);
+        }
+
         // Authentication middleware
         io.use(async (socket, next) => {
             try {
@@ -689,43 +958,111 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
             socket.on('placeBet', async (betData) => {
                 try {
                     const userId = socket.user.userId || socket.user.id;
-                    console.log(`🎯 [WEBSOCKET_BET] Raw bet received from user ${userId}:`, JSON.stringify(betData, null, 2));
+                    const timestamp = new Date().toISOString();
+                    
+                    console.log(`\n🎯 [WEBSOCKET_BET_START] ==========================================`);
+                    console.log(`🎯 [WEBSOCKET_BET_START] User ${userId} placing bet at ${timestamp}`);
+                    console.log(`🎯 [WEBSOCKET_BET_START] Socket ID: ${socket.id}`);
+                    console.log(`🎯 [WEBSOCKET_BET_START] Raw bet received:`, JSON.stringify(betData, null, 2));
+                    console.log(`🎯 [WEBSOCKET_BET_START] User object:`, JSON.stringify(socket.user, null, 2));
                     
                     // Transform client data format to expected format
-                    const transformedBetData = {
-                        gameType: betData.gameType,
-                        duration: betData.duration,
-                        periodId: betData.periodId,
-                        timeline: betData.timeline || 'default',
-                        userId,
-                        
-                        // Transform amount to betAmount
-                        betAmount: betData.amount || betData.betAmount,
-                        
-                        // Transform selection and type to betType and betValue
-                        betType: mapClientBetType(betData.type),
-                        betValue: mapClientBetValue(betData.selection, betData.type),
-                        
-                        // Calculate odds based on bet type
-                        odds: calculateOddsForBet(betData.type, betData.selection)
-                    };
+                    // Transform the client bet data to server format using room-wise mapping
+                    let transformedBetData;
                     
-                    console.log(`🔄 [WEBSOCKET_BET] Transformed bet data:`, JSON.stringify(transformedBetData, null, 2));
+                    // Use room-specific mapping for different games
+                    if (betData.gameType === 'fiveD' || betData.gameType === '5d') {
+                        // 5D Room mapping
+                        const fiveDMapping = mapFiveDBet(betData);
+                        transformedBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: betData.timeline || 'default',
+                            userId,
+                            betAmount: betData.amount || betData.betAmount,
+                            betType: fiveDMapping.betType,
+                            betValue: fiveDMapping.betValue,
+                            odds: fiveDMapping.odds
+                        };
+                    } else if (betData.gameType === 'wingo' || betData.gameType === 'trx_wix') {
+                        // WINGO/TRX_WIX Room mapping
+                        const wingoMapping = mapWingoBet(betData);
+                        transformedBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: betData.timeline || 'default',
+                            userId,
+                            betAmount: betData.amount || betData.betAmount,
+                            betType: wingoMapping.betType,
+                            betValue: wingoMapping.betValue,
+                            odds: wingoMapping.odds
+                        };
+                    } else if (betData.gameType === 'k3') {
+                        // K3 Room mapping
+                        const k3Mapping = mapK3Bet(betData);
+                        transformedBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: betData.timeline || 'default',
+                            userId,
+                            betAmount: betData.amount || betData.betAmount,
+                            betType: k3Mapping.betType,
+                            betValue: k3Mapping.betValue,
+                            odds: k3Mapping.odds
+                        };
+                    } else {
+                        // Use legacy mapping for other games (will be updated later)
+                        transformedBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: betData.timeline || 'default',
+                            userId,
+                            betAmount: betData.amount || betData.betAmount,
+                            betType: mapClientBetType(betData.type, betData),
+                            betValue: mapClientBetValue(betData.selection, betData.type, betData),
+                            odds: calculateOddsForBet(betData.type, betData.selection, betData)
+                        };
+                    }
+                    
+                    console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] ==========================================`);
+                    console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Original type: ${betData.type} -> Server type: ${transformedBetData.betType}`);
+                    console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Original selection: ${betData.selection} -> Server value: ${transformedBetData.betValue}`);
+                    console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Original amount: ${betData.amount} -> Server amount: ${transformedBetData.betAmount}`);
+                    console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Calculated odds: ${transformedBetData.odds}`);
+                    console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Transformed bet data:`, JSON.stringify(transformedBetData, null, 2));
                     
                     // CRITICAL: Validate bet placement first
+                    console.log(`🔍 [WEBSOCKET_BET_VALIDATION] ==========================================`);
+                    console.log(`🔍 [WEBSOCKET_BET_VALIDATION] Starting validation for user ${userId}...`);
+                    
                     const validation = await validateBetPlacement(userId, transformedBetData.gameType, transformedBetData.duration, transformedBetData.periodId, transformedBetData.betAmount, transformedBetData.timeline);
+                    
+                    console.log(`🔍 [WEBSOCKET_BET_VALIDATION] Validation result:`, JSON.stringify(validation, null, 2));
+                    
                     if (!validation.valid) {
-                        console.log(`❌ [WEBSOCKET_BET] Validation failed for user ${userId}:`, validation.message);
+                        console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] ==========================================`);
+                        console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] Validation failed for user ${userId}:`, validation.message);
+                        console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] Error details:`, JSON.stringify(validation, null, 2));
+                        
                         socket.emit('betError', { 
                             message: validation.message,
                             code: validation.code,
                             timeRemaining: validation.timeRemaining,
                             currentBalance: validation.currentBalance,
                             debug: validation.debug,
-                            timestamp: new Date().toISOString()
+                            timestamp: timestamp
                         });
                         return;
                     }
+                    
+                    console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] ==========================================`);
+                    console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Validation passed for user ${userId}`);
+                    console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Time remaining: ${validation.timeRemaining}s`);
+                    console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Current balance: ₹${validation.currentBalance}`);
                     
                     // Use corrected bet amount from validation
                     const finalBetData = {
@@ -733,18 +1070,30 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                         betAmount: validation.correctedBetAmount || transformedBetData.betAmount
                     };
                     
-                    console.log(`🔍 [WEBSOCKET_BET] Final bet data for processing:`, JSON.stringify(finalBetData, null, 2));
-                    console.log(`✅ [WEBSOCKET_BET] Validation passed for user ${userId}, processing bet...`);
+                    console.log(`🔍 [WEBSOCKET_BET_FINAL_DATA] ==========================================`);
+                    console.log(`🔍 [WEBSOCKET_BET_FINAL_DATA] Final bet data for processing:`, JSON.stringify(finalBetData, null, 2));
+                    console.log(`🔍 [WEBSOCKET_BET_FINAL_DATA] Processing bet for user ${userId}...`);
                     
                     // Process bet using WebSocket-specific processing (bypasses timing validation)
                     const result = await processWebSocketBet(socket, finalBetData);
                     
+                    console.log(`📊 [WEBSOCKET_BET_PROCESSING_RESULT] ==========================================`);
+                    console.log(`📊 [WEBSOCKET_BET_PROCESSING_RESULT] Processing result:`, JSON.stringify(result, null, 2));
+                    
                     if (result.success) {
+                        console.log(`✅ [WEBSOCKET_BET_SUCCESS] ==========================================`);
+                        console.log(`✅ [WEBSOCKET_BET_SUCCESS] Bet processed successfully for user ${userId}`);
+                        console.log(`✅ [WEBSOCKET_BET_SUCCESS] Amount: ₹${finalBetData.betAmount}`);
+                        console.log(`✅ [WEBSOCKET_BET_SUCCESS] Game: ${finalBetData.gameType} ${finalBetData.duration}s`);
+                        console.log(`✅ [WEBSOCKET_BET_SUCCESS] Period: ${finalBetData.periodId}`);
+                        console.log(`✅ [WEBSOCKET_BET_SUCCESS] Bet type: ${finalBetData.betType}:${finalBetData.betValue}`);
+                        console.log(`✅ [WEBSOCKET_BET_SUCCESS] Odds: ${finalBetData.odds}x`);
+                        
                         // Success response to the betting user only
                         socket.emit('betSuccess', {
                             ...result.data,
                             message: 'Bet placed successfully!',
-                            timestamp: new Date().toISOString(),
+                            timestamp: timestamp,
                             timeRemaining: validation.timeRemaining
                         });
                         
@@ -755,6 +1104,9 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                         }
                         socket.activeBets.add(`${betData.gameType}_${betData.duration}_${betData.periodId}`);
                         
+                        console.log(`📡 [WEBSOCKET_BET_BROADCAST] ==========================================`);
+                        console.log(`📡 [WEBSOCKET_BET_BROADCAST] Broadcasting bet activity to room: ${roomId}`);
+                        
                         // Broadcast general bet activity to room (no user-specific data)
                         const totalBets = await getTotalBetsForPeriod(
                             betData.gameType, 
@@ -763,27 +1115,38 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                             betData.timeline || 'default'
                         );
                         
+                        console.log(`📡 [WEBSOCKET_BET_BROADCAST] Total bets for period:`, JSON.stringify(totalBets, null, 2));
+                        
                         socket.to(roomId).emit('betActivity', {
                             periodId: betData.periodId,
                             totalBets: totalBets,
                             gameType: betData.gameType,
                             duration: betData.duration,
-                            timestamp: new Date().toISOString()
+                            timestamp: timestamp
                         });
                         
-                        console.log(`✅ [WEBSOCKET_BET] Bet processed successfully for user ${userId}, amount: ₹${finalBetData.betAmount}`);
+                        console.log(`✅ [WEBSOCKET_BET_COMPLETE] ==========================================`);
+                        console.log(`✅ [WEBSOCKET_BET_COMPLETE] Bet flow completed successfully for user ${userId}`);
                         
                     } else {
-                        console.log(`❌ [WEBSOCKET_BET] Bet processing failed for user ${userId}:`, result.message);
+                        console.log(`❌ [WEBSOCKET_BET_PROCESSING_FAILED] ==========================================`);
+                        console.log(`❌ [WEBSOCKET_BET_PROCESSING_FAILED] Bet processing failed for user ${userId}:`, result.message);
+                        console.log(`❌ [WEBSOCKET_BET_PROCESSING_FAILED] Error details:`, JSON.stringify(result, null, 2));
+                        
                         socket.emit('betError', { 
                             message: result.message,
                             code: result.code,
-                            timestamp: new Date().toISOString()
+                            timestamp: timestamp
                         });
                     }
                     
                 } catch (error) {
-                    console.error('❌ [WEBSOCKET_BET] Error processing bet:', error);
+                    console.log(`💥 [WEBSOCKET_BET_ERROR] ==========================================`);
+                    console.log(`💥 [WEBSOCKET_BET_ERROR] Unexpected error processing bet for user ${socket.user?.userId || socket.user?.id}:`);
+                    console.log(`💥 [WEBSOCKET_BET_ERROR] Error:`, error.message);
+                    console.log(`💥 [WEBSOCKET_BET_ERROR] Stack:`, error.stack);
+                    console.log(`💥 [WEBSOCKET_BET_ERROR] Bet data:`, JSON.stringify(betData, null, 2));
+                    
                     socket.emit('betError', { 
                         message: 'Failed to process bet due to server error',
                         code: 'PROCESSING_ERROR',
@@ -807,18 +1170,81 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
                         return;
                     }
                     
-                    // Transform data
-                    const finalBetData = {
-                        gameType: betData.gameType,
-                        duration: betData.duration,
-                        periodId: betData.periodId,
-                        timeline: 'default',
-                        userId,
-                        betAmount: parseFloat(betData.amount),
-                        betType: mapClientBetType(betData.type),
-                        betValue: mapClientBetValue(betData.selection, betData.type),
-                        odds: calculateOddsForBet(betData.type, betData.selection)
-                    };
+                    // CRITICAL FIX: Add duration validation even in debug mode
+                    const gameType = betData.gameType;
+                    const duration = parseInt(betData.duration);
+                    
+                    // Validate duration for game type
+                    if (!GAME_CONFIGS[gameType] || !GAME_CONFIGS[gameType].includes(duration)) {
+                        socket.emit('betError', { 
+                            message: `Invalid duration ${duration}s for game type ${gameType}. Valid durations: ${GAME_CONFIGS[gameType]?.join(', ') || 'none'}`,
+                            code: 'INVALID_DURATION'
+                        });
+                        return;
+                    }
+                    
+                    console.log(`🚧 [DEBUG_BET] Duration validation passed: ${gameType} ${duration}s`);
+                    
+                    // Transform data using room-wise mapping
+                    let finalBetData;
+                    
+                    // Use room-specific mapping for different games
+                    if (betData.gameType === 'fiveD' || betData.gameType === '5d') {
+                        // 5D Room mapping
+                        const fiveDMapping = mapFiveDBet(betData);
+                        finalBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: 'default',
+                            userId,
+                            betAmount: parseFloat(betData.amount),
+                            betType: fiveDMapping.betType,
+                            betValue: fiveDMapping.betValue,
+                            odds: fiveDMapping.odds
+                        };
+                    } else if (betData.gameType === 'wingo' || betData.gameType === 'trx_wix') {
+                        // WINGO/TRX_WIX Room mapping
+                        const wingoMapping = mapWingoBet(betData);
+                        finalBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: 'default',
+                            userId,
+                            betAmount: parseFloat(betData.amount),
+                            betType: wingoMapping.betType,
+                            betValue: wingoMapping.betValue,
+                            odds: wingoMapping.odds
+                        };
+                    } else if (betData.gameType === 'k3') {
+                        // K3 Room mapping
+                        const k3Mapping = mapK3Bet(betData);
+                        finalBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: 'default',
+                            userId,
+                            betAmount: parseFloat(betData.amount),
+                            betType: k3Mapping.betType,
+                            betValue: k3Mapping.betValue,
+                            odds: k3Mapping.odds
+                        };
+                    } else {
+                        // Use legacy mapping for other games
+                        finalBetData = {
+                            gameType: betData.gameType,
+                            duration: betData.duration,
+                            periodId: betData.periodId,
+                            timeline: 'default',
+                            userId,
+                            betAmount: parseFloat(betData.amount),
+                            betType: mapClientBetType(betData.type, betData),
+                            betValue: mapClientBetValue(betData.selection, betData.type, betData),
+                            odds: calculateOddsForBet(betData.type, betData.selection, betData)
+                        };
+                    }
                     
                     console.log(`🚧 [DEBUG_BET] Bypassing validation, processing directly:`, JSON.stringify(finalBetData, null, 2));
                     
@@ -1359,6 +1785,11 @@ const setupRedisSubscriptions = () => {
 const handleGameSchedulerEvent = (channel, data) => {
     try {
         const { gameType, duration, roomId, periodId } = data;
+        const timestamp = new Date().toISOString();
+        
+        console.log(`\n📢 [WEBSOCKET_EVENT_START] ==========================================`);
+        console.log(`📢 [WEBSOCKET_EVENT_START] Received event: ${channel} at ${timestamp}`);
+        console.log(`📢 [WEBSOCKET_EVENT_START] Event data:`, JSON.stringify(data, null, 2));
         
         // FIXED: Validate roomId format (should be gameType_duration only)
         const expectedRoomId = `${gameType}_${duration}`;
@@ -1394,52 +1825,211 @@ const handleGameSchedulerEvent = (channel, data) => {
         
         switch (channel) {
             case 'game_scheduler:period_start':
-                console.log(`📢 WebSocket: Broadcasting period start: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_START] ==========================================`);
+                console.log(`📢 [WEBSOCKET_PERIOD_START] Broadcasting period start: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_START] Period data:`, JSON.stringify(data, null, 2));
+                
                 io.to(expectedRoomId).emit('periodStart', {
                     ...data,
                     roomId: expectedRoomId,
                     source: 'game_scheduler',
                     validated: true,
-                    bettingOpen: true
+                    bettingOpen: true,
+                    timestamp: timestamp
                 });
+                
+                console.log(`✅ [WEBSOCKET_PERIOD_START] Period start broadcasted successfully`);
                 break;
                 
             case 'game_scheduler:period_result':
-                console.log(`📢 WebSocket: Broadcasting period result: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_RESULT] ==========================================`);
+                console.log(`📢 [WEBSOCKET_PERIOD_RESULT] Broadcasting period result: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_RESULT] Result data:`, JSON.stringify(data, null, 2));
+                
+                // Log detailed result information
+                if (data.result) {
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] ==========================================`);
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] Game: ${gameType} ${duration}s`);
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] Period: ${periodId}`);
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] Result:`, JSON.stringify(data.result, null, 2));
+                    
+                    // Log game-specific result details
+                    if (gameType === 'fiveD' || gameType === '5d') {
+                        const result = data.result;
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] ==========================================`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] 5D Result: A=${result.A}, B=${result.B}, C=${result.C}, D=${result.D}, E=${result.E}`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] Sum: ${result.A + result.B + result.C + result.D + result.E}`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] Sum category: ${(result.A + result.B + result.C + result.D + result.E) > 22 ? 'BIG' : 'SMALL'}`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] Sum parity: ${(result.A + result.B + result.C + result.D + result.E) % 2 === 0 ? 'EVEN' : 'ODD'}`);
+                    } else if (gameType === 'wingo') {
+                        const result = data.result;
+                        console.log(`🎯 [WEBSOCKET_WINGO_RESULT_DETAILS] ==========================================`);
+                        console.log(`🎯 [WEBSOCKET_WINGO_RESULT_DETAILS] Wingo Result: Number=${result.number}, Color=${result.color}`);
+                        console.log(`🎯 [WEBSOCKET_WINGO_RESULT_DETAILS] Parity: ${result.number % 2 === 0 ? 'EVEN' : 'ODD'}`);
+                    } else if (gameType === 'k3') {
+                        const result = data.result;
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] ==========================================`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] K3 Result: Dice=[${result.dice_1}, ${result.dice_2}, ${result.dice_3}]`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Sum: ${result.sum}`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Has pair: ${result.has_pair}`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Has triple: ${result.has_triple}`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Is straight: ${result.is_straight}`);
+                    }
+                }
+                
                 io.to(expectedRoomId).emit('periodResult', {
                     ...data,
                     roomId: expectedRoomId,
                     source: 'game_scheduler',
                     validated: true,
-                    bettingOpen: false
+                    bettingOpen: false,
+                    timestamp: timestamp
                 });
+                
+                console.log(`✅ [WEBSOCKET_PERIOD_RESULT] Period result broadcasted successfully`);
                 break;
                 
             case 'game_scheduler:betting_closed':
-                console.log(`📢 WebSocket: Broadcasting betting closed: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_BETTING_CLOSED] ==========================================`);
+                console.log(`📢 [WEBSOCKET_BETTING_CLOSED] Broadcasting betting closed: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_BETTING_CLOSED] Betting closed data:`, JSON.stringify(data, null, 2));
+                
                 io.to(expectedRoomId).emit('bettingClosed', {
                     ...data,
                     roomId: expectedRoomId,
                     source: 'game_scheduler',
                     validated: true,
-                    bettingOpen: false
+                    bettingOpen: false,
+                    timestamp: timestamp
                 });
+                
+                console.log(`✅ [WEBSOCKET_BETTING_CLOSED] Betting closed broadcasted successfully`);
                 break;
                 
             case 'game_scheduler:period_error':
-                console.log(`📢 WebSocket: Broadcasting period error: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_ERROR] ==========================================`);
+                console.log(`📢 [WEBSOCKET_PERIOD_ERROR] Broadcasting period error: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_ERROR] Error data:`, JSON.stringify(data, null, 2));
+                
                 io.to(expectedRoomId).emit('periodError', {
                     ...data,
                     roomId: expectedRoomId,
                     source: 'game_scheduler',
-                    validated: true
+                    validated: true,
+                    timestamp: timestamp
                 });
+                
+                console.log(`✅ [WEBSOCKET_PERIOD_ERROR] Period error broadcasted successfully`);
                 break;
         }
         
+        console.log(`✅ [WEBSOCKET_EVENT_COMPLETE] ==========================================`);
+        console.log(`✅ [WEBSOCKET_EVENT_COMPLETE] Event ${channel} processed successfully`);
+        
     } catch (error) {
-        console.error('❌ WebSocket: Error handling game scheduler event:', error);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] ==========================================`);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Error handling game scheduler event: ${channel}`);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Error:`, error.message);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Stack:`, error.stack);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Event data:`, JSON.stringify(data, null, 2));
     }
+};
+
+/**
+ * K3 ROOM: Dedicated mapping function for K3 game
+ */
+const mapK3Bet = (betData) => {
+    const { type, selection, extra, position } = betData;
+    const clientType = String(type || '').toLowerCase();
+    const clientSelection = String(selection || '').toLowerCase();
+    const clientExtra = String(extra || '').toLowerCase();
+    
+    console.log(`🎲 [K3_MAPPING] Mapping K3 bet:`, { type: clientType, selection: clientSelection, extra: clientExtra });
+    
+    // SUM bet - Handle both single and multiple values
+    if (clientType === 'sum') {
+        // Check if this is a multiple sum bet (comma-separated values)
+        if (clientSelection.includes(',')) {
+            console.log(`🎲 [K3_MAPPING] Multiple sum bet detected: ${clientSelection}`);
+            return { 
+                betType: 'SUM_MULTIPLE', 
+                betValue: clientSelection, 
+                odds: 0  // Will be calculated per individual value
+            };
+        }
+        // Single sum bet
+        else if (!isNaN(clientSelection)) {
+            console.log(`🎲 [K3_MAPPING] Single sum bet detected: ${clientSelection}`);
+            return { 
+                betType: 'SUM', 
+                betValue: clientSelection, 
+                odds: 0  // Will be calculated by game logic
+            };
+        }
+    }
+    
+    // SUM_SIZE: big/small
+    if (clientType === 'sum_size' || clientType === 'size') {
+        if (clientSelection === 'big' || clientSelection === 'small') {
+            return { betType: 'SUM_SIZE', betValue: clientSelection, odds: 0 };
+        }
+    }
+    
+    // SUM_PARITY: odd/even
+    if (clientType === 'sum_parity' || clientType === 'parity') {
+        if (clientSelection === 'odd' || clientSelection === 'even') {
+            return { betType: 'SUM_PARITY', betValue: clientSelection, odds: 0 };
+        }
+    }
+    
+    // ANY_TRIPLE: any triple
+    if (clientType === 'triple' && clientSelection === 'any') {
+        return { betType: 'ANY_TRIPLE', betValue: null, odds: 0 };
+    }
+    
+    // SPECIFIC_TRIPLE: specific triple (e.g., triple: 4)
+    if (clientType === 'triple' && !isNaN(clientSelection)) {
+        return { betType: 'SPECIFIC_TRIPLE', betValue: clientSelection, odds: 0 };
+    }
+    
+    // ANY_PAIR: any pair
+    if (clientType === 'pair' && clientSelection === 'any') {
+        return { betType: 'ANY_PAIR', betValue: null, odds: 0 };
+    }
+    
+    // SPECIFIC_PAIR: specific pair (e.g., pair: 2)
+    if (clientType === 'pair' && !isNaN(clientSelection) && !clientExtra) {
+        return { betType: 'SPECIFIC_PAIR', betValue: clientSelection, odds: 0 };
+    }
+    
+    // PAIR_COMBINATION: specific pair with specific single (e.g., pair: 2, extra: 5)
+    if (clientType === 'pair' && !isNaN(clientSelection) && !isNaN(clientExtra)) {
+        return { betType: 'PAIR_COMBINATION', betValue: [clientSelection, clientExtra], odds: 0 };
+    }
+    
+    // STRAIGHT: straight sequence (including "3 Continuous")
+    if (clientType === 'straight' || (clientType === 'different' && clientSelection && (clientSelection.includes('continuous') || clientSelection.includes('straight')))) {
+        return { betType: 'STRAIGHT', betValue: null, odds: 0 };
+    }
+    
+    // ALL_DIFFERENT: three different numbers
+    if (clientType === 'all_different' || clientType === 'different') {
+        return { betType: 'ALL_DIFFERENT', betValue: null, odds: 0 };
+    }
+    
+    // TWO_DIFFERENT: two specific different numbers
+    if (clientType === 'two_different' && clientSelection && clientExtra) {
+        return { betType: 'TWO_DIFFERENT', betValue: [clientSelection, clientExtra], odds: 0 };
+    }
+    
+    // SINGLE_NUMBER: single number 1-6
+    if (clientType === 'number' && !isNaN(clientSelection)) {
+        return { betType: 'SINGLE_NUMBER', betValue: clientSelection, odds: 0 };
+    }
+    
+    // Fallback: return as-is
+    console.log(`⚠️ [K3_MAPPING] Unknown bet type: ${clientType}, returning as-is`);
+    return { betType: clientType.toUpperCase(), betValue: clientSelection, odds: 0 };
 };
 
 // Export WebSocket service - DURATION-BASED ROOMS WITH BET PLACEMENT
@@ -1508,8 +2098,15 @@ module.exports = {
             
             const roomId = `${gameType}_${duration}`;
             const periodKey = `${gameType}_${duration}_${periodId}`;
+            const timestamp = new Date().toISOString();
             
-            console.log(`🎯 [BET_RESULTS] Broadcasting results for ${periodKey} to betting users only`);
+            console.log(`\n🎯 [BET_RESULTS_START] ==========================================`);
+            console.log(`🎯 [BET_RESULTS_START] Broadcasting results for ${periodKey} at ${timestamp}`);
+            console.log(`🎯 [BET_RESULTS_START] Game: ${gameType} ${duration}s`);
+            console.log(`🎯 [BET_RESULTS_START] Period: ${periodId}`);
+            console.log(`🎯 [BET_RESULTS_START] Result:`, JSON.stringify(periodResult, null, 2));
+            console.log(`🎯 [BET_RESULTS_START] Winning bets count: ${winningBets.length}`);
+            console.log(`🎯 [BET_RESULTS_START] Winning bets details:`, JSON.stringify(winningBets, null, 2));
             
             // Get all sockets in the room
             const room = io.sockets.adapter.rooms.get(roomId);
@@ -1518,21 +2115,42 @@ module.exports = {
                 return;
             }
             
+            console.log(`👥 [BET_RESULTS_ROOM] ==========================================`);
+            console.log(`👥 [BET_RESULTS_ROOM] Room ${roomId} has ${room.size} connected users`);
+            
             let notificationsSent = 0;
+            let bettingUsersFound = 0;
+            let watchingUsersFound = 0;
             
             // Iterate through all sockets in the room
             for (const socketId of room) {
                 const socket = io.sockets.sockets.get(socketId);
                 
-                if (!socket || !socket.user || !socket.activeBets) continue;
-                
-                // Check if this user placed a bet in this period
-                if (!socket.activeBets.has(periodKey)) {
-                    console.log(`👁️ [BET_RESULTS] User ${socket.user.userId || socket.user.id} was only watching, no notification sent`);
+                if (!socket || !socket.user) {
+                    console.log(`👤 [BET_RESULTS] Socket ${socketId} has no user, skipping`);
                     continue;
                 }
                 
                 const userId = socket.user.userId || socket.user.id;
+                
+                if (!socket.activeBets) {
+                    console.log(`👁️ [BET_RESULTS] User ${userId} has no active bets, watching only`);
+                    watchingUsersFound++;
+                    continue;
+                }
+                
+                // Check if this user placed a bet in this period
+                if (!socket.activeBets.has(periodKey)) {
+                    console.log(`👁️ [BET_RESULTS] User ${userId} was only watching period ${periodId}, no notification sent`);
+                    watchingUsersFound++;
+                    continue;
+                }
+                
+                bettingUsersFound++;
+                console.log(`🎯 [BET_RESULTS_USER] ==========================================`);
+                console.log(`🎯 [BET_RESULTS_USER] Processing results for betting user: ${userId}`);
+                console.log(`🎯 [BET_RESULTS_USER] Socket ID: ${socket.id}`);
+                console.log(`🎯 [BET_RESULTS_USER] Active bets:`, Array.from(socket.activeBets));
                 
                 // Find if this user won
                 const userWinnings = winningBets.filter(bet => 
@@ -1542,8 +2160,14 @@ module.exports = {
                 const hasWon = userWinnings.length > 0;
                 const totalWinnings = userWinnings.reduce((sum, bet) => sum + (bet.winnings || 0), 0);
                 
-                // Send personalized result to this betting user
-                socket.emit('betResult', {
+                console.log(`💰 [BET_RESULTS_WINNINGS] ==========================================`);
+                console.log(`💰 [BET_RESULTS_WINNINGS] User ${userId} win status: ${hasWon ? 'WON' : 'LOST'}`);
+                console.log(`💰 [BET_RESULTS_WINNINGS] Winning bets found: ${userWinnings.length}`);
+                console.log(`💰 [BET_RESULTS_WINNINGS] Total winnings: ₹${totalWinnings}`);
+                console.log(`💰 [BET_RESULTS_WINNINGS] Winning bet details:`, JSON.stringify(userWinnings, null, 2));
+                
+                // Prepare personalized result data
+                const personalizedResult = {
                     gameType,
                     duration,
                     periodId,
@@ -1554,27 +2178,50 @@ module.exports = {
                         winningBets: userWinnings.map(bet => ({
                             betId: bet.betId,
                             betType: bet.betType,
+                            betValue: bet.betValue,
                             betAmount: bet.betAmount,
                             winnings: bet.winnings,
-                            profitLoss: bet.winnings - bet.betAmount
+                            profitLoss: bet.winnings - bet.betAmount,
+                            odds: bet.odds
                         }))
                     },
-                    timestamp: new Date().toISOString(),
+                    timestamp: timestamp,
                     source: 'bet_result_notification'
-                });
+                };
+                
+                console.log(`📤 [BET_RESULTS_SEND] ==========================================`);
+                console.log(`📤 [BET_RESULTS_SEND] Sending personalized result to user ${userId}:`);
+                console.log(`📤 [BET_RESULTS_SEND] Result data:`, JSON.stringify(personalizedResult, null, 2));
+                
+                // Send personalized result to this betting user
+                socket.emit('betResult', personalizedResult);
                 
                 notificationsSent++;
                 
-                console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS] Sent result to user ${userId}: ${hasWon ? `WON ₹${totalWinnings}` : 'LOST'}`);
+                console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] ==========================================`);
+                console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Result sent to user ${userId}: ${hasWon ? `WON ₹${totalWinnings}` : 'LOST'}`);
+                console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Notification #${notificationsSent} sent successfully`);
                 
                 // Remove this period from user's active bets
                 socket.activeBets.delete(periodKey);
+                console.log(`🗑️ [BET_RESULTS_CLEANUP] Removed period ${periodKey} from user ${userId} active bets`);
             }
             
-            console.log(`✅ [BET_RESULTS] Sent ${notificationsSent} personalized result notifications for ${periodKey}`);
+            console.log(`✅ [BET_RESULTS_COMPLETE] ==========================================`);
+            console.log(`✅ [BET_RESULTS_COMPLETE] Results broadcast completed for ${periodKey}`);
+            console.log(`✅ [BET_RESULTS_COMPLETE] Total users in room: ${room.size}`);
+            console.log(`✅ [BET_RESULTS_COMPLETE] Betting users found: ${bettingUsersFound}`);
+            console.log(`✅ [BET_RESULTS_COMPLETE] Watching users found: ${watchingUsersFound}`);
+            console.log(`✅ [BET_RESULTS_COMPLETE] Notifications sent: ${notificationsSent}`);
+            console.log(`✅ [BET_RESULTS_COMPLETE] Winning bets total: ${winningBets.length}`);
             
         } catch (error) {
-            console.error('❌ [BET_RESULTS] Error broadcasting bet results:', error);
+            console.log(`💥 [BET_RESULTS_ERROR] ==========================================`);
+            console.log(`💥 [BET_RESULTS_ERROR] Error broadcasting bet results for ${gameType}_${duration}_${periodId}:`);
+            console.log(`💥 [BET_RESULTS_ERROR] Error:`, error.message);
+            console.log(`💥 [BET_RESULTS_ERROR] Stack:`, error.stack);
+            console.log(`💥 [BET_RESULTS_ERROR] Result data:`, JSON.stringify(periodResult, null, 2));
+            console.log(`💥 [BET_RESULTS_ERROR] Winning bets:`, JSON.stringify(winningBets, null, 2));
         }
     },
     

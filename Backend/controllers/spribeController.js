@@ -15,7 +15,6 @@ const spribeConfig = require('../config/spribeConfig');
 const User = require('../models/User');
 const GameSession = require('../models/GameSession');
 const ThirdPartyWallet = require('../models/ThirdPartyWallet');
-const { convertCurrency } = require('../utils/currencyUtils');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 
@@ -229,6 +228,15 @@ const logSpribeResponse = (actionName, response) => {
     console.log('Timestamp:', new Date().toISOString());
     console.log('Response:', JSON.stringify(response));
     console.log('========================================\n');
+};
+
+const logSpribeHeaderDebug = (req, context) => {
+  console.log(`\n===== SPRIBE HEADER DEBUG: ${context} =====`);
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Headers:', req.headers);
+  console.log('Original URL:', req.originalUrl);
+  console.log('Body:', JSON.stringify(req.body));
+  console.log('========================================\n');
 };
 
 /**
@@ -508,4 +516,5 @@ module.exports = {
     depositCallbackController,
     rollbackCallbackController,
     healthCheck,
+    validateSpribeRequest,
 };

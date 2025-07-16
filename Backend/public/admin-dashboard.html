@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - Wingo Exposure Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #7f8c8d;
+        }
+
+        .login-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .login-form {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .login-form input {
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .login-form input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .login-form button {
+            padding: 12px 25px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .login-form button:hover {
+            transform: translateY(-2px);
+        }
+
+        .dashboard {
+            display: none;
+        }
+
+        .room-selector {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .room-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .room-tab {
+            padding: 12px 20px;
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .room-tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: #667eea;
+        }
+
+        .room-tab:hover {
+            transform: translateY(-2px);
+        }
+
+        .exposure-grid {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .exposure-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        .exposure-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .exposure-summary {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .summary-item {
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .summary-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .summary-label {
+            font-size: 12px;
+            color: #7f8c8d;
+            text-transform: uppercase;
+        }
+
+        .numbers-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .number-card {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .number-card.zero-exposure {
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: white;
+            border-color: #27ae60;
+        }
+
+        .number-card.optimal {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+            color: white;
+            border-color: #e67e22;
+            transform: scale(1.05);
+        }
+
+        .number-card.high-exposure {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+            border-color: #c0392b;
+        }
+
+        .number-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+        }
+
+        .number-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .exposure-value {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .exposure-status {
+            font-size: 12px;
+            text-transform: uppercase;
+            font-weight: 500;
+        }
+
+        .status-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .status-indicator.optimal {
+            background: #f39c12;
+        }
+
+        .status-indicator.zero {
+            background: #2ecc71;
+        }
+
+        .status-indicator.high {
+            background: #e74c3c;
+        }
+
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-weight: 500;
+            z-index: 1000;
+        }
+
+        .connection-status.connected {
+            background: #2ecc71;
+            color: white;
+        }
+
+        .connection-status.disconnected {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #7f8c8d;
+        }
+
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        @media (max-width: 768px) {
+            .numbers-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .exposure-summary {
+                flex-direction: column;
+            }
+            
+            .login-form {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔐 Admin Dashboard</h1>
+            <p>Wingo Exposure Monitor - Real-time exposure tracking across all rooms</p>
+        </div>
+
+        <div class="connection-status" id="connectionStatus">
+            Disconnected
+        </div>
+
+        <div class="login-section" id="loginSection">
+            <h2>Admin Login</h2>
+            <form class="login-form" id="loginForm">
+                <input type="text" id="username" placeholder="Username" value="admin">
+                <input type="password" id="password" placeholder="Password" value="admin123">
+                <button type="submit">Login</button>
+            </form>
+        </div>
+
+        <div class="dashboard" id="dashboard">
+            <div class="room-selector">
+                <div class="room-tabs" id="roomTabs">
+                    <div class="room-tab active" data-duration="30">30s</div>
+                    <div class="room-tab" data-duration="60">1m</div>
+                    <div class="room-tab" data-duration="180">3m</div>
+                    <div class="room-tab" data-duration="300">5m</div>
+                </div>
+            </div>
+
+            <div class="exposure-grid">
+                <div class="exposure-header">
+                    <div class="exposure-title" id="roomTitle">Wingo 30s - Live Exposure</div>
+                    <div class="exposure-summary" id="exposureSummary">
+                        <div class="summary-item">
+                            <div class="summary-value" id="totalExposure">₹0.00</div>
+                            <div class="summary-label">Total Exposure</div>
+                        </div>
+                        <div class="summary-item">
+                            <div class="summary-value" id="optimalNumber">-</div>
+                            <div class="summary-label">Optimal Number</div>
+                        </div>
+                        <div class="summary-item">
+                            <div class="summary-value" id="totalUsers">0</div>
+                            <div class="summary-label">Users</div>
+                        </div>
+                        <div class="summary-item">
+                            <div class="summary-value" id="totalBets">0</div>
+                            <div class="summary-label">Bets</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="numbers-grid" id="numbersGrid">
+                    <div class="loading">Loading exposure data...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let adminToken = null;
+        let socket = null;
+        let currentDuration = 30;
+
+        // Login functionality
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('/admin/auth/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    adminToken = result.data.token;
+                    document.getElementById('loginSection').style.display = 'none';
+                    document.getElementById('dashboard').style.display = 'block';
+                    
+                    // Initialize WebSocket connection
+                    initializeWebSocket();
+                    
+                    // Load initial data
+                    loadExposureData();
+                } else {
+                    alert('Login failed: ' + result.message);
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('Login failed: ' + error.message);
+            }
+        });
+
+        // WebSocket initialization
+        function initializeWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/admin`;
+            
+            socket = io(wsUrl, {
+                auth: {
+                    token: adminToken
+                }
+            });
+
+            socket.on('connect', () => {
+                updateConnectionStatus(true);
+                console.log('Connected to admin WebSocket');
+                
+                // Subscribe to all Wingo rooms
+                socket.emit('subscribeToAllWingoRooms');
+            });
+
+            socket.on('disconnect', () => {
+                updateConnectionStatus(false);
+                console.log('Disconnected from admin WebSocket');
+            });
+
+            socket.on('wingoExposureUpdate', (data) => {
+                if (data.duration === currentDuration) {
+                    updateExposureDisplay(data);
+                }
+            });
+
+            socket.on('allWingoRoomsUpdate', (data) => {
+                console.log('All rooms update received:', data);
+            });
+
+            socket.on('error', (error) => {
+                console.error('WebSocket error:', error);
+                alert('WebSocket error: ' + error.message);
+            });
+        }
+
+        // Update connection status
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connectionStatus');
+            statusElement.textContent = connected ? 'Connected' : 'Disconnected';
+            statusElement.className = `connection-status ${connected ? 'connected' : 'disconnected'}`;
+        }
+
+        // Load exposure data
+        async function loadExposureData() {
+            try {
+                const response = await fetch(`/admin/exposure/wingo/${currentDuration}/current`, {
+                    headers: {
+                        'Authorization': `Bearer ${adminToken}`
+                    }
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    updateExposureDisplay(result.data);
+                } else {
+                    console.error('Failed to load exposure data:', result.message);
+                }
+            } catch (error) {
+                console.error('Error loading exposure data:', error);
+            }
+        }
+
+        // Update exposure display
+        function updateExposureDisplay(data) {
+            const { exposures, analysis, periodInfo } = data;
+            
+            // Update room title
+            document.getElementById('roomTitle').textContent = 
+                `Wingo ${currentDuration}s - Live Exposure (${periodInfo?.timeRemaining || 0}s remaining)`;
+            
+            // Update summary
+            document.getElementById('totalExposure').textContent = `₹${analysis.totalExposure}`;
+            document.getElementById('optimalNumber').textContent = analysis.optimalNumber;
+            document.getElementById('totalUsers').textContent = analysis.betDistribution.uniqueUsers;
+            document.getElementById('totalBets').textContent = analysis.betDistribution.totalBets;
+            
+            // Update numbers grid
+            const numbersGrid = document.getElementById('numbersGrid');
+            numbersGrid.innerHTML = '';
+            
+            for (let num = 0; num <= 9; num++) {
+                const exposure = parseFloat(exposures[`number:${num}`] || 0);
+                const isOptimal = analysis.optimalNumber === num;
+                const isZeroExposure = analysis.zeroExposureNumbers.includes(num);
+                const isHighExposure = exposure > 100;
+                
+                const card = document.createElement('div');
+                card.className = 'number-card';
+                
+                if (isOptimal) card.classList.add('optimal');
+                else if (isZeroExposure) card.classList.add('zero-exposure');
+                else if (isHighExposure) card.classList.add('high-exposure');
+                
+                card.innerHTML = `
+                    <div class="status-indicator ${isOptimal ? 'optimal' : isZeroExposure ? 'zero' : 'high'}"></div>
+                    <div class="number-value">${num}</div>
+                    <div class="exposure-value">₹${exposure.toFixed(2)}</div>
+                    <div class="exposure-status">
+                        ${isOptimal ? 'OPTIMAL' : isZeroExposure ? 'ZERO' : 'EXPOSED'}
+                    </div>
+                `;
+                
+                numbersGrid.appendChild(card);
+            }
+        }
+
+        // Room tab switching
+        document.getElementById('roomTabs').addEventListener('click', (e) => {
+            if (e.target.classList.contains('room-tab')) {
+                // Update active tab
+                document.querySelectorAll('.room-tab').forEach(tab => tab.classList.remove('active'));
+                e.target.classList.add('active');
+                
+                // Update current duration
+                currentDuration = parseInt(e.target.dataset.duration);
+                
+                // Load data for new room
+                loadExposureData();
+            }
+        });
+
+        // Auto-refresh every 5 seconds
+        setInterval(() => {
+            if (adminToken) {
+                loadExposureData();
+            }
+        }, 5000);
+    </script>
+
+    <script src="/socket.io/socket.io.js"></script>
+</body>
+</html> 

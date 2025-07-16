@@ -1,6 +1,6 @@
 const axios = require('axios');
 const { sequelize } = require('../config/db');
-const { paymentConfig } = require('../config/paymentConfig');
+const paymentConfig = require('../config/paymentConfig');
 const { generateSignature } = require('../utils/generateSignature');
 const User = require('../models/User');
 const WalletRecharge = require('../models/WalletRecharge');
@@ -11,6 +11,7 @@ const referralService = require('./referralService');
 const otpService = require('./otpService');
 const { processWePayTransfer } = require('./wePayService');
 const { processMxPayTransfer } = require('./mxPayService');
+const { createPpayProWithdrawalOrder } = require('./ppayProService');
 const { Op } = require('sequelize');
 
 /**
@@ -158,7 +159,7 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
     }
     
     // Create order ID
-    const orderId = `PO${Date.now()}${userId}`;
+    const orderId = `WD${Date.now()}${userId}`;
     
     // Create withdrawal record
     const withdrawal = await WalletWithdrawal.create({
@@ -167,7 +168,8 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
       status: 'pending',
       payment_gateway_id: 1, // Default gateway ID
       withdrawal_type: withdrawalType,
-      transaction_id: orderId,
+      order_id: orderId, // Always set order_id
+      transaction_id: orderId, // Set transaction_id to orderId initially
       bank_account_id: bankAccountId
     }, { transaction: t });
     
@@ -252,17 +254,22 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
     // }
     
     // Get the admin record
-    const adminRecord = await WithdrawalAdmin.findOne({
+    let adminRecord = await WithdrawalAdmin.findOne({
       where: { withdrawal_id: withdrawalId },
       transaction: t
     });
     
     if (!adminRecord) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "Admin record not found for this withdrawal"
-      };
+      // If no admin record exists, create one now
+      adminRecord = await WithdrawalAdmin.create({
+        withdrawal_id: withdrawalId,
+        admin_id: adminId,
+        status: 'pending',
+        notes: '',
+        created_at: new Date(),
+        updated_at: new Date(),
+        processed_at: null
+      }, { transaction: t });
     }
     
     // Update admin record
@@ -277,23 +284,27 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
     // Update withdrawal record based on admin action
     if (action === 'approve') {
       // Use the selected gateway
-      const gateway = selectedGateway || 'OKPAY'; // Default to OKPAY
-      
-      // Update withdrawal status to approved
+      const gatewayCode = selectedGateway || 'OKPAY'; // Default to OKPAY
+      // Find the gateway record
+      const PaymentGateway = require('../models/PaymentGateway');
+      const gatewayRecord = await PaymentGateway.findOne({ where: { code: gatewayCode } });
+      if (!gatewayRecord) {
+        await t.rollback();
+        return {
+          success: false,
+          message: 'Selected payment gateway not found.'
+        };
+      }
+      // Update withdrawal with correct gateway and gateway_id
       await withdrawal.update({
         status: 'approved',
-        payment_gateway_id: 1 // Default gateway ID
+        payment_gateway_id: gatewayRecord.gateway_id
       }, { transaction: t });
-      
-      await t.commit();
-      
-      // After committing the DB transaction, process the actual transfer
+      // After updating, process the actual transfer (do NOT commit yet)
       let transferResult;
       const host = process.env.API_BASE_URL || 'http://localhost:8000';
       let notifyUrl = '';
-      
-      // Set the appropriate callback URL based on gateway
-      switch (gateway) {
+      switch (gatewayCode) {
         case 'WEPAY':
           notifyUrl = `${host}/api/payments/wepay/payout-callback`;
           transferResult = await processWePayTransfer(withdrawalId, notifyUrl);
@@ -302,12 +313,118 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
           notifyUrl = `${host}/api/payments/mxpay/transfer-callback`;
           transferResult = await processMxPayTransfer(withdrawalId, notifyUrl);
           break;
-        default: // OKPAY
+        case 'GHPAY':
+          notifyUrl = `${host}/api/payments/ghpay/payout-callback`;
+          transferResult = await processGhPayWithdrawal(withdrawalId, notifyUrl);
+          break;
+        case 'WOWPAY':
+          notifyUrl = `${host}/api/payments/wowpay/payout-callback`;
+          transferResult = await createWowPayWithdrawalOrder(
+            withdrawal.user_id,
+            withdrawal.order_id,
+            {
+              amount: withdrawal.amount.toFixed(2),
+              trade_account: withdrawal.account_holder,
+              trade_number: withdrawal.account_number,
+              // Add more fields as needed from withdrawal/bank account
+            },
+            notifyUrl,
+            gatewayRecord.gateway_id
+          );
+          break;
+        case 'PPAYPRO':
+          notifyUrl = `${host}/api/payments/ppaypro/payout-callback`;
+          // Fetch bank account details like OKPAY
+          let ppayproBankAccount;
+          if (withdrawal.bank_account_id) {
+            ppayproBankAccount = await BankAccount.findOne({
+              where: {
+                id: withdrawal.bank_account_id,
+                user_id: withdrawal.user_id
+              }
+            });
+          } else {
+            ppayproBankAccount = await BankAccount.findOne({
+              where: {
+                user_id: withdrawal.user_id,
+                is_primary: true
+              }
+            });
+          }
+          if (!ppayproBankAccount) {
+            throw new Error('Bank account not found for withdrawal');
+          }
+          let accountEmail = ppayproBankAccount.account_email;
+          let accountPhone = ppayproBankAccount.account_phone;
+          if (!accountEmail) {
+            accountEmail = 'user@example.com';
+          }
+          if (!accountPhone) {
+            accountPhone = '9999999999';
+          }
+          const ppayproPayload = {
+            amount: parseInt(withdrawal.amount, 10),
+            entryType: withdrawal.withdrawal_type, // e.g., 'IMPS', 'UPI', etc.
+            accountNo: ppayproBankAccount.account_number,
+            accountCode: ppayproBankAccount.ifsc_code,
+            accountName: ppayproBankAccount.account_holder,
+            accountEmail: accountEmail,
+            accountPhone: accountPhone,
+            // Add more fields as needed from bank account
+          };
+          console.log('[PPAYPRO][Withdrawal] Payload:', ppayproPayload);
+          transferResult = await createPpayProWithdrawalOrder(
+            withdrawal.user_id,
+            withdrawal.order_id,
+            ppayproPayload,
+            notifyUrl,
+            gatewayRecord.gateway_id
+          );
+          break;
+        case 'SOLPAY':
+          notifyUrl = `${host}/api/payments/solpay/payout-callback`;
+          transferResult = await createSolPayWithdrawalOrder(
+            withdrawal.user_id,
+            withdrawal.order_id,
+            {
+              amount: withdrawal.amount,
+              name: withdrawal.account_holder,
+              bankName: withdrawal.bank_name,
+              bankAccount: withdrawal.account_number,
+              ifscCode: withdrawal.ifsc_code,
+              email: withdrawal.account_email,
+              phone: withdrawal.account_phone,
+              feeType: withdrawal.fee_type || '0',
+              description: withdrawal.remark || 'Withdrawal'
+            },
+            notifyUrl,
+            gatewayRecord.gateway_id
+          );
+          break;
+        case '101PAY':
+          notifyUrl = `${host}/api/payments/101pay/payout-callback`;
+          // Use the provided withdrawal type as channel code, fallback to 'bank' if not provided
+          let withdrawalChannelCode = withdrawal.withdrawal_type || 'bank';
+          transferResult = await create101PayWithdrawalOrder({
+            merchantOrderNo: withdrawal.order_id,
+            beneficiary: withdrawal.account_holder,
+            bankName: withdrawal.bank_name,
+            bankAccount: withdrawal.account_number,
+            ifsc: withdrawal.ifsc_code,
+            currency: 'inr',
+            channelCode: withdrawalChannelCode,
+            amount: withdrawal.amount,
+            address: withdrawal.remark || 'Withdrawal',
+            notifyUrl
+          });
+          break;
+        default: // OKPAY or any other
           notifyUrl = `${host}/api/payments/okpay/payout-callback`;
           transferResult = await processOkPayTransfer(withdrawalId, notifyUrl);
           break;
       }
-      
+      // Only commit after all above code has succeeded
+      await t.commit();
       return transferResult;
     } else {
       // Rejection - refund the user's wallet
@@ -346,7 +463,10 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
       };
     }
   } catch (error) {
-    await t.rollback();
+    // Only rollback if transaction is still active
+    if (t && !t.finished) {
+      await t.rollback();
+    }
     console.error("Error processing admin action:", error);
     
     return {
@@ -389,13 +509,27 @@ const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
     }
     
     // Get bank account details
-    const bankAccount = await BankAccount.findOne({
-      where: {
-        user_id: withdrawal.user_id,
-        is_primary: true
-      },
-      transaction: t
-    });
+    console.log('[DEBUG] Looking for bank account:', withdrawal.bank_account_id, withdrawal.user_id);
+    let bankAccount;
+    if (withdrawal.bank_account_id) {
+      bankAccount = await BankAccount.findOne({
+        where: {
+          id: withdrawal.bank_account_id,
+          user_id: withdrawal.user_id
+        },
+        transaction: t
+      });
+      console.log('[DEBUG] Bank account found:', bankAccount);
+    } else {
+      bankAccount = await BankAccount.findOne({
+        where: {
+          user_id: withdrawal.user_id,
+          is_primary: true
+        },
+        transaction: t
+      });
+      console.log('[DEBUG] Fallback to primary bank account:', bankAccount);
+    }
     
     if (!bankAccount) {
       await t.rollback();
@@ -414,18 +548,41 @@ const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
       account: bankAccount.account_number,
       userName: bankAccount.account_holder,
       money: parseInt(withdrawal.amount), // Must be integer
-      attach: `Withdrawal for user ${withdrawal.user_id}`,
+      attach: "Withdrawal for user " + withdrawal.user_id,
       notify_url: notifyUrl,
       reserve1: withdrawal.withdrawal_type === 'BANK' ? bankAccount.ifsc_code : '' // IFSC for BANK type
     };
     
+    // Log all request data for callback testing
+    console.log('[OKPAY][Withdrawal] Request Data:', JSON.stringify(requestData, null, 2));
+
+    // Log the string to be signed and the generated signature
+    const signatureString = (() => {
+      const qs = require('querystring');
+      const params = Object.keys(requestData)
+        .filter((key) => key !== 'sign' && requestData[key] !== '' && requestData[key] !== undefined)
+        .sort()
+        .reduce((acc, key) => {
+          acc[key] = requestData[key];
+          return acc;
+        }, {});
+      const queryString = qs.stringify(params);
+      return `${queryString}&key=${paymentConfig.key}`;
+    })();
+    const generatedSignature = generateSignature(requestData);
+    console.log('[OKPAY][Signature] String to sign:', signatureString);
+    console.log('[OKPAY][Signature] Generated signature:', generatedSignature);
+
     // Generate signature
-    requestData.sign = generateSignature(requestData);
+    requestData.sign = generatedSignature;
     
     // Call the payment gateway API
     const response = await axios.post(`${paymentConfig.host}/v1/Payout`, requestData, {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
     });
+    
+    // Log the full response from the gateway
+    console.log('[OKPAY][Withdrawal] Gateway Response:', JSON.stringify(response.data, null, 2));
     
     // Check API response
     if (response.data.code === 0) {
@@ -468,6 +625,8 @@ const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
  * @returns {Object} - Processing result
  */
 const processPayInCallback = async (callbackData) => {
+  // Log all received callback data for deposit
+  console.log('[OKPAY][Deposit Callback] Received Data:', JSON.stringify(callbackData, null, 2));
   // Extract callback data
   const {
       mchId,
@@ -615,6 +774,8 @@ const processPayInCallback = async (callbackData) => {
  * @returns {Object} - Processing result
  */
 const processPayOutCallback = async (callbackData) => {
+  // Log all received callback data for withdrawal
+  console.log('[OKPAY][Withdrawal Callback] Received Data:', JSON.stringify(callbackData, null, 2));
   // Extract callback data
   const {
     mchId,

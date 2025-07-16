@@ -1,4 +1,4 @@
-// config/spribeConfig.js - FIXED CONFIGURATION
+// config/spribeConfig.js - FIXED CONFIGURATION WITH ENVIRONMENT DETECTION
 
 require('dotenv').config();
 
@@ -46,7 +46,7 @@ const config = {
   defaultCurrency: 'USD',
   
   // Security Configuration
-  allowedIps: process.env.SPRIBE_ALLOWED_IPS ? process.env.SPRIBE_ALLOWED_IPS.split(',') : [],
+  allowedIPs: process.env.SPRIBE_ALLOWED_IPS ? process.env.SPRIBE_ALLOWED_IPS.split(',') : [],
   tokenExpiry: 4 * 60 * 60, // 4 hours in seconds
   
   // 🔥 ADDED: Game info URL for thumbnails
@@ -63,6 +63,20 @@ const config = {
     deposit: 'https://strike.atsproduct.in/api/spribe/deposit',
     rollback: 'https://strike.atsproduct.in/api/spribe/rollback'
   },
+  
+  // 🔥 ADDED: Environment detection for backward compatibility
+  isTestEnvironment: function() {
+    return this.apiBaseUrl.includes('dev-test') || 
+           this.apiBaseUrl.includes('test') ||
+           process.env.NODE_ENV === 'development' ||
+           process.env.NODE_ENV === 'test';
+  },
+  
+  // 🔥 ADDED: Security mode configuration
+  securityMode: process.env.SPRIBE_SECURITY_MODE || 'auto', // 'auto', 'strict', 'lenient'
+  
+  // 🔥 ADDED: Debug mode
+  debugMode: process.env.SPRIBE_DEBUG_MODE === 'true' || process.env.NODE_ENV === 'development'
 };
 
 // Validate required fields
@@ -86,7 +100,10 @@ console.log('📋 SPRIBE Configuration:', {
   defaultCurrency: config.defaultCurrency,
   tokenExpiry: config.tokenExpiry,
   enableDetailedLogging: config.enableDetailedLogging,
-  gameCount: config.availableGames.length
+  gameCount: config.availableGames.length,
+  isTestEnvironment: config.isTestEnvironment(),
+  securityMode: config.securityMode,
+  debugMode: config.debugMode
 });
 
 module.exports = config;

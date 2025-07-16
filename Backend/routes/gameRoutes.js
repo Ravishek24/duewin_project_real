@@ -15,7 +15,7 @@ const router = express.Router();
 
 // Get last result for a specific game and duration
 router.get('/:gameType/:duration/last-result', auth, async (req, res) => {
-  try {
+    try {
     const { gameType, duration } = req.params;
     
     // Validate game type
@@ -290,7 +290,7 @@ router.post('/:gameType/:duration/bet',
       const userId = req.user.user_id;
 
       // Validate required fields
-      if (!betType || !betValue || !betAmount || !periodId) {
+      if (!betType || betValue === undefined || !betAmount || !periodId) {
         return res.status(400).json({
           success: false,
           message: 'Missing required fields: betType, betValue, betAmount, periodId'
@@ -692,9 +692,11 @@ function validateBetTypeAndValue(gameType, betType, betValue) {
 
     case 'fiveD':
       const validFiveDConventions = {
-        'POSITION': (val) => /^[ABCDE]_[1-6]$/.test(val),
+        'POSITION': (val) => /^[ABCDE]_[0-9]$/.test(val), // Updated for 0-9 dice values
         'POSITION_SIZE': (val) => /^[ABCDE]_(big|small)$/.test(val),
         'POSITION_PARITY': (val) => /^[ABCDE]_(odd|even)$/.test(val),
+        'SUM_SIZE': (val) => /^(SUM_)?(big|small)$/.test(val),
+        'SUM_PARITY': (val) => /^(SUM_)?(odd|even)$/.test(val),
         'SUM': (val) => ['big', 'small', 'odd', 'even'].includes(String(val || '').toLowerCase())
       };
       

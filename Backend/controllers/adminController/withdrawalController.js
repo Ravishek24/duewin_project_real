@@ -99,18 +99,16 @@ const {
         });
       }
 
-      if (action === 'approve' && !gateway) {
-        return res.status(400).json({
-          success: false,
-          message: 'Payment gateway is required when approving a withdrawal'
-        });
-      }
-
-      if (action === 'approve' && !['OKPAY', 'WEPAY', 'MXPAY'].includes(gateway)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid payment gateway. Must be one of: OKPAY, WEPAY, MXPAY'
-        });
+      if (action === 'approve') {
+        // Check if the gateway exists in the table and supports withdrawals
+        const PaymentGateway = require('../../models/PaymentGateway');
+        const gatewayRecord = await PaymentGateway.findOne({ where: { code: gateway, is_active: true, supports_withdrawal: true } });
+        if (!gatewayRecord) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid payment gateway. Must be an active gateway that supports withdrawal.'
+          });
+        }
       }
       
       const result = await processWithdrawalAdminAction(

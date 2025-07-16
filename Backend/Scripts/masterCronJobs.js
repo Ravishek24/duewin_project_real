@@ -87,7 +87,7 @@ const autoRecordDailyAttendance = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         // Try to acquire lock (expires in 30 minutes)
-        const redis = require('../config/redis');
+        const { redis } = require('../config/redisConfig');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -185,7 +185,7 @@ const autoRecordDailyAttendance = async () => {
     } finally {
         // Release lock
         try {
-            const redis = require('../config/redis');
+            const { redis } = require('../config/redisConfig');
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -210,7 +210,7 @@ const processAttendanceBonuses = async () => {
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
-        const redis = require('../config/redis');
+        const { redis } = require('../config/redisConfig');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -329,7 +329,7 @@ const processAttendanceBonuses = async () => {
     } finally {
         // Release lock
         try {
-            const redis = require('../config/redis');
+            const { redis } = require('../config/redisConfig');
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -354,7 +354,7 @@ const processDailyRebates = async () => {
         // Initialize database if needed
         await getDatabaseInstances();
         
-        const redis = require('../config/redis');
+        const { redis } = require('../config/redisConfig');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -379,7 +379,7 @@ const processDailyRebates = async () => {
     } finally {
         // Release lock
         try {
-            const redis = require('../config/redis');
+            const { redis } = require('../config/redisConfig');
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -509,7 +509,7 @@ const processRebateCommissionType = async (gameType) => {
 
                 if (level1Commission > 0) {
                     // Add deduplication key to prevent conflicts
-                    const redis = require('../config/redis');
+                    const { redis } = require('../config/redisConfig');
                     const deduplicationKey = `rebate_commission:${referrer.user_id}:${batchId}:${userId}`;
                     const isAlreadyProcessed = await redis.get(deduplicationKey);
                     
@@ -594,7 +594,7 @@ const processVipLevelUpRewards = async () => {
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
-        const redis = require('../config/redis');
+        const { redis } = require('../config/redisConfig');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -705,7 +705,7 @@ const processVipLevelUpRewards = async () => {
     } finally {
         // Release lock
         try {
-            const redis = require('../config/redis');
+            const { redis } = require('../config/redisConfig');
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -730,7 +730,7 @@ const processMonthlyVipRewards = async () => {
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
-        const redis = require('../config/redis');
+        const { redis } = require('../config/redisConfig');
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -873,7 +873,7 @@ const processMonthlyVipRewards = async () => {
     } finally {
         // Release lock
         try {
-            const redis = require('../config/redis');
+            const { redis } = require('../config/redisConfig');
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);

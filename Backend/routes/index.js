@@ -29,6 +29,7 @@ const gameMoveTransactionRoutes = require('./gameMoveTransactionRoutes');
 const transactionReportRoutes = require('./transactionReportRoutes');
 const giftRoutes = require('./giftRoutes');
 const ppayproRoutes = require('./ppayproRoutes'); // Add PPayPro routes
+const { paymentCallbackWhitelist } = require('../middleware/paymentCallbackWhitelist');
 
 // Import middleware
 const { auth, isAdmin } = require('../middlewares/authMiddleware');
@@ -123,12 +124,18 @@ router.use('/websocket-debug', websocketDebugRoutes);
 router.use('/wallet', auth, walletRoutes);
 router.use('/announcements', announcementRoutes); // Public route for latest announcements
 
-// Payment callback routes (public, no auth required)
+// Payment callback routes (public, no auth required) - MUST BE BEFORE PROTECTED ROUTES
 router.use('/payments/ppaypro', ppayproRoutes); // PPayPro callback routes
+
+// OKPAY callback routes (public, no auth required)
+const { okPayCallbackController, payOutCallbackController } = require('../controllers/paymentController');
+
+// OKPAY callback routes
+router.post('/payments/okpay/payin-callback', paymentCallbackWhitelist, okPayCallbackController);
+router.post('/payments/okpay/payout-callback', paymentCallbackWhitelist, payOutCallbackController);
 
 // L Pay callback routes (public, no auth required)
 const { lPayDepositCallbackController, lPayWithdrawalCallbackController } = require('../controllers/paymentController');
-const { paymentCallbackWhitelist } = require('../middleware/paymentCallbackWhitelist');
 
 // L Pay callback routes
 router.post('/payments/lpay/payin-callback', paymentCallbackWhitelist, lPayDepositCallbackController);
@@ -157,7 +164,7 @@ router.use('/bank-accounts', auth, bankRoutes);
 router.use('/usdt-accounts', auth, usdtRoutes);
 router.use('/games', auth, gameRoutes);
 router.use('/internal', auth, internalGameRoutes);
-router.use('/payments', auth, paymentRoutes);
+router.use('/payments', auth, paymentRoutes); // This now only handles protected payment routes
 router.use('/payment-gateways', auth, paymentGatewayRoutes);
 router.use('/feedback', auth, feedbackRoutes); // Protected feedback routes
 router.use('/vault', auth, vaultRoutes); // Add vault routes

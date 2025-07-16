@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { initializeWorkerModels } = require('./workerInit');
 const queueConnections = require('../config/queueConfig');
 

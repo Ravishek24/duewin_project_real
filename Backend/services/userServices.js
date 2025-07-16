@@ -365,7 +365,7 @@ const login = async (email, password, ipAddress) => {
 const getUserProfile = async (userId) => {
     try {
         const user = await User.findByPk(userId, {
-            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'created_at', 'profile_picture_id', 'vip_level']
+            attributes: ['user_id', 'email', 'phone_no', 'user_name', 'wallet_balance', 'referring_code', 'is_phone_verified', 'created_at', 'profile_picture_id', 'vip_level', 'last_login_at', 'has_received_first_bonus']
         });
 
         if (!user) {

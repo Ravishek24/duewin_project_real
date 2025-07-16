@@ -24,6 +24,16 @@ const TRON_API_URL = 'https://apilist.tronscanapi.com/api';
 const HASH_COLLECTION_KEY = 'tron:hash_collection';
 const MIN_HASHES_PER_DIGIT = 1;
 
+// NEW: Duration-specific hash collection keys
+const getDurationHashKey = (duration) => {
+    return `tron:hash_collection:${duration}`;
+};
+
+// NEW: Get all duration keys for TRX_WIX
+const getTrxWixDurations = () => {
+    return [30, 60, 180, 300]; // All TRX_WIX durations
+};
+
 /**
  * Extract a digit from a hash to use for result verification
  * @param {string} hash - The hash to process
@@ -74,13 +84,17 @@ const fetchNewHashes = async (limit = 100) => {
 };
 
 /**
- * Update hash collection in Redis
+ * Update hash collection in Redis for a specific duration
  * @param {Array} hashes - New hashes to add
+ * @param {number} duration - Duration in seconds (30, 60, 180, 300)
  */
-const updateHashCollection = async (hashes) => {
+const updateHashCollection = async (hashes, duration = null) => {
     try {
+        // Use duration-specific key if duration is provided
+        const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
+        
         // Get current collection
-        let collection = await redisClient.get(HASH_COLLECTION_KEY);
+        let collection = await redisClient.get(collectionKey);
         collection = collection ? JSON.parse(collection) : {};
 
         // Initialize collection for all digits if not present
@@ -107,10 +121,10 @@ const updateHashCollection = async (hashes) => {
         }
 
         // Store updated collection
-        await redisClient.set(HASH_COLLECTION_KEY, JSON.stringify(collection));
+        await redisClient.set(collectionKey, JSON.stringify(collection));
         
         // Set expiry time on the hash collection to prevent memory leaks (7 days)
-        await redisClient.expire(HASH_COLLECTION_KEY, 7 * 24 * 60 * 60);
+        await redisClient.expire(collectionKey, 7 * 24 * 60 * 60);
         
         // Log collection status
         const status = Object.keys(collection).map(digit => ({
@@ -118,7 +132,8 @@ const updateHashCollection = async (hashes) => {
             count: collection[digit].length
         }));
         
-        logger.info(`Hash collection updated (${newHashesAdded} new hashes added)`, { status });
+        const durationLabel = duration ? `for duration ${duration}s` : 'global';
+        logger.info(`Hash collection updated ${durationLabel} (${newHashesAdded} new hashes added)`, { status, duration });
     } catch (error) {
         logger.error('Error updating hash collection:', error);
         throw error;
@@ -126,12 +141,14 @@ const updateHashCollection = async (hashes) => {
 };
 
 /**
- * Check if we have enough hashes for each digit
+ * Check if we have enough hashes for each digit for a specific duration
+ * @param {number} duration - Duration in seconds (30, 60, 180, 300)
  * @returns {Promise<boolean>}
  */
-const hasEnoughHashes = async () => {
+const hasEnoughHashes = async (duration = null) => {
     try {
-        const collection = await redisClient.get(HASH_COLLECTION_KEY);
+        const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
+        const collection = await redisClient.get(collectionKey);
         if (!collection) return false;
 
         const parsed = JSON.parse(collection);
@@ -151,25 +168,27 @@ const hasEnoughHashes = async () => {
 };
 
 /**
- * Get a hash for a specific result
+ * Get a hash for a specific result and duration
  * @param {number} result - The result digit (0-9)
+ * @param {number} duration - Duration in seconds (30, 60, 180, 300)
  * @returns {Promise<{hash: string, link: string}>}
  */
-const getHashForResult = async (result) => {
+const getHashForResult = async (result, duration = null) => {
     try {
-        const collection = await redisClient.get(HASH_COLLECTION_KEY);
+        const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
+        const collection = await redisClient.get(collectionKey);
         if (!collection) {
-            throw new Error('No hash collection available');
+            throw new Error(`No hash collection available for duration ${duration}`);
         }
 
         const parsed = JSON.parse(collection);
         if (!parsed[result] || parsed[result].length === 0) {
-            throw new Error(`No hash available for result ${result}`);
+            throw new Error(`No hash available for result ${result} in duration ${duration}`);
         }
 
         // Get and remove the first hash for this result
         const hash = parsed[result].shift();
-        await redisClient.set(HASH_COLLECTION_KEY, JSON.stringify(parsed));
+        await redisClient.set(collectionKey, JSON.stringify(parsed));
 
         return {
             hash,
@@ -182,19 +201,27 @@ const getHashForResult = async (result) => {
 };
 
 /**
- * Start hash collection process
+ * Start hash collection process for all TRX_WIX durations
  */
 const startHashCollection = async () => {
     try {
-        while (!(await hasEnoughHashes())) {
-            const newHashes = await fetchNewHashes();
-            await updateHashCollection(newHashes);
+        const durations = getTrxWixDurations();
+        
+        for (const duration of durations) {
+            logger.info(`Starting hash collection for TRX_WIX duration ${duration}s`);
             
-            // Wait before next fetch to avoid rate limiting
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            while (!(await hasEnoughHashes(duration))) {
+                const newHashes = await fetchNewHashes();
+                await updateHashCollection(newHashes, duration);
+                
+                // Wait before next fetch to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            logger.info(`Hash collection completed for duration ${duration}s`);
         }
         
-        logger.info('Hash collection completed');
+        logger.info('Hash collection completed for all TRX_WIX durations');
     } catch (error) {
         logger.error('Error in hash collection process:', error);
         throw error;
@@ -202,20 +229,24 @@ const startHashCollection = async () => {
 };
 
 /**
- * Get result with verification hash
- * @param {number} result - The calculated result
- * @returns {Promise<{result: number, hash: string, link: string}>}
+ * Get result with verification hash for a specific duration
+ * @param {Object} result - The calculated result object
+ * @param {number} duration - Duration in seconds (30, 60, 180, 300)
+ * @returns {Promise<{result: Object, hash: string, link: string}>}
  */
-const getResultWithVerification = async (result) => {
+const getResultWithVerification = async (result, duration = null) => {
     try {
-        // Check if we have hashes first
-        const hasHashes = await hasEnoughHashes();
+        // Extract the number from the result object
+        const resultNumber = result.number || result;
+        
+        // Check if we have hashes for this duration
+        const hasHashes = await hasEnoughHashes(duration);
         
         if (hasHashes) {
-            // Normal flow - get hash from collection
-            const { hash, link } = await getHashForResult(result);
+            // Normal flow - get hash from duration-specific collection
+            const { hash, link } = await getHashForResult(resultNumber, duration);
             
-            // Start collecting new hashes in the background
+            // Start collecting new hashes in the background for all durations
             startHashCollection().catch(error => {
                 logger.error('Background hash collection failed:', error);
             });
@@ -227,7 +258,7 @@ const getResultWithVerification = async (result) => {
             };
         } else {
             // Fallback - create a random hash if no collection available
-            logger.warn('No hash collection available, using fallback hash generation');
+            logger.warn(`No hash collection available for duration ${duration}, using fallback hash generation`);
             
             // Generate a random hash-like string
             const randomHash = Array(64).fill(0).map(() => 
@@ -262,5 +293,7 @@ const getResultWithVerification = async (result) => {
 module.exports = {
     startHashCollection,
     getResultWithVerification,
-    hasEnoughHashes
+    hasEnoughHashes,
+    getTrxWixDurations,
+    getDurationHashKey
 }; 

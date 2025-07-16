@@ -829,6 +829,9 @@ const initiateDeposit = async (req, res) => {
         const { amount, payment_method, currency = 'INR' } = req.body;
         const userId = req.user.user_id;
 
+        // Log deposit initiation attempt
+        console.log('[DEPOSIT INITIATION] User:', userId, 'Amount:', amount, 'Payment Method:', payment_method, 'Currency:', currency, 'Time:', new Date().toISOString());
+
         if (!amount || parseFloat(amount) <= 0) {
             return res.status(400).json({
                 success: false,
@@ -1119,7 +1122,8 @@ const wowPayWithdrawalCallbackController = async (req, res) => {
 // Add PPAYPRO deposit callback handler
 const ppayProDepositCallbackController = async (req, res) => {
   try {
-    console.log('PPayPro Deposit Callback Received:', req.body);
+    // Log all received callback data for deposit
+    console.log('[PPAYPRO][Deposit Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const result = await processPpayProDepositCallback(req.body);
     if (result.success) {
       return res.status(200).send('success');
@@ -1138,7 +1142,8 @@ const ppayProDepositCallbackController = async (req, res) => {
 // Add PPAYPRO withdrawal callback handler
 const ppayProWithdrawalCallbackController = async (req, res) => {
   try {
-    console.log('PPayPro Withdrawal Callback Received:', req.body);
+    // Log all received callback data for withdrawal
+    console.log('[PPAYPRO][Withdrawal Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const result = await processPpayProWithdrawalCallback(req.body);
     if (result.success) {
       return res.status(200).send('success');
@@ -1214,6 +1219,8 @@ const wowPayDepositCallbackController = async (req, res) => {
 // Add LPay deposit callback controller
 const lPayDepositCallbackController = async (req, res) => {
   try {
+    // Log all received callback data for deposit
+    console.log('[LPAY][Deposit Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const result = await processLPayCollectionCallback(req.body);
     if (result.success) {
       return res.status(200).send('ok');
@@ -1228,6 +1235,8 @@ const lPayDepositCallbackController = async (req, res) => {
 // Add LPay withdrawal callback controller
 const lPayWithdrawalCallbackController = async (req, res) => {
   try {
+    // Log all received callback data for withdrawal
+    console.log('[LPAY][Withdrawal Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const result = await processLPayWithdrawalCallback(req.body);
     if (result.success) {
       return res.status(200).send('ok');
@@ -1242,7 +1251,8 @@ const lPayWithdrawalCallbackController = async (req, res) => {
 // Add USDT WG Pay deposit callback controller
 const usdtwgPayDepositCallbackController = async (req, res) => {
   try {
-    console.log('USDT WG Pay Deposit Callback Received:', req.body);
+    // Log all received callback data for deposit
+    console.log('[USDTWG][Deposit Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const result = await processUsdtwgPayDepositCallback(req);
     if (result.success) {
       return res.status(200).send('success');
@@ -1261,7 +1271,8 @@ const usdtwgPayDepositCallbackController = async (req, res) => {
 // Add USDT WG Pay withdrawal callback controller
 const usdtwgPayWithdrawalCallbackController = async (req, res) => {
   try {
-    console.log('USDT WG Pay Withdrawal Callback Received:', req.body);
+    // Log all received callback data for withdrawal
+    console.log('[USDTWG][Withdrawal Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const result = await processUsdtwgPayWithdrawalCallback(req);
     if (result.success) {
       return res.status(200).send('success');
@@ -1280,7 +1291,8 @@ const usdtwgPayWithdrawalCallbackController = async (req, res) => {
 // 101pay deposit callback handler
 const pay101PayinCallbackController = async (req, res) => {
   try {
-    console.log('🔔 101pay Deposit Callback Received:', req.body);
+    // Log all received callback data for deposit
+    console.log('[101PAY][Deposit Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const { merchantOrderNo, orderNo, currency, amount, status, fee, proof, upi, createdTime, updatedTime } = req.body;
     
     console.log('🔍 Looking for order:', merchantOrderNo);
@@ -1349,6 +1361,8 @@ const pay101PayinCallbackController = async (req, res) => {
 // 101pay withdrawal callback handler
 const pay101PayoutCallbackController = async (req, res) => {
   try {
+    // Log all received callback data for withdrawal
+    console.log('[101PAY][Withdrawal Callback] Received Data:', JSON.stringify(req.body, null, 2));
     const { merchantOrderNo, orderNo, currency, amount, status, fee, proof, createdTime, updatedTime } = req.body;
     // Find the withdrawal order
     const withdrawal = await WalletWithdrawal.findOne({ where: { transaction_id: merchantOrderNo } });

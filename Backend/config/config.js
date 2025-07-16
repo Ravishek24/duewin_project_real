@@ -35,7 +35,7 @@ const config = {
             evict: 60000
         },
         retry: {
-            max: 3,
+            max: 5,            // Increased retry attempts
             match: [
                 /SequelizeConnectionError/,
                 /SequelizeConnectionRefusedError/,
@@ -43,6 +43,7 @@ const config = {
                 /SequelizeHostNotReachableError/,
                 /SequelizeInvalidConnectionError/,
                 /SequelizeConnectionTimedOutError/,
+                /ConnectionAcquireTimeoutError/,  // Added specific timeout error
                 /TimeoutError/
             ]
         },
@@ -69,7 +70,7 @@ const config = {
             evict: 60000
         },
         retry: {
-            max: 3,
+            max: 5,            // Increased retry attempts
             match: [
                 /SequelizeConnectionError/,
                 /SequelizeConnectionRefusedError/,
@@ -77,6 +78,7 @@ const config = {
                 /SequelizeHostNotReachableError/,
                 /SequelizeInvalidConnectionError/,
                 /SequelizeConnectionTimedOutError/,
+                /ConnectionAcquireTimeoutError/,  // Added specific timeout error
                 /TimeoutError/
             ]
         },

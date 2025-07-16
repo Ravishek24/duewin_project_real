@@ -1,111 +1,149 @@
+// utils/spribeSignatureUtils.js - SPRIBE SIGNATURE VALIDATION WITH BACKWARD COMPATIBILITY
+
 const crypto = require('crypto');
+const spribeConfig = require('../config/spribeConfig');
 
 /**
- * Create SPRIBE signature according to their documentation
- * @param {number} timestamp - Unix timestamp in seconds
- * @param {string} path - Request path with query parameters
- * @param {Object|string} body - Request body (for POST/PUT requests)
- * @param {string} clientSecret - SPRIBE client secret
- * @returns {string} - Generated signature
- */
-const createSpribeSignature = (timestamp, path, body, clientSecret) => {
-  try {
-    // Create HMAC instance with SHA256
-    const hmac = crypto.createHmac('sha256', clientSecret);
-    
-    // Convert timestamp to string
-    const timestampStr = timestamp.toString();
-    
-    // Convert body to string if it's an object
-    const bodyStr = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : '';
-    
-    // Update HMAC in exact order: timestamp + path + body
-    hmac.update(timestampStr);
-    hmac.update(path);
-    if (bodyStr) {
-      hmac.update(bodyStr);
-    }
-    
-    // Get hex digest
-    return hmac.digest('hex');
-  } catch (error) {
-    console.error('Error creating SPRIBE signature:', error);
-    throw new Error(`Error creating SPRIBE signature: ${error.message}`);
-  }
-};
-
-/**
- * Validate SPRIBE request signature
- * @param {string} clientId - Client ID from header
- * @param {string} timestamp - Timestamp from header
- * @param {string} signature - Signature from header
- * @param {string} path - Request path with query parameters
- * @param {Object|string} body - Request body
- * @param {string} clientSecret - SPRIBE client secret
+ * Validate Spribe request signature with backward compatibility
+ * @param {Object} req - Express request object
  * @returns {boolean} - True if signature is valid
  */
-const validateSpribeSignature = (clientId, timestamp, signature, path, body, clientSecret) => {
+const validateSpribeSignature = (req) => {
   try {
-    console.log('Validating SPRIBE signature:', {
-      clientId,
-      timestamp,
-      path,
-      body,
-      receivedSignature: signature
-    });
-
-    // Validate timestamp (within 5 minutes)
-    const now = Math.floor(Date.now() / 1000);
-    const requestTime = parseInt(timestamp);
+    console.log('🔐 ===== VALIDATING SPRIBE SIGNATURE =====');
     
-    if (Math.abs(now - requestTime) > 300) { // 5 minutes expiration
-      console.error('SPRIBE request timestamp expired:', {
-        requestTime,
-        currentTime: now,
-        difference: Math.abs(now - requestTime)
+    // Get required headers
+    const clientId = req.headers['x-spribe-client-id'];
+    const timestamp = req.headers['x-spribe-client-ts'];
+    const signature = req.headers['x-spribe-client-signature'];
+    
+    console.log('📦 Headers received:', {
+      clientId: clientId ? clientId.substring(0, 8) + '...' : null,
+      timestamp,
+      signature: signature ? signature.substring(0, 16) + '...' : null
+    });
+    
+    // 🔥 BACKWARD COMPATIBILITY: If headers are missing, check if this is a test environment
+    if (!clientId || !timestamp || !signature) {
+      console.log('⚠️ Missing security headers - checking for test environment compatibility');
+      
+      // Check if this is a test environment using the new config method
+      const isTestEnvironment = spribeConfig.isTestEnvironment();
+      
+      if (isTestEnvironment) {
+        console.log('✅ Test environment detected - allowing request without headers');
+        console.log('🔍 Environment details:', {
+          apiBaseUrl: spribeConfig.apiBaseUrl,
+          nodeEnv: process.env.NODE_ENV,
+          securityMode: spribeConfig.securityMode
+        });
+        return true; // Allow in test environment
+      }
+      
+      console.error('❌ Missing required headers in production environment:', {
+        clientId: !!clientId,
+        timestamp: !!timestamp,
+        signature: !!signature
       });
       return false;
     }
     
-    // Generate expected signature
-    const expectedSignature = createSpribeSignature(requestTime, path, body, clientSecret);
+    // 🔥 STRICT VALIDATION: If headers are present, validate them properly
+    console.log('🔍 Validating headers in strict mode');
     
-    console.log('SPRIBE signature comparison:', {
-      received: signature,
-      expected: expectedSignature,
-      matches: signature.toLowerCase() === expectedSignature.toLowerCase()
+    // Validate client ID
+    if (clientId !== spribeConfig.clientId) {
+      console.error('❌ Invalid client ID:', {
+        received: clientId,
+        expected: spribeConfig.clientId
+      });
+      return false;
+    }
+    
+    // Validate timestamp (should be within 5 minutes)
+    const currentTime = Math.floor(Date.now() / 1000);
+    const requestTime = parseInt(timestamp);
+    const timeDiff = Math.abs(currentTime - requestTime);
+    
+    if (timeDiff > 300) { // 5 minutes
+      console.error('❌ Timestamp expired:', {
+        currentTime,
+        requestTime,
+        timeDiff
+      });
+      return false;
+    }
+    
+    // Create signature string according to Spribe docs
+    const path = req.path; // e.g., "/auth", "/withdraw"
+    const body = req.body ? JSON.stringify(req.body) : '';
+    
+    // Concatenate: timestamp + path + body
+    const signatureString = timestamp + path + body;
+    
+    console.log('🔍 Signature components:', {
+      timestamp,
+      path,
+      bodyLength: body.length,
+      signatureStringLength: signatureString.length
     });
     
-    // Compare signatures (case-insensitive as per SPRIBE docs)
-    return signature.toLowerCase() === expectedSignature.toLowerCase();
+    // Generate expected signature
+    const expectedSignature = crypto
+      .createHmac('sha256', spribeConfig.clientSecret)
+      .update(signatureString)
+      .digest('hex');
+    
+    console.log('🔍 Signature comparison:', {
+      received: signature.substring(0, 16) + '...',
+      expected: expectedSignature.substring(0, 16) + '...',
+      match: signature.toLowerCase() === expectedSignature.toLowerCase()
+    });
+    
+    // Compare signatures (case-insensitive)
+    const isValid = signature.toLowerCase() === expectedSignature.toLowerCase();
+    
+    if (isValid) {
+      console.log('✅ Signature validation successful');
+    } else {
+      console.error('❌ Signature validation failed');
+    }
+    
+    return isValid;
+    
   } catch (error) {
-    console.error('Error validating SPRIBE signature:', error);
+    console.error('❌ Signature validation error:', error);
     return false;
   }
 };
 
 /**
- * Generate SPRIBE security headers for outgoing requests
- * @param {string} requestUri - Request URI with query parameters
- * @param {Object|string} requestBody - Request body (for POST/PUT requests)
- * @param {string} clientId - SPRIBE client ID
- * @param {string} clientSecret - SPRIBE client secret
- * @returns {Object} - Security headers object
+ * Generate Spribe headers for outgoing requests
+ * @param {string} path - Request path
+ * @param {Object|string} body - Request body
+ * @param {string} clientId - Client ID
+ * @param {string} clientSecret - Client secret
+ * @returns {Object} - Headers object
  */
-const generateSpribeHeaders = (requestUri, requestBody, clientId, clientSecret) => {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signature = createSpribeSignature(timestamp, requestUri, requestBody, clientSecret);
+const generateSpribeHeaders = (path, body, clientId, clientSecret) => {
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const bodyString = body ? JSON.stringify(body) : '';
+  const signatureString = timestamp + path + bodyString;
+  
+  const signature = crypto
+    .createHmac('sha256', clientSecret)
+    .update(signatureString)
+    .digest('hex');
   
   return {
     'X-Spribe-Client-ID': clientId,
-    'X-Spribe-Client-TS': timestamp.toString(),
+    'X-Spribe-Client-TS': timestamp,
     'X-Spribe-Client-Signature': signature,
     'Content-Type': 'application/json; charset=utf-8'
   };
 };
 
 module.exports = {
-  createSpribeSignature,
   validateSpribeSignature,
   generateSpribeHeaders
 }; 

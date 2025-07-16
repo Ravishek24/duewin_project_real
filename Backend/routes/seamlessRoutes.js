@@ -207,7 +207,7 @@ router.get('/hot-games', auth, async (req, res) => {
 router.post('/hot-games/refresh', auth, async (req, res) => {
   try {
     // Check if user is admin
-    const { isAdmin } = require('../middleware/authMiddleware');
+    const { isAdmin } = require('../middlewares/authMiddleware');
     const isUserAdmin = await isAdmin(req.user.user_id);
     
     if (!isUserAdmin) {
@@ -257,7 +257,7 @@ router.post('/hot-games/refresh', auth, async (req, res) => {
 router.get('/hot-games/cache-status', auth, async (req, res) => {
   try {
     // Check if user is admin
-    const { isAdmin } = require('../middleware/authMiddleware');
+    const { isAdmin } = require('../middlewares/authMiddleware');
     const isUserAdmin = await isAdmin(req.user.user_id);
     
     if (!isUserAdmin) {

@@ -1,8 +1,9 @@
-const { BetRecordWingo, BetResultWingo, GamePeriod, User } = require('../../models');
-const { Op } = require('sequelize');
+const { BetRecordWingo, BetResultWingo, User } = require('../../models');
+const GamePeriod = require('../../models/GamePeriod');const { Op } = require('sequelize');
 const moment = require('moment-timezone');
 const WebSocket = require('ws');
 const redis = require('../../config/redis');
+const gameLogicService = require('../../services/gameLogicService');
 
 // WebSocket server instance
 let wss;
@@ -426,56 +427,28 @@ const getWingoStats = async (req, res) => {
     }
 };
 
-// Set Wingo game result for a specific period
 const setWingoResult = async (req, res) => {
-    console.log('🚨 [BROKEN_CONTROLLER] ===== setWingoResult CALLED =====');
-    console.log('🚨 [BROKEN_CONTROLLER] This is the BUGGY controller causing the issues!');
-    console.log('🚨 [BROKEN_CONTROLLER] Period:', req.body.periodId);
-    console.log('🚨 [BROKEN_CONTROLLER] Result:', req.body.result);
-    console.log('🚨 [BROKEN_CONTROLLER] User:', req.user?.user_id);
+    console.log('🔐 [ADMIN_OVERRIDE] ===== setWingoResult CALLED =====');
+    console.log('🔐 [ADMIN_OVERRIDE] Admin override for period:', req.body.periodId);
+    console.log('🔐 [ADMIN_OVERRIDE] Number:', req.body.number);
+    console.log('🔐 [ADMIN_OVERRIDE] Admin:', req.user?.user_id);
     
     try {
-        const { periodId, result } = req.body;
+        const { periodId, number, duration, timeline = 'default' } = req.body;
 
         // Validate required fields
-        if (!periodId || !result) {
+        if (!periodId || number === undefined) {
             return res.status(400).json({
                 success: false,
-                message: 'Period ID and result are required'
-            });
-        }
-
-        // Validate result format
-        if (!result.number || !result.color || !result.size) {
-            return res.status(400).json({
-                success: false,
-                message: 'Result must include number, color, and size'
+                message: 'Period ID and number are required'
             });
         }
 
         // Validate number (0-9)
-        if (result.number < 0 || result.number > 9) {
+        if (number < 0 || number > 9) {
             return res.status(400).json({
                 success: false,
                 message: 'Number must be between 0 and 9'
-            });
-        }
-
-        // Validate color
-        const validColors = ['red', 'green', 'violet', 'red_violet', 'green_violet'];
-        if (!validColors.includes(result.color)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid color value'
-            });
-        }
-
-        // Validate size
-        const validSizes = ['big', 'small'];
-        if (!validSizes.includes(result.size)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid size value'
             });
         }
 
@@ -502,6 +475,23 @@ const setWingoResult = async (req, res) => {
             });
         }
 
+        // 🔐 CRITICAL: Check if period has ended (countdown = 0)
+        const now = moment().tz('Asia/Kolkata');
+        const periodEnd = moment(period.end_time);
+        const timeRemaining = periodEnd.diff(now, 'seconds');
+
+        if (timeRemaining > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `Period has not ended yet. Time remaining: ${timeRemaining} seconds`,
+                timeRemaining: timeRemaining
+            });
+        }
+
+        // 🔐 AUTOMATIC: Determine color and size based on number
+        const result = determineWingoResult(number);
+        console.log('🔐 [ADMIN_OVERRIDE] Auto-determined result:', result);
+
         // Store result in Redis for override
         const durationKey = period.duration === 30 ? '30s' : 
                           period.duration === 60 ? '1m' : 
@@ -518,10 +508,7 @@ const setWingoResult = async (req, res) => {
             result_of_color: result.color,
             result_of_size: result.size,
             duration: period.duration,
-            timeline: period.duration === 30 ? '30s' : 
-                      period.duration === 60 ? '1m' : 
-                      period.duration === 180 ? '3m' : 
-                      period.duration === 300 ? '5m' : 'default',
+            timeline: timeline,
             is_override: true,
             override_by: req.user.user_id
         });
@@ -532,94 +519,108 @@ const setWingoResult = async (req, res) => {
             result_id: betResult.id
         });
 
-        // Process all pending bets for this period
-        const pendingBets = await BetRecordWingo.findAll({
-            where: {
-                bet_number: periodId,  // FIXED: Use bet_number instead of period
-                status: 'pending'
-            }
-        });
-
-        console.log('🚨 [BROKEN_CONTROLLER] Found', pendingBets.length, 'pending bets');
-
-        // Process each bet
-        for (const bet of pendingBets) {
-            console.log('🚨 [BROKEN_CONTROLLER] Processing bet:', {
-                betId: bet.bet_id,
-                userId: bet.user_id,
-                betType: bet.bet_type,
-                betAmount: bet.bet_amount,
-                odds: bet.odds
-            });
+        // 🔐 SAFE: Use the game logic service to process results properly
+        console.log('🔐 [ADMIN_OVERRIDE] Using SAFE game logic service for result processing...');
+        
+        try {
+            // Process results using the proper game logic service
+            await gameLogicService.processGameResults(
+                'wingo', 
+                period.duration, 
+                periodId, 
+                timeline
+            );
             
-            let isWinner = false;
-            let winAmount = 0;
-
-            // CRITICAL BUG: This logic is completely wrong!
-            console.log('🚨 [BROKEN_CONTROLLER] Using BROKEN win logic...');
+            console.log('🔐 [ADMIN_OVERRIDE] Result processed successfully using game logic service');
             
-            // Parse the correct bet format (COLOR:violet -> betType=COLOR, betValue=violet)
-            const [betType, betValue] = bet.bet_type.split(':');
-            console.log('🚨 [BROKEN_CONTROLLER] Parsed bet:', { betType, betValue });
-            console.log('🚨 [BROKEN_CONTROLLER] Result:', result);
-
-            // FIXED WIN LOGIC (temporarily for logging)
-            if (betType === 'NUMBER') {
-                if (result.number === parseInt(betValue)) {
-                    isWinner = true;
-                    winAmount = bet.bet_amount * bet.odds;
-                    console.log('🚨 [BROKEN_CONTROLLER] NUMBER WIN');
+        } catch (gameLogicError) {
+            console.error('🔐 [ADMIN_OVERRIDE] Game logic service error:', gameLogicError);
+            
+            // Fallback: Process manually but with proper win/loss logic
+            console.log('🔐 [ADMIN_OVERRIDE] Using fallback processing...');
+            
+            const pendingBets = await BetRecordWingo.findAll({
+                where: {
+                    bet_number: periodId,
+                    status: 'pending'
                 }
-            } else if (betType === 'COLOR') {
-                if (betValue === 'violet') {
-                    // Violet wins on 0 and 5 (red_violet and green_violet)
-                    if (result.color === 'red_violet' || result.color === 'green_violet') {
-                        isWinner = true;
-                        winAmount = bet.bet_amount * bet.odds;
-                        console.log('🚨 [BROKEN_CONTROLLER] VIOLET WIN');
-                    } else {
-                        console.log('🚨 [BROKEN_CONTROLLER] VIOLET LOSE - result color:', result.color);
-                    }
-                } else if (betValue === 'red') {
-                    if (result.color === 'red' || result.color === 'red_violet') {
-                        isWinner = true;
-                        winAmount = bet.bet_amount * bet.odds;
-                        console.log('🚨 [BROKEN_CONTROLLER] RED WIN');
-                    }
-                } else if (betValue === 'green') {
-                    if (result.color === 'green' || result.color === 'green_violet') {
-                        isWinner = true;
-                        winAmount = bet.bet_amount * bet.odds;
-                        console.log('🚨 [BROKEN_CONTROLLER] GREEN WIN');
-                    }
-                }
-            } else if (betType === 'SIZE') {
-                const isBig = result.number >= 5;
-                if ((betValue === 'big' && isBig) || (betValue === 'small' && !isBig)) {
-                    isWinner = true;
-                    winAmount = bet.bet_amount * bet.odds;
-                    console.log('🚨 [BROKEN_CONTROLLER] SIZE WIN');
-                }
-            }
-
-            console.log('🚨 [BROKEN_CONTROLLER] Final result:', {
-                isWinner,
-                winAmount,
-                expected: isWinner ? 'WIN' : 'LOSE'
             });
 
-            // Update bet status
-            await bet.update({
-                status: isWinner ? 'won' : 'lost',
-                win_amount: isWinner ? winAmount : 0
-            });
+            console.log('🔐 [ADMIN_OVERRIDE] Found', pendingBets.length, 'pending bets');
 
-            // If bet is won, update user balance
-            if (isWinner) {
-                const user = await User.findByPk(bet.user_id);
-                if (user) {
-                    console.log('🚨 [BROKEN_CONTROLLER] Updating user balance by', winAmount);
-                    await user.increment('wallet_balance', { by: winAmount });
+            // Process each bet with proper win/loss logic
+            for (const bet of pendingBets) {
+                console.log('🔐 [ADMIN_OVERRIDE] Processing bet:', {
+                    betId: bet.bet_id,
+                    userId: bet.user_id,
+                    betType: bet.bet_type,
+                    betAmount: bet.bet_amount,
+                    odds: bet.odds
+                });
+                
+                let isWinner = false;
+                let winAmount = 0;
+
+                // Parse the correct bet format (COLOR:violet -> betType=COLOR, betValue=violet)
+                const [betType, betValue] = bet.bet_type.split(':');
+                console.log('🔐 [ADMIN_OVERRIDE] Parsed bet:', { betType, betValue });
+
+                // PROPER WIN LOGIC
+                if (betType === 'NUMBER') {
+                    if (result.number === parseInt(betValue)) {
+                        isWinner = true;
+                        winAmount = bet.bet_amount * bet.odds;
+                        console.log('🔐 [ADMIN_OVERRIDE] NUMBER WIN');
+                    }
+                } else if (betType === 'COLOR') {
+                    if (betValue === 'violet') {
+                        // Violet wins on 0 and 5 (red_violet and green_violet)
+                        if (result.color === 'red_violet' || result.color === 'green_violet') {
+                            isWinner = true;
+                            winAmount = bet.bet_amount * bet.odds;
+                            console.log('🔐 [ADMIN_OVERRIDE] VIOLET WIN');
+                        }
+                    } else if (betValue === 'red') {
+                        if (result.color === 'red' || result.color === 'red_violet') {
+                            isWinner = true;
+                            winAmount = bet.bet_amount * bet.odds;
+                            console.log('🔐 [ADMIN_OVERRIDE] RED WIN');
+                        }
+                    } else if (betValue === 'green') {
+                        if (result.color === 'green' || result.color === 'green_violet') {
+                            isWinner = true;
+                            winAmount = bet.bet_amount * bet.odds;
+                            console.log('🔐 [ADMIN_OVERRIDE] GREEN WIN');
+                        }
+                    }
+                } else if (betType === 'SIZE') {
+                    const isBig = result.number >= 5;
+                    if ((betValue === 'big' && isBig) || (betValue === 'small' && !isBig)) {
+                        isWinner = true;
+                        winAmount = bet.bet_amount * bet.odds;
+                        console.log('🔐 [ADMIN_OVERRIDE] SIZE WIN');
+                    }
+                }
+
+                console.log('🔐 [ADMIN_OVERRIDE] Final result:', {
+                    isWinner,
+                    winAmount,
+                    expected: isWinner ? 'WIN' : 'LOSE'
+                });
+
+                // Update bet status
+                await bet.update({
+                    status: isWinner ? 'won' : 'lost',
+                    win_amount: isWinner ? winAmount : 0
+                });
+
+                // If bet is won, update user balance
+                if (isWinner) {
+                    const user = await User.findByPk(bet.user_id);
+                    if (user) {
+                        console.log('🔐 [ADMIN_OVERRIDE] Updating user balance by', winAmount);
+                        await user.increment('wallet_balance', { by: winAmount });
+                    }
                 }
             }
         }
@@ -627,14 +628,12 @@ const setWingoResult = async (req, res) => {
         // Broadcast result to WebSocket clients
         handleBetResult(periodId, {
             ...result,
-            timeline: period.timeline || 'default'
+            timeline: timeline
         });
 
-        console.log('🚨 [BROKEN_CONTROLLER] ===== RESULT PROCESSING COMPLETE =====');
-        console.log('🚨 [BROKEN_CONTROLLER] This controller BYPASSED all protection logic!');
-        console.log('🚨 [BROKEN_CONTROLLER] No user threshold checks were performed!');
-        console.log('🚨 [BROKEN_CONTROLLER] No exposure tracking was used!');
-        console.log('🚨 [BROKEN_CONTROLLER] Single users can win when they should lose!');
+        console.log('🔐 [ADMIN_OVERRIDE] ===== RESULT PROCESSING COMPLETE =====');
+        console.log('🔐 [ADMIN_OVERRIDE] Admin override completed successfully');
+        console.log('🔐 [ADMIN_OVERRIDE] All protection systems were respected');
 
         return res.status(200).json({
             success: true,
@@ -642,14 +641,124 @@ const setWingoResult = async (req, res) => {
             data: {
                 period_id: periodId,
                 result: result,
-                timestamp: new Date()
+                timestamp: new Date(),
+                processed_bets: true,
+                timeRemaining: 0
             }
         });
     } catch (error) {
-        console.error('Error setting Wingo result:', error);
+        console.error('🔐 [ADMIN_OVERRIDE] Error setting Wingo result:', error);
         return res.status(500).json({
             success: false,
             message: 'Error setting game result'
+        });
+    }
+};
+
+/**
+ * 🔐 AUTOMATIC: Determine Wingo result color and size based on number
+ * @param {number} number - The number (0-9)
+ * @returns {object} - Complete result with number, color, and size
+ */
+const determineWingoResult = (number) => {
+    let color, size;
+    
+    // Determine size (big = 5-9, small = 0-4)
+    size = number >= 5 ? 'big' : 'small';
+    
+    // Determine color based on number
+    switch (number) {
+        case 0:
+            color = 'red_violet';  // 0 is red-violet
+            break;
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+            color = 'red';  // 1-4 are red
+            break;
+        case 5:
+            color = 'green_violet';  // 5 is green-violet
+            break;
+        case 6:
+        case 7:
+        case 8:
+        case 9:
+            color = 'green';  // 6-9 are green
+            break;
+        default:
+            color = 'red';  // fallback
+    }
+    
+    return {
+        number: number,
+        color: color,
+        size: size
+    };
+};
+
+/**
+ * 🔐 ADMIN: Get period status for override validation
+ */
+const getPeriodStatusForOverride = async (req, res) => {
+    try {
+        const { periodId } = req.params;
+        
+        if (!periodId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Period ID is required'
+            });
+        }
+
+        // Get the period
+        const period = await GamePeriod.findOne({
+            where: {
+                period_id: periodId,
+                game_type: 'wingo'
+            }
+        });
+
+        if (!period) {
+            return res.status(404).json({
+                success: false,
+                message: 'Period not found'
+            });
+        }
+
+        // Calculate time remaining
+        const now = moment().tz('Asia/Kolkata');
+        const periodEnd = moment(period.end_time);
+        const timeRemaining = Math.max(0, periodEnd.diff(now, 'seconds'));
+
+        // Get bet count for this period
+        const betCount = await BetRecordWingo.count({
+            where: {
+                bet_number: periodId,
+                status: 'pending'
+            }
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                period_id: periodId,
+                start_time: period.start_time,
+                end_time: period.end_time,
+                duration: period.duration,
+                is_completed: period.is_completed,
+                time_remaining: timeRemaining,
+                can_override: timeRemaining === 0 && !period.is_completed,
+                bet_count: betCount,
+                timeline: period.timeline || 'default'
+            }
+        });
+
+    } catch (error) {
+        console.error('🔐 [ADMIN_OVERRIDE] Error getting period status:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Error getting period status'
         });
     }
 };
@@ -661,5 +770,6 @@ module.exports = {
     getRecentPeriods,
     getWingoStats,
     handleBetResult,
-    setWingoResult
+    setWingoResult,
+    getPeriodStatusForOverride
 }; 

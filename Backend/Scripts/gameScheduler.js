@@ -26,6 +26,10 @@ const schedulerProcessingLocks = new Set();
 // FIXED: Track processed periods to prevent duplicates
 const processedPeriods = new Set(); // Key: gameType_duration_periodId
 
+// FIXED: Database connection health monitoring
+let dbHealthCheckInterval = null;
+let lastDbHealthCheck = Date.now();
+
 // FIXED: Duration-based game configs only
 const GAME_CONFIGS = {
     'wingo': [30, 60, 180, 300],     // 4 rooms: wingo_30, wingo_60, wingo_180, wingo_300
@@ -69,6 +73,51 @@ const calculatePeriodEndTime = (periodId, duration) => {
         console.error('Error calculating period end time:', error);
         throw error;
     }
+};
+
+/**
+ * FIXED: Database connection health check
+ */
+const checkDatabaseHealth = async () => {
+    try {
+        if (!sequelize) {
+            console.warn('⚠️ Database connection not available');
+            return false;
+        }
+        
+        await sequelize.authenticate();
+        lastDbHealthCheck = Date.now();
+        return true;
+    } catch (error) {
+        console.error('❌ Database health check failed:', error.message);
+        return false;
+    }
+};
+
+/**
+ * FIXED: Start database health monitoring
+ */
+const startDatabaseHealthMonitoring = () => {
+    // Cleanup existing interval
+    if (dbHealthCheckInterval) {
+        clearInterval(dbHealthCheckInterval);
+        dbHealthCheckInterval = null;
+    }
+    
+    dbHealthCheckInterval = setInterval(async () => {
+        const isHealthy = await checkDatabaseHealth();
+        if (!isHealthy) {
+            console.warn('⚠️ Database health check failed, attempting reconnection...');
+            try {
+                await connectDB();
+                console.log('✅ Database reconnection successful');
+            } catch (error) {
+                console.error('❌ Database reconnection failed:', error.message);
+            }
+        }
+    }, 30000); // Check every 30 seconds
+    
+    console.log('🔍 Database health monitoring started');
 };
 
 /**
@@ -117,6 +166,9 @@ async function initialize() {
             });
         }
         console.log('✅ Redis connection verified for game scheduler');
+        
+        // Start database health monitoring
+        startDatabaseHealthMonitoring();
         
         console.log('✅ GAME SCHEDULER initialization completed - DURATION-BASED ONLY');
     } catch (error) {
@@ -332,6 +384,23 @@ const schedulerGameTick = async (gameType, duration) => {
             if (timeRemaining <= 5 && timeRemaining > 0 && currentPeriod.bettingOpen) {
                 await publishBettingClosed(gameType, duration, currentPeriod);
                 console.log(`🔒 SCHEDULER: Betting closed for ${currentPeriod.periodId} (${timeRemaining.toFixed(1)}s remaining)`);
+                
+                // 🚀 ENHANCED: Trigger 5D pre-calculation during bet freeze
+                if (gameType.toLowerCase() === '5d' || gameType.toLowerCase() === 'fived') {
+                    try {
+                        console.log(`⚡ [5D_PRE_CALC_TRIGGER] Starting pre-calculation for ${currentPeriod.periodId}`);
+                        
+                        const gameLogicService = require('../services/gameLogicService');
+                        await gameLogicService.preCalculate5DResult(
+                            gameType, duration, currentPeriod.periodId, 'default'
+                        );
+                        
+                        console.log(`✅ [5D_PRE_CALC_TRIGGER] Pre-calculation completed for ${currentPeriod.periodId}`);
+                    } catch (error) {
+                        console.error(`❌ [5D_PRE_CALC_TRIGGER] Error in pre-calculation:`, error.message);
+                        // Continue with normal processing even if pre-calculation fails
+                    }
+                }
             }
         }
         
@@ -575,12 +644,23 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
           
           // Process NEW results using gameLogicService with explicit timeline
           console.log(`🎲 SCHEDULER: About to call processGameResults...`);
-          const gameResult = await gameLogicService.processGameResults(
-              gameType, 
-              duration, 
-              periodId,
-              'default' // ✅ Always use default timeline to prevent confusion
-          );
+          
+          // Add connection timeout handling
+          const processWithTimeout = async () => {
+              return await gameLogicService.processGameResults(
+                  gameType, 
+                  duration, 
+                  periodId,
+                  'default' // ✅ Always use default timeline to prevent confusion
+              );
+          };
+          
+          const gameResult = await Promise.race([
+              processWithTimeout(),
+              new Promise((_, reject) => 
+                  setTimeout(() => reject(new Error('Database operation timeout')), 45000)
+              )
+          ]);
           console.log(`🎲 SCHEDULER: processGameResults returned:`, gameResult);
           
           // 🎯 WINGO-SPECIFIC LOGGING

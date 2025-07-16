@@ -143,7 +143,7 @@ class GameConfig extends Model {
                     number_pattern: {
                         all_different: 34.56, // 34.56x for three different numbers
                         straight: 8.64,       // 8.64x for three consecutive numbers
-                        two_different: 6.91   // 6.91x for two different numbers (one pair)
+                        two_different: 69.12   // 69.12x for two different numbers (one pair)
                     }
                 });
                 

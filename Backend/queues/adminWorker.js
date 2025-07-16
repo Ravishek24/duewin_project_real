@@ -3,13 +3,26 @@ const { getWorkerModels } = require('../workers/workerInit');
 const queueConnections = require('../config/queueConfig');
 
 const worker = new Worker('admin', async job => {
-  const { type, data } = job.data;
+  // Support both {type, data} and flat job.data
+  let type, data;
+  if (job.data && typeof job.data === 'object' && 'type' in job.data && 'data' in job.data) {
+    // { type, data }
+    type = job.data.type;
+    data = job.data.data;
+  } else if (job.data && typeof job.data === 'object' && 'type' in job.data) {
+    // Flat: { type, ... }
+    type = job.data.type;
+    data = job.data;
+  } else {
+    throw new Error('Invalid admin job data structure');
+  }
   
   try {
     const models = getWorkerModels(); // No async call - uses pre-initialized models
     
     switch (type) {
       case 'notifyAdmin':
+      case 'withdrawal_request': // Accept withdrawal_request as a valid type
         await processAdminNotification(data, models);
         console.log(`[BullMQ] Admin notification sent for ${data.type}`);
         break;
@@ -51,41 +64,11 @@ const worker = new Worker('admin', async job => {
 // Enhanced admin notification processing
 async function processAdminNotification(data, models) {
   const { type, userId, amount, withdrawalType, orderId } = data;
-  
   try {
-    // Get user details
-    const user = await models.User.findByPk(userId, {
-      attributes: ['user_id', 'user_name', 'phone_no', 'email', 'wallet_balance']
-    });
-    
-    if (!user) {
-      throw new Error(`User ${userId} not found`);
-    }
-    
-    // Create admin notification record
-    await models.AdminNotification.create({
-      type: type,
-      user_id: userId,
-      title: `New ${type.replace('_', ' ')}`,
-      message: `User ${user.user_name} (${user.phone_no}) has submitted a ${withdrawalType} withdrawal request for ₹${amount}`,
-      data: {
-        userId: userId,
-        userName: user.user_name,
-        phoneNo: user.phone_no,
-        amount: amount,
-        withdrawalType: withdrawalType,
-        orderId: orderId,
-        userBalance: user.wallet_balance
-      },
-      status: 'unread',
-      created_at: new Date()
-    });
-    
-    // Here you could also send email/SMS notifications to admins
-    console.log(`✅ Admin notification created for ${type}: ${orderId}`);
-    
+    // Only log to console, do not create DB notification
+    console.log(`[ADMIN NOTIFY] ${type}: User ${userId}, Amount ${amount}, Type ${withdrawalType}, Order ${orderId}`);
+    // Here you could also send email/SMS notifications to admins if needed
     return { success: true };
-    
   } catch (error) {
     console.error(`Failed to process admin notification:`, error);
     throw error;

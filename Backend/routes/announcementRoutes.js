@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const AnnouncementController = require('../controllers/AnnouncementController');
-const { isAdmin } = require('../middleware/authMiddleware');
+const { isAdmin } = require('../middlewares/authMiddleware');
 
 // Public routes
 router.get('/latest', AnnouncementController.getLatest);

@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const qs = require('querystring');
-const { paymentConfig } = require('../config/paymentConfig');
+const paymentConfig = require('../config/paymentConfig');
 
 /**
  * Generate MD5 signature for API request
@@ -8,21 +8,21 @@ const { paymentConfig } = require('../config/paymentConfig');
  * @returns {string} - The generated signature
  */
 const generateSignature = (params) => {
-  // Sort the parameters in lexicographic order
+  // Exclude 'sign' and empty/undefined values
   const sortedParams = Object.keys(params)
-    .filter((key) => params[key] !== "" && params[key] !== undefined) // Remove empty values
+    .filter((key) => key !== 'sign' && params[key] !== '' && params[key] !== undefined)
     .sort()
     .reduce((acc, key) => {
       acc[key] = params[key];
       return acc;
     }, {});
 
-  // Convert to URL key-value pair format
-  const queryString = qs.stringify(sortedParams);
-  
-  // Append private key
+  // Build the string with raw values (no URL encoding)
+  const queryString = Object.keys(sortedParams)
+    .map(key => `${key}=${sortedParams[key]}`)
+    .join('&');
   const stringToSign = `${queryString}&key=${paymentConfig.key}`;
-  
-  // Generate MD5 hash and return in lowercase
   return crypto.createHash('md5').update(stringToSign).digest('hex').toLowerCase();
 };
+
+module.exports = { generateSignature };

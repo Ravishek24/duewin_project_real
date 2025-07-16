@@ -618,9 +618,21 @@ const processDebitRequest = async (queryParams) => {
     console.log('💸 amount:', amount);
     console.log('💸 transaction_id:', transaction_id);
     
+    const betAmount = parseFloat(amount);
+    if (betAmount < 0) {
+      await t.rollback();
+      return {
+        status: '400',
+        msg: 'Invalid debit amount. Amount cannot be negative.'
+      };
+    }
+    
+    // CRITICAL FIX: Use the new findUserByRemoteId function
+    const user = await findUserByRemoteId(remote_id, t);
+
     // Check for duplicate transaction
     const existingTransaction = await SeamlessTransaction.findOne({
-      where: { provider_transaction_id: transaction_id, type: 'debit' },
+      where: { provider_transaction_id: transaction_id, user_id: user.user_id, type: 'debit' },
       transaction: t
     });
     
@@ -632,10 +644,6 @@ const processDebitRequest = async (queryParams) => {
         transactionId: existingTransaction.transaction_id
       };
     }
-    
-    // CRITICAL FIX: Use the new findUserByRemoteId function
-    const user = await findUserByRemoteId(remote_id, t);
-    const betAmount = parseFloat(amount);
     
     // Update wallet balance (debit = subtract amount)
     const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, -betAmount);
@@ -726,9 +734,21 @@ const processCreditRequest = async (queryParams) => {
     console.log('💰 amount:', amount);
     console.log('💰 transaction_id:', transaction_id);
     
+    const winAmount = parseFloat(amount);
+    if (winAmount < 0) {
+      await t.rollback();
+      return {
+        status: '400',
+        msg: 'Invalid credit amount. Amount cannot be negative.'
+      };
+    }
+    
+    // CRITICAL FIX: Use the new findUserByRemoteId function
+    const user = await findUserByRemoteId(remote_id, t);
+
     // Check for duplicate transaction
     const existingTransaction = await SeamlessTransaction.findOne({
-      where: { provider_transaction_id: transaction_id, type: 'credit' },
+      where: { provider_transaction_id: transaction_id, user_id: user.user_id, type: 'credit' },
       transaction: t
     });
     
@@ -740,10 +760,6 @@ const processCreditRequest = async (queryParams) => {
         transactionId: existingTransaction.transaction_id
       };
     }
-    
-    // CRITICAL FIX: Use the new findUserByRemoteId function
-    const user = await findUserByRemoteId(remote_id, t);
-    const winAmount = parseFloat(amount);
     
     // Update wallet balance (credit = add amount)
     const walletResult = await thirdPartyWalletService.updateBalance(user.user_id, winAmount);

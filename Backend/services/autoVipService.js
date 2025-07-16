@@ -246,7 +246,7 @@ const checkVipLevelUp = async (userId, currentExp, currentLevel, transaction) =>
                         user_id: userId,
                         level: newLevel,
                         reward_type: 'level_up',
-                        reward_amount: levelUpReward,
+                        amount: levelUpReward, // FIXED: was reward_amount
                         status: 'pending' // Will be processed by cron job
                     }, { transaction });
 
