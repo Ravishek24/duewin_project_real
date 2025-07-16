@@ -273,33 +273,40 @@ const endGameSession = async (sessionToken) => {
  */
 const findTransactionByProviderTxId = async (providerTxId) => {
   await initializeModels();
-  
   try {
+    console.log(`🔍 [FIND_TX] Searching for transaction with provider_tx_id: ${providerTxId}`);
     const transaction = await SpribeTransaction.findOne({
       where: { provider_tx_id: providerTxId },
       include: [
         {
           model: SpribeGameSession,
-          as: 'session'
+          as: 'session',
+          required: false // LEFT JOIN instead of INNER JOIN
         }
       ]
     });
-    
+    console.log(`🔍 [FIND_TX] Search result for ${providerTxId}:`, transaction ? {
+      id: transaction.id,
+      provider_tx_id: transaction.provider_tx_id,
+      type: transaction.type,
+      status: transaction.status,
+      user_id: transaction.user_id
+    } : 'NULL - NOT FOUND');
     if (!transaction) {
+      console.log(`❌ [FIND_TX] Transaction NOT FOUND for provider_tx_id: ${providerTxId}`);
       return {
         success: false,
         message: 'Transaction not found',
         transaction: null
       };
     }
-    
+    console.log(`✅ [FIND_TX] Transaction FOUND for provider_tx_id: ${providerTxId}`);
     return {
       success: true,
       transaction: transaction
     };
   } catch (error) {
-    console.error('❌ Error finding SPRIBE transaction:', error);
-    
+    console.error('❌ [FIND_TX] Error finding SPRIBE transaction:', error);
     return {
       success: false,
       message: 'Error finding transaction',
@@ -1385,14 +1392,12 @@ const handleRollback = async (rollbackData) => {
     if (!session) {
       return { code: 401, message: 'User token is invalid' };
     }
-    // Check if session is expired (4 hours from creation)
     const sessionAge = Date.now() - new Date(session.created_at || session.started_at).getTime();
-    const maxSessionAge = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+    const maxSessionAge = 4 * 60 * 60 * 1000;
     if (sessionAge > maxSessionAge) {
       await session.update({ status: 'expired' });
       return { code: 403, message: 'User token is expired' };
     }
-
     // 2. Check for duplicate rollback
     const existingTx = await findTransactionByProviderTxId(provider_tx_id);
     if (existingTx.success) {
@@ -1410,18 +1415,28 @@ const handleRollback = async (rollbackData) => {
         }
       };
     }
-
     // 3. Find original transaction to determine if it was a bet or win
+    console.log(`🔍 [ROLLBACK] Looking for original transaction: ${rollback_provider_tx_id}`);
     const originalTx = await findTransactionByProviderTxId(rollback_provider_tx_id);
-    if (!originalTx.success) {
-      // 🔥 FIXED: Handle case where original transaction doesn't exist
-      const dummyOperatorTxId = `RB_${Date.now()}_${uuidv4().substring(0, 8)}`;
+    console.log(`🔍 [ROLLBACK] Original transaction lookup result:`, {
+      success: originalTx.success,
+      found: !!originalTx.transaction,
+      message: originalTx.message
+    });
+    if (!originalTx.success || !originalTx.transaction) {
+      console.log(`❌ [ROLLBACK] Original transaction NOT FOUND for: ${rollback_provider_tx_id}`);
       return {
         code: 408,
         message: 'Transaction does not found',
         data: null
       };
     }
+    console.log(`✅ [ROLLBACK] Original transaction FOUND:`, {
+      id: originalTx.transaction.id,
+      type: originalTx.transaction.type,
+      provider_tx_id: originalTx.transaction.provider_tx_id,
+      status: originalTx.transaction.status
+    });
 
     // 4. Get currency from transaction
     const currency = originalTx.transaction.currency || 'USD';
