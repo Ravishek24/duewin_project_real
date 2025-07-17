@@ -12,6 +12,13 @@ const { getSequelizeInstance } = require('../config/db');
 const { initializeModels } = require('../models');
 const { recordVipExperience } = require('./autoVipService');
 
+const GAME_CONFIGS = {
+    wingo: [30, 60, 180, 300],
+    trx_wix: [30, 60, 180, 300],
+    fiveD: [60, 180, 300, 600],
+    k3: [60, 180, 300, 600]
+};
+
 // Import game logic functions for bet processing
 const {
     validateBetWithTimeline,
@@ -55,20 +62,6 @@ const gameLogicService = require('./gameLogicService');
 // Socket.io server instance
 let io = null;
 let models = null;
-
-// Game tick intervals storage
-const gameIntervals = new Map();
-let gameTicksStarted = false;
-
-// FIXED: No timeline multiplication - duration-based rooms only
-const GAME_CONFIGS = {
-    wingo: [30, 60, 180, 300],       // 4 rooms: wingo_30, wingo_60, wingo_180, wingo_300
-    trx_wix: [30, 60, 180, 300],     // 4 rooms: trx_wix_30, trx_wix_60, trx_wix_180, trx_wix_300
-    fiveD: [60, 180, 300, 600],      // 4 rooms: fiveD_60, fiveD_180, fiveD_300, fiveD_600
-    k3: [60, 180, 300, 600]          // 4 rooms: k3_60, k3_180, k3_300, k3_600
-};
-
-// Total: 16 rooms (4 games × 4 durations each)
 
 /**
  * NEW: Get room ID based on game type, duration, and timeline
@@ -764,9 +757,9 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
 /**
  * FIXED: Initialize WebSocket server with duration-based rooms only + BET FUNCTIONALITY
  */
-const initializeWebSocket = async (server, autoStartTicks = true) => {
+const initializeWebSocket = async (server) => {
     try {
-        console.log('🔄 Initializing WebSocket server with BET PLACEMENT - DURATION-BASED ROOMS ONLY...');
+        console.log('🔄 Initializing WebSocket server (PASSIVE MODE - no period management)...');
         
         // Wait for Redis connection
         if (!isConnected()) {
@@ -1422,328 +1415,14 @@ const initializeWebSocket = async (server, autoStartTicks = true) => {
             });
         });
 
-        if (autoStartTicks) {
-            setTimeout(() => {
-                startBroadcastTicks();
-            }, 1000);
-        }
+        // Setup Redis subscriptions to listen to scheduler events
+        setupRedisSubscriptions();
         
         console.log('✅ WebSocket server initialized with BET PLACEMENT - DURATION-BASED ROOMS ONLY');
         return io;
     } catch (error) {
         console.error('❌ Failed to initialize WebSocket server:', error);
         throw error;
-    }
-};
-
-/**
- * EXISTING: Start broadcast ticks for duration-based rooms only
- */
-const startBroadcastTicks = () => {
-    try {
-        console.log('🕐 Starting DURATION-BASED broadcast tick system...');
-        
-        // FIXED: Start broadcast ticks for each game/duration combination
-        Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
-            durations.forEach(duration => {
-                startBroadcastTicksForGame(gameType, duration);
-            });
-        });
-        
-        gameTicksStarted = true;
-        console.log('✅ DURATION-BASED broadcast tick system started');
-        
-        // Log active rooms
-        console.log('\n📋 ACTIVE ROOMS:');
-        Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
-            durations.forEach(duration => {
-                console.log(`   - ${gameType}_${duration}`);
-            });
-        });
-        console.log(`📊 Total rooms: ${Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0)}\n`);
-        
-    } catch (error) {
-        console.error('❌ Error starting broadcast ticks:', error);
-    }
-};
-
-/**
- * EXISTING: Start broadcast ticks for specific game/duration combination
- */
-const startBroadcastTicksForGame = (gameType, duration) => {
-    const key = `${gameType}_${duration}`;
-    
-    // Clear existing interval
-    if (gameIntervals.has(key)) {
-        clearInterval(gameIntervals.get(key));
-    }
-    
-    // Start broadcast interval - every 1 second
-    const intervalId = setInterval(async () => {
-        await broadcastTick(gameType, duration);
-    }, 1000);
-    
-    gameIntervals.set(key, intervalId);
-    console.log(`⏰ Started broadcast ticks for ${gameType} ${duration}s`);
-};
-
-
-const updateLiveExposure = async (gameType, duration, periodId, betData) => {
-    // Placeholder for future real-time exposure monitoring
-    // This will be implemented when you add admin monitoring features
-    try {
-        // Future implementation will broadcast exposure updates to admin users
-        // For now, exposure is handled in gameLogicService
-        return;
-    } catch (error) {
-        console.error('Error updating live exposure:', error);
-    }
-};
-
-
-const broadcastExposureUpdate = async (io, gameType, duration, periodId) => {
-    // Placeholder for future admin monitoring
-    try {
-        // Future implementation:
-        // 1. Get current exposure data from Redis
-        // 2. Calculate optimal result
-        // 3. Broadcast to admin room
-        
-        // const adminRoomId = `admin_${gameType}_${duration}`;
-        // const exposureData = await gameLogicService.getExposureSnapshot(gameType, duration, periodId);
-        // io.to(adminRoomId).emit('exposureUpdate', exposureData);
-        
-        return;
-    } catch (error) {
-        console.error('Error broadcasting exposure update:', error);
-    }
-};
-
-const getExposureSnapshot = async (gameType, duration, periodId) => {
-    // Placeholder for future admin monitoring
-    try {
-        // Future implementation will return:
-        // - Current exposure by outcome
-        // - Optimal result based on exposure
-        // - Potential payout amounts
-        // - Risk analysis
-        
-        return {
-            exposures: {},
-            totalExposure: 0,
-            optimalResult: null,
-            timestamp: new Date().toISOString()
-        };
-    } catch (error) {
-        console.error('Error getting exposure snapshot:', error);
-        return null;
-    }
-};
-
-const handleAdminConnection = async (socket) => {
-    // Placeholder for future admin monitoring
-    socket.on('subscribeToExposure', async (data) => {
-        const { gameType, duration } = data;
-        const adminRoomId = `admin_${gameType}_${duration}`;
-        
-        socket.join(adminRoomId);
-        console.log(`Admin ${socket.userId} subscribed to exposure updates for ${gameType} ${duration}s`);
-        
-        // Send initial exposure data
-        // const exposureData = await getExposureSnapshot(gameType, duration, currentPeriodId);
-        // socket.emit('exposureSnapshot', exposureData);
-    });
-    
-    socket.on('unsubscribeFromExposure', (data) => {
-        const { gameType, duration } = data;
-        const adminRoomId = `admin_${gameType}_${duration}`;
-        
-        socket.leave(adminRoomId);
-        console.log(`Admin ${socket.userId} unsubscribed from exposure updates`);
-    });
-};
-
-const getUserBetsForPeriod = async (userId, gameType, duration, periodId, timeline = 'default') => {
-    try {
-        const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const allBets = await redisClient.hgetall(betHashKey);
-        
-        const userBets = [];
-        for (const [betId, betJson] of Object.entries(allBets)) {
-            const bet = JSON.parse(betJson);
-            if (bet.userId === userId) {
-                userBets.push({
-                    betId,
-                    ...bet
-                });
-            }
-        }
-        
-        return userBets;
-    } catch (error) {
-        console.error('Error getting user bets:', error);
-        return [];
-    }
-};
-
-
-/**
- * EXISTING: Broadcast tick - Enhanced time validation to prevent race conditions
- */
-const broadcastTick = async (gameType, duration) => {
-    try {
-        if (!isConnected()) return;
-
-        const roomId = `${gameType}_${duration}`;
-        
-        // Get period info from Redis (populated by game scheduler process)
-        const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
-        
-        if (!periodInfo) {
-            // No period info available - request new period from scheduler
-            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
-                gameType,
-                duration,
-                roomId,
-                timestamp: new Date().toISOString()
-            }));
-            return;
-        }
-
-        const now = new Date();
-        
-        // Calculate actual time remaining using period end time
-        let actualTimeRemaining;
-        try {
-            const actualEndTime = calculatePeriodEndTime(periodInfo.periodId, duration);
-            actualTimeRemaining = Math.max(0, Math.ceil((actualEndTime - now) / 1000));
-        } catch (timeError) {
-            // Fallback to Redis time if calculation fails
-            const redisEndTime = new Date(periodInfo.endTime);
-            actualTimeRemaining = Math.max(0, Math.ceil((redisEndTime - now) / 1000));
-        }
-        
-        // Validate time remaining is within reasonable bounds
-        if (actualTimeRemaining < 0 || actualTimeRemaining > duration + 5) {
-            // Period has ended or is invalid, request new period from scheduler
-            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
-                gameType,
-                duration,
-                roomId,
-                currentPeriodId: periodInfo.periodId,
-                timestamp: now.toISOString()
-            }));
-            return;
-        }
-        
-        // CRITICAL: Betting closes at exactly 5 seconds remaining
-        const bettingOpen = actualTimeRemaining > 5;
-
-        // Broadcast time update to specific room
-        io.to(roomId).emit('timeUpdate', {
-            gameType,
-            duration,
-            periodId: periodInfo.periodId,
-            timeRemaining: actualTimeRemaining,
-            endTime: periodInfo.endTime,
-            bettingOpen,
-            bettingCloseTime: actualTimeRemaining <= 5,
-            timestamp: now.toISOString(),
-            roomId,
-            source: 'websocket_validated'
-        });
-
-        // Handle betting closure notification - only once at exactly 5 seconds
-        if (actualTimeRemaining === 5 && !bettingOpen) {
-            io.to(roomId).emit('bettingClosed', {
-                gameType, 
-                duration,
-                periodId: periodInfo.periodId,
-                message: `Betting closed for ${gameType} ${duration}s`,
-                timeRemaining: 5,
-                roomId,
-                timestamp: now.toISOString()
-            });
-            console.log(`📢 WebSocket: Betting closed for ${roomId} - ${periodInfo.periodId}`);
-        }
-
-        // If period is about to end (less than 1 second remaining), request next period
-        if (actualTimeRemaining <= 1) {
-            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
-                gameType,
-                duration,
-                roomId,
-                currentPeriodId: periodInfo.periodId,
-                timestamp: now.toISOString()
-            }));
-        }
-
-    } catch (error) {
-        // Suppress frequent errors to avoid log spam
-        const errorKey = `broadcast_error_${gameType}_${duration}`;
-        const lastError = global[errorKey] || 0;
-        if (Date.now() - lastError > 60000) { // Log once per minute
-            console.error(`❌ WebSocket broadcast tick error [${gameType}|${duration}s]:`, error.message);
-            global[errorKey] = Date.now();
-        }
-    }
-};
-
-/**
- * FIXED: Get period info from Redis (populated by game scheduler)
- */
-const getPeriodInfoFromRedis = async (gameType, duration, timeline = 'default') => {
-    try {
-        // FIXED: Use the correct Redis key format that matches game scheduler
-        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
-        const periodData = await pubsubRedis.get(periodKey);
-        
-        if (!periodData) {
-            return null;
-        }
-        
-        return JSON.parse(periodData);
-    } catch (error) {
-        console.error('Error getting period info from Redis:', error);
-        return null;
-    }
-};
-
-/**
- * FIXED: Send current period info from Redis with enhanced validation
- */
-const sendCurrentPeriodFromRedis = async (socket, gameType, duration, timeline = 'default') => {
-    try {
-        // FIXED: Use the correct Redis key format that matches game scheduler
-        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
-        const periodData = await pubsubRedis.get(periodKey);
-        
-        if (!periodData) {
-            console.log(`No period data in Redis for ${gameType} ${duration}s ${timeline}`);
-            return;
-        }
-        
-        const period = JSON.parse(periodData);
-        const now = Date.now();
-        const timeRemaining = Math.max(0, period.endTime - now);
-        
-        // Get total bets using new structure
-        const totalBets = await getTotalBetsForPeriod(gameType, duration, period.periodId, timeline);
-        
-        socket.emit('currentPeriod', {
-            gameType,
-            duration,
-            periodId: period.periodId,
-            timeRemaining: Math.floor(timeRemaining / 1000),
-            totalBets: totalBets.totalAmount,
-            betCount: totalBets.betCount,
-            uniqueUsers: totalBets.uniqueUsers,
-            timeline,
-            status: timeRemaining > 5000 ? 'betting' : 'closed'
-        });
-        
-    } catch (error) {
-        console.error('Error sending current period from Redis:', error);
     }
 };
 
@@ -2035,12 +1714,6 @@ const mapK3Bet = (betData) => {
 // Export WebSocket service - DURATION-BASED ROOMS WITH BET PLACEMENT
 module.exports = {
     initializeWebSocket,
-    
-    startGameTickSystem: () => {
-        console.log('🕐 Starting WebSocket DURATION-BASED broadcast system with BETTING...');
-        startBroadcastTicks();
-        setupRedisSubscriptions();
-    },
     
     // Broadcast functions for external use
     broadcastToGame: (gameType, duration, event, data) => {
@@ -2452,16 +2125,60 @@ module.exports = {
     mapClientBetType,
     mapClientBetValue,
     calculateOddsForBet,
-    startBroadcastTicks,
-    startBroadcastTicksForGame,
-    updateLiveExposure,
-    broadcastExposureUpdate,
-    getExposureSnapshot,
-    handleAdminConnection,
-    getUserBetsForPeriod,
-    broadcastTick,
-    getPeriodInfoFromRedis,
-    sendCurrentPeriodFromRedis,
     setupRedisSubscriptions,
     handleGameSchedulerEvent
+};
+
+// Ensure this function is defined before it is used in the joinGame handler
+const sendCurrentPeriodFromRedis = async (socket, gameType, duration, timeline = 'default') => {
+    try {
+        // The Redis key for the current period is:
+        //   game_scheduler:${gameType}:${duration}:current
+        // This is set by the scheduler process.
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        const periodData = await pubsubRedis.get(periodKey);
+
+        if (!periodData) {
+            console.log(`No period data in Redis for ${gameType} ${duration}s ${timeline}`);
+            socket.emit('currentPeriod', {
+                gameType,
+                duration,
+                periodId: null,
+                timeRemaining: null,
+                status: 'no_period',
+                message: 'No active period found'
+            });
+            return;
+        }
+
+        const period = JSON.parse(periodData);
+        const now = Date.now();
+        const timeRemaining = Math.max(0, new Date(period.endTime).getTime() - now);
+
+        // Get total bets using new structure
+        const totalBets = await getTotalBetsForPeriod(gameType, duration, period.periodId, timeline);
+
+        socket.emit('currentPeriod', {
+            gameType,
+            duration,
+            periodId: period.periodId, // <-- THIS IS THE CURRENT PERIOD ID
+            timeRemaining: Math.floor(timeRemaining / 1000),
+            totalBets: totalBets.totalAmount,
+            betCount: totalBets.betCount,
+            uniqueUsers: totalBets.uniqueUsers,
+            timeline,
+            status: timeRemaining > 5 ? 'betting' : 'closed',
+            endTime: period.endTime
+        });
+    } catch (error) {
+        console.error('Error sending current period from Redis:', error);
+        socket.emit('currentPeriod', {
+            gameType,
+            duration,
+            periodId: null,
+            timeRemaining: null,
+            status: 'error',
+            message: 'Error fetching period info'
+        });
+    }
 };

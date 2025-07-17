@@ -125,51 +125,43 @@ const startDatabaseHealthMonitoring = () => {
  */
 async function initialize() {
     try {
-        console.log('🔄 Starting GAME SCHEDULER initialization - DURATION-BASED ONLY...');
-        
+        console.log('DEBUG: initialize() - start');
         await connectDB();
+        console.log('DEBUG: initialize() - after connectDB');
         const { sequelize: seq } = require('../config/db');
         sequelize = seq;
-        
         await sequelize.authenticate();
-        console.log('✅ Database connected for game scheduler');
-        
+        console.log('DEBUG: initialize() - after sequelize.authenticate');
         const modelsModule = require('../models');
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
+        console.log('DEBUG: initialize() - after setTimeout');
         models = await modelsModule.initializeModels();
+        console.log('DEBUG: initialize() - after initializeModels');
         if (!models) {
             throw new Error('Models initialization failed - no models returned');
         }
-        
-        console.log('✅ Models initialized for game scheduler');
-        
         periodService = require('../services/periodService');
         gameLogicService = require('../services/gameLogicService');
-        
         await periodService.ensureModelsLoaded();
-        console.log('✅ Period service models verified');
-        
+        console.log('DEBUG: initialize() - after ensureModelsLoaded');
         try {
             tronHashService = require('../services/tronHashService');
             await tronHashService.startHashCollection();
-            console.log('✅ TRON hash collection initialized');
+            console.log('DEBUG: initialize() - after tronHashService.startHashCollection');
         } catch (error) {
             console.error('❌ Error initializing TRON hash collection:', error);
             console.log('⚠️ Game results will use fallback hash generation');
         }
-        
         if (!redis.status === 'ready') {
             console.log('🔄 Waiting for Redis to be ready...');
             await new Promise((resolve) => {
                 redis.on('ready', resolve);
             });
+            console.log('DEBUG: initialize() - after redis ready');
         }
         console.log('✅ Redis connection verified for game scheduler');
-        
-        // Start database health monitoring
         startDatabaseHealthMonitoring();
-        
+        console.log('DEBUG: initialize() - after startDatabaseHealthMonitoring');
         console.log('✅ GAME SCHEDULER initialization completed - DURATION-BASED ONLY');
     } catch (error) {
         console.error('❌ Failed to initialize game scheduler:', error);
@@ -182,15 +174,19 @@ async function initialize() {
  */
 const startSchedulerGameTicks = async () => {
     try {
+        console.log('DEBUG: Entered startSchedulerGameTicks');
         console.log('🕐 Starting SCHEDULER DURATION-BASED game tick system...');
         
         for (const [gameType, durations] of Object.entries(GAME_CONFIGS)) {
+            console.log(`DEBUG: Looping gameType=${gameType}, durations=${JSON.stringify(durations)}`);
             for (const duration of durations) {
                 try {
                     const key = `${gameType}_${duration}`;
+                    console.log(`DEBUG: Initializing scheduler for ${key}`);
                     
                     // FIXED: Get current period using duration-based calculation
                     const currentPeriod = await periodService.getCurrentPeriod(gameType, duration);
+                    console.log(`DEBUG: currentPeriod for ${key}:`, currentPeriod);
                     
                     if (currentPeriod) {
                         // FIXED: Validate that period hasn't ended
@@ -209,6 +205,7 @@ const startSchedulerGameTicks = async () => {
                             console.warn(`⚠️ Period ${currentPeriod.periodId} has already ended, getting next period`);
                             // Get next period
                             const nextPeriod = await getNextPeriod(gameType, duration, currentPeriod.periodId);
+                            console.log(`DEBUG: nextPeriod for ${key}:`, nextPeriod);
                             if (nextPeriod) {
                                 schedulerCurrentPeriods.set(key, nextPeriod);
                                 await storePeriodInRedisForWebSocket(gameType, duration, nextPeriod);
@@ -219,6 +216,7 @@ const startSchedulerGameTicks = async () => {
                     }
                     
                     startSchedulerTicksForGame(gameType, duration);
+                    console.log(`DEBUG: Called startSchedulerTicksForGame for ${key}`);
                     
                 } catch (error) {
                     console.error(`❌ Error initializing scheduler for [${gameType}|${duration}s]:`, error.message);
@@ -236,6 +234,7 @@ const startSchedulerGameTicks = async () => {
             });
         });
         console.log(`📊 Total combinations: ${Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0)}\n`);
+        console.log('DEBUG: Exiting startSchedulerGameTicks');
         
     } catch (error) {
         console.error('❌ Error starting scheduler game ticks:', error);
@@ -1167,10 +1166,11 @@ cron.schedule('0 * * * *', async () => {
  */
 const startGameScheduler = async () => {
     try {
+        console.log('DEBUG: Entered startGameScheduler');
         await initialize();
-        
-        // Start duration-based game tick system
+        console.log('DEBUG: Finished initialize, about to startSchedulerGameTicks');
         await startSchedulerGameTicks();
+        console.log('DEBUG: Finished startSchedulerGameTicks');
         
         console.log('✅ SCHEDULER: Game scheduler started successfully with TIME-BASED period management');
         

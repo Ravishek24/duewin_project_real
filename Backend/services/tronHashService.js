@@ -148,7 +148,9 @@ const updateHashCollection = async (hashes, duration = null) => {
 const hasEnoughHashes = async (duration = null) => {
     try {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
+        console.log(`DEBUG: hasEnoughHashes - getting key ${collectionKey}`);
         const collection = await redisClient.get(collectionKey);
+        console.log(`DEBUG: hasEnoughHashes - got value for ${collectionKey}:`, collection ? 'exists' : 'null');
         if (!collection) return false;
 
         const parsed = JSON.parse(collection);
@@ -163,6 +165,7 @@ const hasEnoughHashes = async (duration = null) => {
         return validDigits >= 7;
     } catch (error) {
         logger.error('Error checking hash collection:', error);
+        console.error('DEBUG: hasEnoughHashes - error', error);
         return false;
     }
 };
@@ -205,25 +208,35 @@ const getHashForResult = async (result, duration = null) => {
  */
 const startHashCollection = async () => {
     try {
+        console.log('DEBUG: tronHashService.startHashCollection - start');
         const durations = getTrxWixDurations();
         
         for (const duration of durations) {
             logger.info(`Starting hash collection for TRX_WIX duration ${duration}s`);
+            console.log(`DEBUG: startHashCollection - duration ${duration} - start`);
             
+            let loopCount = 0;
             while (!(await hasEnoughHashes(duration))) {
+                console.log(`DEBUG: startHashCollection - duration ${duration} - loop ${loopCount}`);
                 const newHashes = await fetchNewHashes();
+                console.log(`DEBUG: startHashCollection - duration ${duration} - fetched ${newHashes.length} hashes`);
                 await updateHashCollection(newHashes, duration);
+                console.log(`DEBUG: startHashCollection - duration ${duration} - updated hash collection`);
                 
                 // Wait before next fetch to avoid rate limiting
                 await new Promise(resolve => setTimeout(resolve, 1000));
+                loopCount++;
             }
             
             logger.info(`Hash collection completed for duration ${duration}s`);
+            console.log(`DEBUG: startHashCollection - duration ${duration} - completed`);
         }
         
         logger.info('Hash collection completed for all TRX_WIX durations');
+        console.log('DEBUG: tronHashService.startHashCollection - end');
     } catch (error) {
         logger.error('Error in hash collection process:', error);
+        console.error('DEBUG: tronHashService.startHashCollection - error', error);
         throw error;
     }
 };

@@ -1,0 +1,830 @@
+Looking at your code, I can see the issue. The problem is that both instances are trying to manage periods, but they're not properly coordinated. Here's what's happening:
+The Root Cause
+
+index.js runs the WebSocket service which has its own period management (broadcastTick function)
+start-scheduler.js runs the game scheduler which also manages periods
+Both are trying to read/write period data from Redis, but they're not synchronized
+
+Key Issues I Found
+1. Conflicting Period Management
+In websocketService.js, the broadcastTick function is requesting new periods:
+javascriptconst broadcastTick = async (gameType, duration) => {
+    // ...
+    if (!periodInfo) {
+        // This is conflicting with the scheduler!
+        await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
+            gameType,
+            duration,
+            roomId,
+            timestamp: new Date().toISOString()
+        }));
+        return;
+    }
+    // ...
+}
+2. Redis Key Mismatch
+The WebSocket service reads from:
+javascriptconst periodKey = `game_scheduler:${gameType}:${duration}:current`;
+But the scheduler writes to the same key, creating potential race conditions.
+3. No Proper Process Separation
+The WebSocket service should only broadcast, not manage periods.
+Solution
+Here's how to fix it:
+Step 1: Modify websocketService.js
+Remove period management from WebSocket service and make it purely reactive:
+
+// Backend/services/websocketService.js - FIXED: Remove period management from WebSocket
+
+const { Server } = require('socket.io');
+const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../config/constants');
+const redisHelper = require('../config/redis');
+const redisClient = redisHelper.getClient();
+const { redis: pubsubRedis, isConnected } = require('../config/redisConfig');
+const { logger } = require('../utils/logger');
+const moment = require('moment-timezone');
+const { getSequelizeInstance } = require('../config/db');
+const { initializeModels } = require('../models');
+
+// Import game logic functions for bet processing
+const {
+    validateBetWithTimeline,
+    processBet,
+    getUserGameBalance,
+    getUserBetHistory,
+    getEnhancedPeriodStatus,
+    ensureModelsInitialized,
+    storeBetInRedisWithTimeline
+} = require('./gameLogicService');
+
+// Socket.io server instance
+let io = null;
+let models = null;
+
+// REMOVED: Game tick intervals - WebSocket should not manage periods
+// const gameIntervals = new Map();
+// let gameTicksStarted = false;
+
+const GAME_CONFIGS = {
+    wingo: [30, 60, 180, 300],
+    trx_wix: [30, 60, 180, 300],
+    fiveD: [60, 180, 300, 600],
+    k3: [60, 180, 300, 600]
+};
+
+// Initialize WebSocket server
+const initializeWebSocket = async (server, autoStartTicks = true) => {
+    try {
+        console.log('🔄 Initializing WebSocket server (PASSIVE MODE - no period management)...');
+        
+        // Wait for Redis connection
+        if (!isConnected()) {
+            console.log('⏳ Waiting for Redis connection...');
+            await new Promise(resolve => {
+                const checkRedis = setInterval(() => {
+                    if (isConnected()) {
+                        clearInterval(checkRedis);
+                        resolve();
+                    }
+                }, 1000);
+            });
+        }
+        
+        // Initialize models
+        await ensureModelsInitialized();
+        models = await initializeWebSocketModels();
+        
+        io = new Server(server, {
+            cors: {
+                origin: [
+                    process.env.FRONTEND_URL || "*",
+                    "http://localhost:3000",
+                    "http://localhost:3001"
+                ],
+                methods: ["GET", "POST"],
+                credentials: true,
+                allowedHeaders: ['Content-Type', 'Authorization', "X-Auth-Token"]
+            },
+            pingTimeout: 60000,
+            pingInterval: 25000,
+            transports: ['websocket', 'polling']
+        });
+
+        // Setup authentication middleware
+        io.use(async (socket, next) => {
+            try {
+                const { authenticateWebSocket } = require('../middleware/websocketAuth');
+                await authenticateWebSocket(socket, next);
+            } catch (authError) {
+                console.error('❌ Auth middleware error:', authError);
+                next(new Error(`AUTH_ERROR: ${authError.message}`));
+            }
+        });
+
+        // Connection handling
+        io.on('connection', (socket) => {
+            console.log('🔗 New WebSocket connection:', socket.id, 'User:', socket.user.userId || socket.user.id);
+
+            socket.emit('connected', {
+                message: 'Connected to DueWin game server',
+                timestamp: new Date().toISOString(),
+                mode: 'PASSIVE_WEBSOCKET_MODE',
+                supportedGames: Object.keys(GAME_CONFIGS),
+                totalRooms: Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0),
+                bettingEnabled: true,
+                periodManagement: 'HANDLED_BY_SCHEDULER'
+            });
+
+            // Handle join game
+            socket.on('joinGame', async (data) => {
+                try {
+                    const { gameType, duration } = data;
+                    
+                    if (!GAME_CONFIGS[gameType] || !GAME_CONFIGS[gameType].includes(duration)) {
+                        socket.emit('error', { 
+                            message: `Invalid game: ${gameType} ${duration}s`,
+                            code: 'INVALID_GAME_DURATION'
+                        });
+                        return;
+                    }
+
+                    const roomId = `${gameType}_${duration}`;
+                    
+                    // Leave previous rooms
+                    if (socket.currentGame) {
+                        const oldRoomId = `${socket.currentGame.gameType}_${socket.currentGame.duration}`;
+                        socket.leave(oldRoomId);
+                    }
+                    
+                    // Join new room
+                    socket.join(roomId);
+                    socket.currentGame = { gameType, duration, roomId };
+
+                    socket.emit('joinedGame', {
+                        gameType, 
+                        duration, 
+                        roomId,
+                        message: `Joined ${gameType} ${duration}s room`,
+                        timestamp: new Date().toISOString(),
+                        bettingEnabled: true
+                    });
+
+                    // Send current period info (READ-ONLY)
+                    await sendCurrentPeriodFromRedis(socket, gameType, duration);
+
+                } catch (error) {
+                    console.error('❌ Error joining game:', error);
+                    socket.emit('error', { message: 'Failed to join game' });
+                }
+            });
+
+            // Handle bet placement (keep existing bet logic)
+            socket.on('placeBet', async (betData) => {
+                // Keep your existing bet placement logic here
+                // This is the only part that should remain active
+                
+                try {
+                    const userId = socket.user.userId || socket.user.id;
+                    console.log(`🎯 User ${userId} placing bet:`, betData);
+                    
+                    // Your existing bet processing logic...
+                    // (Keep the processWebSocketBet function call)
+                    
+                } catch (error) {
+                    console.error('❌ Error processing bet:', error);
+                    socket.emit('betError', { 
+                        message: 'Failed to process bet',
+                        code: 'PROCESSING_ERROR'
+                    });
+                }
+            });
+
+            // Other socket handlers (getBalance, getMyBets, etc.)
+            // Keep these as they are...
+
+            socket.on('disconnect', () => {
+                console.log('🔌 WebSocket disconnected:', socket.id);
+            });
+        });
+
+        // CRITICAL: Setup Redis subscriptions to listen to scheduler events
+        setupRedisSubscriptions();
+        
+        console.log('✅ WebSocket server initialized in PASSIVE mode');
+        console.log('📡 WebSocket will only broadcast events from game scheduler');
+        
+        return io;
+    } catch (error) {
+        console.error('❌ Failed to initialize WebSocket server:', error);
+        throw error;
+    }
+};
+
+// REMOVED: All period management functions (broadcastTick, startBroadcastTicks, etc.)
+// WebSocket should only listen and broadcast, not manage periods
+
+// KEEP: Redis subscription handling
+const setupRedisSubscriptions = () => {
+    try {
+        const { redis: subscriberRedis } = require('../config/redisConfig');
+        const subscriber = subscriberRedis.duplicate();
+        
+        // Subscribe to scheduler events
+        subscriber.subscribe('game_scheduler:period_start');
+        subscriber.subscribe('game_scheduler:period_result');
+        subscriber.subscribe('game_scheduler:betting_closed');
+        subscriber.subscribe('game_scheduler:period_error');
+        
+        subscriber.on('message', (channel, message) => {
+            try {
+                const data = JSON.parse(message);
+                handleGameSchedulerEvent(channel, data);
+            } catch (error) {
+                console.error('❌ Error handling Redis message:', error);
+            }
+        });
+        
+        console.log('✅ WebSocket: Redis subscriptions setup for scheduler events');
+        
+    } catch (error) {
+        console.error('❌ Error setting up Redis subscriptions:', error);
+    }
+};
+
+// KEEP: Event handling from scheduler
+const handleGameSchedulerEvent = (channel, data) => {
+    try {
+        const { gameType, duration, roomId, periodId } = data;
+        const expectedRoomId = `${gameType}_${duration}`;
+        
+        console.log(`📢 [WEBSOCKET_PASSIVE] Received ${channel} for ${expectedRoomId}`);
+        
+        switch (channel) {
+            case 'game_scheduler:period_start':
+                io.to(expectedRoomId).emit('periodStart', {
+                    ...data,
+                    roomId: expectedRoomId,
+                    source: 'scheduler',
+                    timestamp: new Date().toISOString()
+                });
+                break;
+                
+            case 'game_scheduler:period_result':
+                io.to(expectedRoomId).emit('periodResult', {
+                    ...data,
+                    roomId: expectedRoomId,
+                    source: 'scheduler',
+                    timestamp: new Date().toISOString()
+                });
+                break;
+                
+            case 'game_scheduler:betting_closed':
+                io.to(expectedRoomId).emit('bettingClosed', {
+                    ...data,
+                    roomId: expectedRoomId,
+                    source: 'scheduler',
+                    timestamp: new Date().toISOString()
+                });
+                break;
+                
+            case 'game_scheduler:period_error':
+                io.to(expectedRoomId).emit('periodError', {
+                    ...data,
+                    roomId: expectedRoomId,
+                    source: 'scheduler',
+                    timestamp: new Date().toISOString()
+                });
+                break;
+        }
+        
+    } catch (error) {
+        console.error('❌ Error handling scheduler event:', error);
+    }
+};
+
+// SIMPLIFIED: Only read from Redis, don't manage periods
+const sendCurrentPeriodFromRedis = async (socket, gameType, duration) => {
+    try {
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        const periodData = await pubsubRedis.get(periodKey);
+        
+        if (periodData) {
+            const period = JSON.parse(periodData);
+            const now = Date.now();
+            const endTime = new Date(period.endTime).getTime();
+            const timeRemaining = Math.max(0, Math.floor((endTime - now) / 1000));
+            
+            socket.emit('currentPeriod', {
+                gameType,
+                duration,
+                periodId: period.periodId,
+                timeRemaining,
+                bettingOpen: timeRemaining > 5,
+                endTime: period.endTime,
+                source: 'scheduler_redis'
+            });
+        }
+    } catch (error) {
+        console.error('Error sending current period:', error);
+    }
+};
+
+// MODIFIED: Remove period management, keep only broadcasting
+module.exports = {
+    initializeWebSocket,
+    
+    // REMOVED: Period management functions
+    // startGameTickSystem: removed
+    // startBroadcastTicks: removed
+    // broadcastTick: removed
+    
+    // KEEP: Broadcasting functions for external use
+    broadcastToGame: (gameType, duration, event, data) => {
+        try {
+            if (!io) return;
+            const roomId = `${gameType}_${duration}`;
+            io.to(roomId).emit(event, {
+                ...data,
+                gameType, 
+                duration, 
+                roomId,
+                source: 'external_broadcast'
+            });
+        } catch (error) {
+            console.error('❌ Error broadcasting to game:', error);
+        }
+    },
+    
+    getIo: () => io,
+    
+    // SIMPLIFIED: System stats
+    getSystemStats: () => ({
+        connectedClients: io ? io.sockets.sockets.size : 0,
+        mode: 'PASSIVE_WEBSOCKET_MODE',
+        periodManagement: 'HANDLED_BY_SCHEDULER',
+        supportedGames: Object.keys(GAME_CONFIGS),
+        totalRooms: Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0),
+        bettingEnabled: true
+    }),
+    
+    GAME_CONFIGS
+};
+
+// Helper functions (keep existing ones for bet processing)
+const initializeWebSocketModels = async () => {
+    try {
+        const sequelize = await getSequelizeInstance();
+        models = await initializeModels();
+        models.sequelize = sequelize;
+        return models;
+    } catch (error) {
+        console.error('❌ Failed to initialize WebSocket models:', error);
+        throw error;
+    }
+};
+
+
+Step 2: Modify index.js to remove period management
+
+// Backend/index.js - FIXED: Remove scheduler auto-start
+
+const express = require('express');
+const dotenv = require('dotenv');
+const cors = require('cors');
+const http = require('http');
+const { startDiagnostic, performManualCheck } = require('./utils/websocketDiagnostic');
+const { redis, isConnected } = require('./config/redisConfig');
+const { initializeModels } = require('./models');
+const { getSequelizeInstance } = require('./config/db');
+const securityMiddleware = require('./middleware/securityMiddleware');
+
+// Load environment variables first
+dotenv.config();
+
+console.log('🚀 Starting DueWin Backend Server (WebSocket Only)...');
+
+// Create Express app first
+const app = express();
+const PORT = process.env.SERVER_PORT || 8000;
+
+// Create HTTP server
+const server = http.createServer(app);
+
+// CORS configuration
+const corsOptions = {
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true);
+        
+        const spribeIPs = [
+            '194.36.47.153', '194.36.47.152', '194.36.47.150',
+            '3.255.67.141', '52.30.236.39', '54.78.240.177'
+        ];
+        
+        const allowedOrigins = (process.env.ALLOWED_ORIGINS?.split(',') || [
+            'http://localhost:3001',
+            'http://localhost:3000',
+            'https://duewingame-three.vercel.app',
+            'https://strikecolor1.com',
+            'https://www.strikecolor1.com'
+        ]).map(origin => origin.trim());
+        
+        const isAllowedOrigin = allowedOrigins.includes(origin);
+        const isSpribeIP = spribeIPs.some(ip => origin?.includes(ip));
+        
+        if (isAllowedOrigin || isSpribeIP || process.env.NODE_ENV !== 'production') {
+            return callback(null, true);
+        }
+        
+        callback(new Error('Not allowed by CORS'));
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Spribe-Client-ID', 'X-Spribe-Client-TS', 'X-Spribe-Client-Signature'],
+    credentials: true,
+    optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+securityMiddleware(app);
+
+const { attackProtection } = require('./middleware/attackProtection');
+app.use(attackProtection);
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Basic routes
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        message: 'Server is running',
+        mode: 'WEBSOCKET_ONLY'
+    });
+});
+
+app.get('/', (req, res) => {
+    res.json({ 
+        status: 'success', 
+        message: 'DueWin Backend Server is running (WebSocket Only)!',
+        timestamp: new Date().toISOString(),
+        mode: 'WEBSOCKET_ONLY'
+    });
+});
+
+app.use(express.static('public'));
+
+// Initialize database and models
+const initializeDatabaseAndModels = async () => {
+    try {
+        console.log('🔄 Initializing database and models...');
+        const sequelize = await getSequelizeInstance();
+        const models = await initializeModels();
+        console.log('✅ Database and models initialized successfully');
+        return { sequelize, models };
+    } catch (error) {
+        console.error('❌ Failed to initialize database and models:', error);
+        throw error;
+    }
+};
+
+// Routes setup
+const setupAppRoutes = () => {
+    try {
+        console.log('🛣️ Setting up routes...');
+        
+        const apiRoutes = require('./routes/index');
+        app.use('/api', apiRoutes);
+        
+        try {
+            const adminRoutes = require('./routes/adminRoutes');
+            const adminExposureRoutes = require('./routes/adminExposureRoutes');
+            
+            app.use('/admin', adminRoutes);
+            app.use('/admin/exposure', adminExposureRoutes);
+            app.use('/api/admin/exposure', adminExposureRoutes);
+            
+            console.log('✅ Admin routes configured successfully');
+        } catch (adminError) {
+            console.warn('⚠️ Admin routes setup failed:', adminError.message);
+        }
+        
+        console.log('✅ Routes configured successfully');
+        return true;
+    } catch (error) {
+        console.error('❌ Routes setup failed:', error.message);
+        return false;
+    }
+};
+
+// MODIFIED: WebSocket initialization (passive mode)
+const { initializeWebSocket } = require('./services/websocketService');
+
+const initializeWebSocketWithRedis = async () => {
+    try {
+        if (!isConnected()) {
+            console.log('⏳ Waiting for Redis connection...');
+            await new Promise(resolve => {
+                const checkRedis = setInterval(() => {
+                    if (isConnected()) {
+                        clearInterval(checkRedis);
+                        resolve();
+                    }
+                }, 1000);
+            });
+        }
+        
+        console.log('✅ Redis connected, initializing WebSocket (PASSIVE MODE)...');
+        
+        // CRITICAL: Pass false to prevent auto-starting ticks
+        const io = initializeWebSocket(server, false);
+        
+        // Initialize admin exposure monitoring
+        try {
+            const adminExposureService = require('./services/adminExposureService');
+            adminExposureService.startExposureMonitoring(io);
+            console.log('✅ Admin exposure monitoring initialized');
+        } catch (adminError) {
+            console.warn('⚠️ Admin exposure monitoring setup failed:', adminError.message);
+        }
+        
+        // Start diagnostic monitoring
+        startDiagnostic();
+        performManualCheck();
+        
+        return io;
+    } catch (error) {
+        console.error('❌ Failed to initialize WebSocket:', error);
+        throw error;
+    }
+};
+
+// Additional services (without scheduler)
+const setupAdditionalServices = async () => {
+    try {
+        console.log('🔧 Setting up additional services...');
+        
+        // Payment gateways
+        try {
+            const { setupPaymentGateways } = require('./services/paymentGatewayService');
+            await setupPaymentGateways();
+            console.log('✅ Payment gateways initialized');
+        } catch (paymentError) {
+            console.warn('⚠️ Payment gateways setup failed:', paymentError.message);
+        }
+        
+        // REMOVED: Scheduler service setup
+        // The scheduler should only run in start-scheduler.js
+        
+        console.log('✅ Additional services configured (excluding scheduler)');
+        return true;
+    } catch (error) {
+        console.warn('⚠️ Additional services setup had issues:', error.message);
+        return false;
+    }
+};
+
+// Error handling
+const setupErrorHandling = () => {
+    app.use((err, req, res, next) => {
+        console.error('Express error handler:', err);
+        
+        if (res.headersSent) {
+            return next(err);
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    app.use((req, res) => {
+        res.status(404).json({
+            success: false,
+            message: 'Route not found',
+            path: req.path,
+            timestamp: new Date().toISOString()
+        });
+    });
+    
+    console.log('✅ Error handling configured');
+};
+
+// MAIN START SEQUENCE
+const startServer = async () => {
+    try {
+        console.log('🚀 Starting server initialization (WebSocket Only)...');
+
+        // Initialize database and models
+        await initializeDatabaseAndModels();
+
+        // Setup routes
+        setupAppRoutes();
+
+        // Initialize WebSocket (PASSIVE MODE)
+        await initializeWebSocketWithRedis();
+
+        // Setup additional services (without scheduler)
+        await setupAdditionalServices();
+
+        // Setup error handling
+        setupErrorHandling();
+
+        // Start the server
+        server.listen(PORT, () => {
+            console.log(`✅ Server running on port ${PORT}`);
+            console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
+            console.log(`📡 Mode: WEBSOCKET_ONLY`);
+            console.log(`⚠️  Period management is handled by start-scheduler.js`);
+        });
+
+    } catch (error) {
+        console.error('❌ Server startup failed:', error);
+        process.exit(1);
+    }
+};
+
+// Start the server
+startServer();
+
+module.exports = app;
+
+Step 3: Ensure proper Redis channel handling
+// Add this to the top of gameScheduler.js after the imports
+
+// Add Redis channel validation
+const publishPeriodStart = async (gameType, duration, periodInfo) => {
+    try {
+        const roomId = `${gameType}_${duration}`;
+        
+        const eventData = {
+            gameType,
+            duration,
+            periodId: periodInfo.periodId,
+            timeRemaining: duration,
+            endTime: periodInfo.endTime.toISOString(),
+            message: `New period started: ${periodInfo.periodId}`,
+            roomId,
+            timestamp: new Date().toISOString()
+        };
+        
+        console.log(`📢 [SCHEDULER_PUBLISH] Publishing period start:`, JSON.stringify(eventData, null, 2));
+        
+        const publishResult = await redis.publish('game_scheduler:period_start', JSON.stringify(eventData));
+        
+        console.log(`✅ [SCHEDULER_PUBLISH] Period start published to ${publishResult} subscribers`);
+        
+        // Also store in Redis for WebSocket to read
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        await redis.set(periodKey, JSON.stringify({
+            periodId: periodInfo.periodId,
+            gameType,
+            duration,
+            startTime: periodInfo.startTime.toISOString(),
+            endTime: periodInfo.endTime.toISOString(),
+            timeRemaining: duration,
+            bettingOpen: true,
+            updatedAt: new Date().toISOString(),
+            source: 'game_scheduler'
+        }));
+        
+        await redis.expire(periodKey, 3600);
+        
+        console.log(`✅ [SCHEDULER_REDIS] Period data stored in Redis key: ${periodKey}`);
+        
+    } catch (error) {
+        console.error('❌ Error publishing period start:', error);
+    }
+};
+
+// Add debugging to check Redis connectivity
+const testRedisConnection = async () => {
+    try {
+        console.log('🔍 Testing Redis connection for scheduler...');
+        
+        const testKey = 'scheduler_test_' + Date.now();
+        await redis.set(testKey, 'test_value');
+        const result = await redis.get(testKey);
+        await redis.del(testKey);
+        
+        if (result === 'test_value') {
+            console.log('✅ Redis connection test passed');
+            return true;
+        } else {
+            console.error('❌ Redis connection test failed');
+            return false;
+        }
+    } catch (error) {
+        console.error('❌ Redis connection test error:', error);
+        return false;
+    }
+};
+
+// Add this to your initialize function
+const initialize = async () => {
+    try {
+        console.log('🔄 Starting GAME SCHEDULER initialization...');
+        
+        // Test Redis connection first
+        const redisOk = await testRedisConnection();
+        if (!redisOk) {
+            throw new Error('Redis connection failed');
+        }
+        
+        // ... rest of your initialization code
+        
+        console.log('✅ GAME SCHEDULER initialization completed');
+    } catch (error) {
+        console.error('❌ Failed to initialize game scheduler:', error);
+        process.exit(1);
+    }
+};
+
+// Add period ID validation
+const validatePeriodId = (periodId) => {
+    // Period ID should be 17 digits: YYYYMMDD + 9-digit sequence
+    if (!/^\d{17}$/.test(periodId)) {
+        console.error(`❌ Invalid period ID format: ${periodId}`);
+        return false;
+    }
+    
+    const dateStr = periodId.substring(0, 8);
+    const year = parseInt(dateStr.substring(0, 4));
+    const month = parseInt(dateStr.substring(4, 6));
+    const day = parseInt(dateStr.substring(6, 8));
+    
+    // Basic date validation
+    if (year < 2024 || year > 2030 || month < 1 || month > 12 || day < 1 || day > 31) {
+        console.error(`❌ Invalid date in period ID: ${periodId}`);
+        return false;
+    }
+    
+    return true;
+};
+
+// Add this function to help debug period generation
+const debugPeriodGeneration = async (gameType, duration) => {
+    try {
+        console.log(`🔍 [DEBUG_PERIOD] Debugging period generation for ${gameType} ${duration}s`);
+        
+        const currentPeriod = await periodService.getCurrentPeriod(gameType, duration);
+        console.log(`🔍 [DEBUG_PERIOD] Current period:`, JSON.stringify(currentPeriod, null, 2));
+        
+        if (currentPeriod) {
+            const isValid = validatePeriodId(currentPeriod.periodId);
+            console.log(`🔍 [DEBUG_PERIOD] Period ID validation: ${isValid ? 'VALID' : 'INVALID'}`);
+            
+            const endTime = calculatePeriodEndTime(currentPeriod.periodId, duration);
+            const timeRemaining = Math.max(0, (endTime - new Date()) / 1000);
+            console.log(`🔍 [DEBUG_PERIOD] Time remaining: ${timeRemaining}s`);
+            console.log(`🔍 [DEBUG_PERIOD] End time: ${endTime.toISOString()}`);
+        }
+        
+        return currentPeriod;
+    } catch (error) {
+        console.error(`❌ [DEBUG_PERIOD] Error debugging period generation:`, error);
+        return null;
+    }
+};
+
+
+
+Testing the Fix
+
+Stop both processes
+Start only the scheduler:
+bashnode start-scheduler.js
+
+Wait for it to generate periods (should see period start logs)
+Then start the WebSocket server:
+bashnode index.js
+
+
+Verification Steps
+Check these logs to confirm the fix:
+
+In start-scheduler.js logs, look for:
+✅ SCHEDULER: Broadcasted new period start: [period_id]
+📢 [SCHEDULER_PUBLISH] Publishing period start: [event_data]
+
+In index.js logs, look for:
+📢 [WEBSOCKET_PASSIVE] Received game_scheduler:period_start for [room_id]
+
+Redis verification:
+bashredis-cli
+KEYS game_scheduler:*:*:current
+GET game_scheduler:wingo:30:current
+
+
+Key Changes Made
+
+Removed period management from WebSocket - Now it only broadcasts
+Removed conflicting Redis operations - Only scheduler writes, WebSocket reads
+Added proper Redis channel validation - Ensures events are properly published
+Separated concerns - Scheduler manages periods, WebSocket broadcasts
+
+The root cause was that both processes were trying to be the "source of truth" for periods, causing race conditions and conflicts. Now the scheduler is the single source of truth, and WebSocket is purely reactive.
+
+

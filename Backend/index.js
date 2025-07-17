@@ -235,7 +235,8 @@ const initializeWebSocketWithRedis = async () => {
         }
         
         console.log('✅ Redis connected, initializing WebSocket...');
-        const io = initializeWebSocket(server, true);
+        // Only pass the server argument, do not start any tick system
+        const io = initializeWebSocket(server);
         
         // Initialize admin exposure monitoring
         try {
