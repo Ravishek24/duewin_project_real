@@ -289,13 +289,7 @@ const createLPayTransferOrder = async (userId, orderId, amount, bankDetails, not
       await t.rollback();
       return { success: false, message: 'User not found' };
     }
-    await WalletWithdrawal.create({
-      user_id: userId,
-      withdrawal_amount: amount,
-      order_id: orderId,
-      payment_gateway: 'LPAY',
-      status: false
-    }, { transaction: t });
+    // Removed WalletWithdrawal.create here -- record already exists
     const datetime = Date.now().toString();
     const requestParams = {
       memberCode: lPayConfig.memberCode,
@@ -364,13 +358,13 @@ const processLPayWithdrawalCallback = async (callbackData) => {
       await t.rollback();
       return { success: false, message: 'Order not found' };
     }
-    if (withdrawalRecord.status === true) {
+    if (withdrawalRecord.status === 'completed') {
       await t.rollback();
       return { success: true, message: 'Withdrawal already processed' };
     }
     if (callbackData.returncode === '00') {
       await WalletWithdrawal.update({
-        status: true,
+        status: 'completed',
         time_of_success: new Date(),
         transaction_id: callbackData.transactionNo
       }, {
@@ -380,7 +374,7 @@ const processLPayWithdrawalCallback = async (callbackData) => {
       await t.commit();
       return { success: true, message: 'Withdrawal processed successfully' };
     } else {
-      await WalletWithdrawal.update({ status: false }, { where: { order_id: callbackData.orderNo }, transaction: t });
+      await WalletWithdrawal.update({ status: 'failed' }, { where: { order_id: callbackData.orderNo }, transaction: t });
       await t.commit();
       return { success: false, message: 'Withdrawal failed or pending' };
     }

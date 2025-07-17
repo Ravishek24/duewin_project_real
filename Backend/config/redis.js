@@ -180,4 +180,15 @@ const redisHelper = {
     }
 };
 
+// Elasticache connection test (safe to remove after verification)
+(async () => {
+  try {
+    await redisClient.set('elasticache_test_key_12345', 'hello-from-elasticache', 'EX', 300);
+    const value = await redisClient.get('elasticache_test_key_12345');
+    console.log('Elasticache test value:', value);
+  } catch (err) {
+    console.error('Elasticache test error:', err);
+  }
+})();
+
 module.exports = redisHelper; 

@@ -393,16 +393,14 @@ const processWePayTransferCallback = async (callbackData) => {
     if (callbackData.tradeResult === '1') { // Transfer successful
       // Update withdrawal record
       await WalletWithdrawal.update({
-        payment_status: true,
+        status: 'completed',
         time_of_success: new Date(),
         remark: "Transfer successful"
       }, {
         where: { order_id: callbackData.merTransferId },
         transaction: t
       });
-      
       await t.commit();
-      
       return {
         success: true,
         message: "Transfer processed successfully"
@@ -412,7 +410,6 @@ const processWePayTransferCallback = async (callbackData) => {
       const user = await User.findByPk(withdrawalRecord.user_id, {
         transaction: t
       });
-      
       if (!user) {
         await t.rollback();
         return {
@@ -420,20 +417,17 @@ const processWePayTransferCallback = async (callbackData) => {
           message: "User not found"
         };
       }
-      
       // Refund wallet balance
       const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawalRecord.withdrawal_amount);
-      
       await User.update({
         wallet_balance: newBalance
       }, {
         where: { user_id: withdrawalRecord.user_id },
         transaction: t
       });
-      
       // Update withdrawal record
       await WalletWithdrawal.update({
-        payment_status: false,
+        status: 'failed',
         time_of_failed: new Date(),
         admin_status: 'rejected',
         remark: `Transfer failed. Amount refunded to wallet.`
@@ -441,30 +435,25 @@ const processWePayTransferCallback = async (callbackData) => {
         where: { order_id: callbackData.merTransferId },
         transaction: t
       });
-      
       await t.commit();
-      
       return {
         success: true,
         message: "Transfer failure recorded and funds returned to wallet"
       };
-    } else {
-      // Other status (3=Rejected, 4=In progress)
-      // Just update status and wait for final status
-      await WalletWithdrawal.update({
-        remark: `Transfer status updated: ${callbackData.tradeResult}`
-      }, {
-        where: { order_id: callbackData.merTransferId },
-        transaction: t
-      });
-      
-      await t.commit();
-      
-      return {
-        success: true,
-        message: "Transfer status updated"
-      };
     }
+    // Other status (3=Rejected, 4=In progress)
+    // Just update status and wait for final status
+    await WalletWithdrawal.update({
+      remark: `Transfer status updated: ${callbackData.tradeResult}`
+    }, {
+      where: { order_id: callbackData.merTransferId },
+      transaction: t
+    });
+    await t.commit();
+    return {
+      success: true,
+      message: "Transfer status updated"
+    };
   } catch (error) {
     await t.rollback();
     console.error("Error processing WePay transfer callback:", error);

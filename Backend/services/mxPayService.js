@@ -472,16 +472,14 @@ const processMxPayTransferCallback = async (callbackData) => {
     if (callbackData.returncode === "00") { // Success
       // Update withdrawal record
       await WalletWithdrawal.update({
-        payment_status: true,
+        status: 'completed',
         time_of_success: new Date(),
         remark: "Transfer successful"
       }, {
         where: { order_id: callbackData.orderNo },
         transaction: t
       });
-      
       await t.commit();
-      
       return {
         success: true,
         message: "Transfer processed successfully"
@@ -491,7 +489,6 @@ const processMxPayTransferCallback = async (callbackData) => {
       const user = await User.findByPk(withdrawalRecord.user_id, {
         transaction: t
       });
-      
       if (!user) {
         await t.rollback();
         return {
@@ -499,20 +496,17 @@ const processMxPayTransferCallback = async (callbackData) => {
           message: "User not found"
         };
       }
-      
       // Refund wallet balance
       const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawalRecord.withdrawal_amount);
-      
       await User.update({
         wallet_balance: newBalance
       }, {
         where: { user_id: withdrawalRecord.user_id },
         transaction: t
       });
-      
       // Update withdrawal record
       await WalletWithdrawal.update({
-        payment_status: false,
+        status: 'failed',
         time_of_failed: new Date(),
         admin_status: 'rejected',
         remark: `Transfer failed with code ${callbackData.returncode}. Amount refunded to wallet.`
@@ -520,29 +514,24 @@ const processMxPayTransferCallback = async (callbackData) => {
         where: { order_id: callbackData.orderNo },
         transaction: t
       });
-      
       await t.commit();
-      
       return {
         success: true,
         message: "Transfer failure recorded and funds returned to wallet"
       };
-    } else { // Processing
-      // Just update status
-      await WalletWithdrawal.update({
-        remark: `Transfer status update: ${callbackData.returncode}`
-      }, {
-        where: { order_id: callbackData.orderNo },
-        transaction: t
-      });
-      
-      await t.commit();
-      
-      return {
-        success: true,
-        message: "Transfer status updated"
-      };
     }
+    // Just update status
+    await WalletWithdrawal.update({
+      remark: `Transfer status update: ${callbackData.returncode}`
+    }, {
+      where: { order_id: callbackData.orderNo },
+      transaction: t
+    });
+    await t.commit();
+    return {
+      success: true,
+      message: "Transfer status updated"
+    };
   } catch (error) {
     await t.rollback();
     console.error("Error processing MxPay transfer callback:", error);

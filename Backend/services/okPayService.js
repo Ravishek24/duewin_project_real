@@ -291,7 +291,6 @@ const processOkPayCallback = async (callbackData) => {
     } else {
       orderStatus = 'pending';
     }
-
     // Update order in database
     await order.update({
       status: orderStatus,

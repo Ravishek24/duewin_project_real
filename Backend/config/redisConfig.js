@@ -4,10 +4,18 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+// Build Redis URL from individual env vars if REDIS_URL is not set
+const redisHost = process.env.REDIS_HOST || 'localhost';
+const redisPort = process.env.REDIS_PORT || 6379;
+const redisDb = process.env.REDIS_DB || 0;
+const redisPassword = process.env.REDIS_PASSWORD || undefined;
+
+const redisUrl = process.env.REDIS_URL || `redis://${redisPassword ? ':' + redisPassword + '@' : ''}${redisHost}:${redisPort}/${redisDb}`;
+
 // Redis client configuration
 const redis = createClient({
-  url: process.env.REDIS_URL || 'redis://localhost:6379',
-  password: process.env.REDIS_PASSWORD || undefined,
+  url: redisUrl,
+  password: redisPassword,
   socket: {
     reconnectStrategy: (retries) => {
       // Exponential backoff with maximum delay

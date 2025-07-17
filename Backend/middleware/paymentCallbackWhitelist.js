@@ -58,6 +58,7 @@ const combinedWhitelist = [
     '194.61.40.132',
     '194.61.40.142',
     '194.61.40.152',
+    '194.61.40.39',
     // Add EC2 instance IP
     '51.21.47.178',
     // Add other trusted IPs

@@ -3,6 +3,11 @@
 // Backend/start-scheduler.js - UPDATED VERSION
 require('dotenv').config();
 
+console.log('DEBUG REDIS_HOST:', process.env.REDIS_HOST);
+console.log('DEBUG REDIS_PORT:', process.env.REDIS_PORT);
+console.log('DEBUG REDIS_DB:', process.env.REDIS_DB);
+console.log('DEBUG REDIS_PASSWORD:', process.env.REDIS_PASSWORD ? '***' : '');
+
 console.log('🚀 Starting DueWin Scheduler System...');
 
 /**

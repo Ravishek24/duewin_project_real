@@ -1,22 +1,9 @@
 const securityConfig = require('../config/securityConfig');
-const Redis = require('ioredis');
+// const Redis = require('ioredis');
+const redisHelper = require('../config/redis');
 
-// Initialize Redis with error handling
-let redis;
-try {
-    redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
-    
-    redis.on('error', (error) => {
-        console.error('Redis connection error:', error);
-    });
-    
-    redis.on('connect', () => {
-        console.log('✅ Redis connected for attack protection');
-    });
-} catch (error) {
-    console.error('Failed to initialize Redis for attack protection:', error);
-    redis = null;
-}
+// Use the singleton Redis client from redisHelper
+const redis = redisHelper.getClient();
 
 /**
  * Advanced Attack Protection Middleware

@@ -12,6 +12,7 @@ const otpService = require('./otpService');
 const { processWePayTransfer } = require('./wePayService');
 const { processMxPayTransfer } = require('./mxPayService');
 const { createPpayProWithdrawalOrder } = require('./ppayProService');
+const { createLPayTransferOrder } = require('./lPayService'); // <-- Add this import
 const { Op } = require('sequelize');
 
 /**
@@ -417,6 +418,43 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
             address: withdrawal.remark || 'Withdrawal',
             notifyUrl
           });
+          break;
+        case 'LPAY':
+          notifyUrl = `${host}/api/payments/lpay/withdrawal-callback`;
+          // Fetch bank account details
+          let lpayBankAccount;
+          if (withdrawal.bank_account_id) {
+            lpayBankAccount = await BankAccount.findOne({
+              where: {
+                id: withdrawal.bank_account_id,
+                user_id: withdrawal.user_id
+              }
+            });
+          } else {
+            lpayBankAccount = await BankAccount.findOne({
+              where: {
+                user_id: withdrawal.user_id,
+                is_primary: true
+              }
+            });
+          }
+          if (!lpayBankAccount) {
+            throw new Error('Bank account not found for withdrawal');
+          }
+          const lpayBankDetails = {
+            accountNo: lpayBankAccount.account_number,
+            accountName: lpayBankAccount.account_holder,
+            bankCode: lpayBankAccount.ifsc_code,
+            phone: lpayBankAccount.account_phone || '',
+            ifsc: lpayBankAccount.ifsc_code
+          };
+          transferResult = await createLPayTransferOrder(
+            withdrawal.user_id,
+            withdrawal.order_id,
+            withdrawal.amount,
+            lpayBankDetails,
+            notifyUrl
+          );
           break;
         default: // OKPAY or any other
           notifyUrl = `${host}/api/payments/okpay/payout-callback`;

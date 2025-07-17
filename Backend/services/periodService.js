@@ -504,7 +504,7 @@ const getNextPeriodId = async (gameType, duration, timestamp = new Date()) => {
  * @param {number} duration - Duration in seconds
  * @returns {Object|null} - Current period info or null
  */
-const getCurrentPeriod = async (gameType, duration) => {
+const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
     try {
         const now = new Date();
         const istMoment = moment(now).tz('Asia/Kolkata');

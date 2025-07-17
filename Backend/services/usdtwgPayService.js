@@ -332,10 +332,10 @@ async function processUsdtwgPayWithdrawalCallback(req) {
   const withdrawal = await WalletWithdrawal.findOne({ where: { order_id: orderId } });
   if (!withdrawal) return { success: false, message: 'Order not found' };
   if (status === 'success') {
-    await withdrawal.update({ status: true, time_of_success: new Date(), transaction_id: data.orderno });
+    await withdrawal.update({ status: 'completed', time_of_success: new Date(), transaction_id: data.orderno });
     return { success: true };
   } else {
-    await withdrawal.update({ status: false });
+    await withdrawal.update({ status: 'failed' });
     return { success: false, message: 'Withdrawal failed or pending' };
   }
 }

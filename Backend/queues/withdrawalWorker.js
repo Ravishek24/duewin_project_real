@@ -43,6 +43,14 @@ const worker = new Worker('withdrawals', async job => {
     }
   } catch (error) {
     console.error(`[BullMQ] Withdrawal job failed (${type}):`, error.message);
+    console.error(`[BullMQ] Withdrawal job failed details:`, {
+      jobId: job.id,
+      type,
+      data,
+      error: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
     
     // Determine if error is retryable
     if (isRetryableError(error)) {
@@ -523,6 +531,13 @@ worker.on('completed', job => {
 
 worker.on('failed', (job, err) => {
   console.error(`[BullMQ] Withdrawal job failed:`, job.id, err.message);
+  console.error(`[BullMQ] Withdrawal job failed details:`, {
+    jobId: job.id,
+    data: job.data,
+    error: err.message,
+    stack: err.stack,
+    timestamp: new Date().toISOString()
+  });
   if (err.name === 'SequelizeDeadlockError') {
     console.error('🚨 DEADLOCK DETECTED in withdrawal worker:', {
       job: job.data,
