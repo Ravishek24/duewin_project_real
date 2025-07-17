@@ -863,6 +863,7 @@ const initializeWebSocket = async (server) => {
                     // Join new duration-based room
                     socket.join(roomId);
                     socket.currentGame = { gameType, duration, roomId };
+                    console.log(`[DEBUG] Client ${socket.id} joined room: ${roomId}`);
 
                     // Record game move in transaction
                     try {
@@ -1430,32 +1431,58 @@ const initializeWebSocket = async (server) => {
  * EXISTING: Setup Redis subscriptions for game scheduler events
  */
 const setupRedisSubscriptions = () => {
-    try {
-        const { redis: subscriberRedis } = require('../config/redisConfig');
-        
-        // Create separate Redis connection for subscriptions
-        const subscriber = subscriberRedis.duplicate();
-        
-        // Subscribe to game scheduler events
-        subscriber.subscribe('game_scheduler:period_start');
-        subscriber.subscribe('game_scheduler:period_result');
-        subscriber.subscribe('game_scheduler:betting_closed');
-        subscriber.subscribe('game_scheduler:period_error');
-        
-        subscriber.on('message', (channel, message) => {
-            try {
-                const data = JSON.parse(message);
-                handleGameSchedulerEvent(channel, data);
-            } catch (error) {
-                console.error('❌ WebSocket: Error handling Redis message:', error);
-            }
-        });
-        
-        console.log('✅ WebSocket: Redis subscriptions setup for game scheduler events');
-        
-    } catch (error) {
-        console.error('❌ WebSocket: Error setting up Redis subscriptions:', error);
-    }
+    (async () => {
+        try {
+            const { redis: subscriberRedis } = require('../config/redisConfig');
+            console.log('[DEBUG] Creating Redis subscriber for pub/sub...');
+            // Create separate Redis connection for subscriptions
+            const subscriber = subscriberRedis.duplicate();
+            console.log('[DEBUG] Redis subscriber duplicate created.');
+
+            subscriber.on('connect', () => {
+                console.log('[DEBUG] Redis subscriber connected');
+            });
+            subscriber.on('ready', () => {
+                console.log('[DEBUG] Redis subscriber ready');
+            });
+            subscriber.on('subscribe', (channel, count) => {
+                console.log('[DEBUG] Subscribe event:', channel, count);
+            });
+            subscriber.on('error', (err) => {
+                console.error('[DEBUG] Redis subscriber error:', err);
+            });
+
+            await subscriber.connect(); // Explicitly connect the subscriber
+
+            // Subscribe to game scheduler events
+            subscriber.subscribe('game_scheduler:period_start', (err, count) => {
+                console.log('[DEBUG] Subscribed to period_start:', err, count);
+            });
+            subscriber.subscribe('game_scheduler:period_result', (err, count) => {
+                console.log('[DEBUG] Subscribed to period_result:', err, count);
+            });
+            subscriber.subscribe('game_scheduler:betting_closed', (err, count) => {
+                console.log('[DEBUG] Subscribed to betting_closed:', err, count);
+            });
+            subscriber.subscribe('game_scheduler:period_error', (err, count) => {
+                console.log('[DEBUG] Subscribed to period_error:', err, count);
+            });
+
+            subscriber.on('message', (channel, message) => {
+                console.log('[DEBUG] Redis pub/sub event received:', channel, message);
+                try {
+                    const data = JSON.parse(message);
+                    handleGameSchedulerEvent(channel, data);
+                } catch (error) {
+                    console.error('❌ WebSocket: Error handling Redis message:', error);
+                }
+            });
+
+            console.log('✅ WebSocket: Redis subscriptions setup for game scheduler events');
+        } catch (error) {
+            console.error('❌ WebSocket: Error setting up Redis subscriptions:', error);
+        }
+    })();
 };
 
 /**
@@ -1465,11 +1492,14 @@ const handleGameSchedulerEvent = (channel, data) => {
     try {
         const { gameType, duration, roomId, periodId } = data;
         const timestamp = new Date().toISOString();
-        
+
+        // Debug log at the top of the event handler
+        console.log('[DEBUG] handleGameSchedulerEvent called for channel:', channel, 'data:', data);
+
         console.log(`\n📢 [WEBSOCKET_EVENT_START] ==========================================`);
         console.log(`📢 [WEBSOCKET_EVENT_START] Received event: ${channel} at ${timestamp}`);
         console.log(`📢 [WEBSOCKET_EVENT_START] Event data:`, JSON.stringify(data, null, 2));
-        
+
         // FIXED: Validate roomId format (should be gameType_duration only)
         const expectedRoomId = `${gameType}_${duration}`;
         if (roomId !== expectedRoomId) {
@@ -1477,37 +1507,11 @@ const handleGameSchedulerEvent = (channel, data) => {
             // Use expected room ID to ensure delivery
             data.roomId = expectedRoomId;
         }
-        
-        // FIXED: Additional validation for period events
-        if (periodId && (channel === 'game_scheduler:period_start' || channel === 'game_scheduler:period_result')) {
-            try {
-                // Validate period ID format
-                if (!/^\d{17}$/.test(periodId)) {
-                    console.warn(`⚠️ WebSocket: Invalid period ID format: ${periodId}`);
-                    return;
-                }
-                
-                // For period start events, validate timing
-                if (channel === 'game_scheduler:period_start') {
-                    const endTime = calculatePeriodEndTime(periodId, duration);
-                    const timeRemaining = Math.max(0, (endTime - new Date()) / 1000);
-                    
-                    if (timeRemaining < duration - 5) {
-                        console.warn(`⚠️ WebSocket: Period start event received too late for ${periodId} (${timeRemaining}s remaining)`);
-                    }
-                }
-            } catch (validationError) {
-                console.error(`❌ WebSocket: Event validation error for ${periodId}:`, validationError.message);
-                return;
-            }
-        }
-        
+
         switch (channel) {
             case 'game_scheduler:period_start':
-                console.log(`📢 [WEBSOCKET_PERIOD_START] ==========================================`);
-                console.log(`📢 [WEBSOCKET_PERIOD_START] Broadcasting period start: ${periodId} to ${expectedRoomId}`);
-                console.log(`📢 [WEBSOCKET_PERIOD_START] Period data:`, JSON.stringify(data, null, 2));
-                
+                // Debug log before emitting
+                console.log(`[DEBUG] Emitting periodStart to room: ${expectedRoomId} with data:`, data);
                 io.to(expectedRoomId).emit('periodStart', {
                     ...data,
                     roomId: expectedRoomId,
@@ -1516,10 +1520,8 @@ const handleGameSchedulerEvent = (channel, data) => {
                     bettingOpen: true,
                     timestamp: timestamp
                 });
-                
                 console.log(`✅ [WEBSOCKET_PERIOD_START] Period start broadcasted successfully`);
                 break;
-                
             case 'game_scheduler:period_result':
                 console.log(`📢 [WEBSOCKET_PERIOD_RESULT] ==========================================`);
                 console.log(`📢 [WEBSOCKET_PERIOD_RESULT] Broadcasting period result: ${periodId} to ${expectedRoomId}`);

@@ -1,5 +1,7 @@
 const Redis = require('ioredis');
+require('dotenv').config();
 const { CACHE } = require('./constants');
+console.log('REDIS_HOST from process.env:', process.env.REDIS_HOST);
 
 // Redis configuration
 const redisConfig = {
@@ -11,8 +13,15 @@ const redisConfig = {
     retryStrategy: function(times) {
         const delay = Math.min(times * 50, 2000);
         return delay;
-    }
+    },
+    tls: {} // Always use TLS for ElastiCache
 };
+
+console.log('REDIS_HOST from process.env:', process.env.REDIS_HOST);
+
+// Log the Redis config (excluding password)
+const { password, ...logConfig } = redisConfig;
+console.log('Redis config at startup:', logConfig);
 
 // Create Redis client
 const redisClient = new Redis(redisConfig);

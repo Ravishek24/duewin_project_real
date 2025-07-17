@@ -140,6 +140,13 @@ const updateHashCollection = async (hashes, duration = null) => {
     }
 };
 
+const withTimeout = (promise, ms) => {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Redis get timeout')), ms))
+    ]);
+};
+
 /**
  * Check if we have enough hashes for each digit for a specific duration
  * @param {number} duration - Duration in seconds (30, 60, 180, 300)
@@ -149,7 +156,7 @@ const hasEnoughHashes = async (duration = null) => {
     try {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
         console.log(`DEBUG: hasEnoughHashes - getting key ${collectionKey}`);
-        const collection = await redisClient.get(collectionKey);
+        const collection = await withTimeout(redisClient.get(collectionKey), 3000); // 3 second timeout
         console.log(`DEBUG: hasEnoughHashes - got value for ${collectionKey}:`, collection ? 'exists' : 'null');
         if (!collection) return false;
 
@@ -165,7 +172,11 @@ const hasEnoughHashes = async (duration = null) => {
         return validDigits >= 7;
     } catch (error) {
         logger.error('Error checking hash collection:', error);
-        console.error('DEBUG: hasEnoughHashes - error', error);
+        if (error.message && error.message.includes('timeout')) {
+            console.error('DEBUG: hasEnoughHashes - Redis get timed out');
+        } else {
+            console.error('DEBUG: hasEnoughHashes - error', error);
+        }
         return false;
     }
 };
@@ -210,28 +221,28 @@ const startHashCollection = async () => {
     try {
         console.log('DEBUG: tronHashService.startHashCollection - start');
         const durations = getTrxWixDurations();
-        
         for (const duration of durations) {
             logger.info(`Starting hash collection for TRX_WIX duration ${duration}s`);
             console.log(`DEBUG: startHashCollection - duration ${duration} - start`);
-            
             let loopCount = 0;
+            let firstAttempt = true;
             while (!(await hasEnoughHashes(duration))) {
+                if (firstAttempt) {
+                    console.warn(`WARNING: Redis not reachable or hash collection not possible for duration ${duration}. Skipping hash collection and proceeding.`);
+                    break; // Skip hash collection and proceed to next duration
+                }
                 console.log(`DEBUG: startHashCollection - duration ${duration} - loop ${loopCount}`);
                 const newHashes = await fetchNewHashes();
                 console.log(`DEBUG: startHashCollection - duration ${duration} - fetched ${newHashes.length} hashes`);
                 await updateHashCollection(newHashes, duration);
                 console.log(`DEBUG: startHashCollection - duration ${duration} - updated hash collection`);
-                
-                // Wait before next fetch to avoid rate limiting
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 loopCount++;
+                firstAttempt = false;
             }
-            
             logger.info(`Hash collection completed for duration ${duration}s`);
             console.log(`DEBUG: startHashCollection - duration ${duration} - completed`);
         }
-        
         logger.info('Hash collection completed for all TRX_WIX durations');
         console.log('DEBUG: tronHashService.startHashCollection - end');
     } catch (error) {

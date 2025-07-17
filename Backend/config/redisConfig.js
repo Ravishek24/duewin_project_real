@@ -17,6 +17,7 @@ const redis = createClient({
   url: redisUrl,
   password: redisPassword,
   socket: {
+    tls: true, // Enable TLS for ElastiCache
     reconnectStrategy: (retries) => {
       // Exponential backoff with maximum delay
       const delay = Math.min(Math.pow(2, retries) * 100, 3000);
