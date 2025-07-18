@@ -1,54 +1,70 @@
-// Backend/config/redisConfig.js
 const { createClient } = require('redis');
 const dotenv = require('dotenv');
 
 dotenv.config();
 
-// Build Redis URL from individual env vars if REDIS_URL is not set
+// Build connection parameters for ElastiCache with TLS
 const redisHost = process.env.REDIS_HOST || 'localhost';
 const redisPort = process.env.REDIS_PORT || 6379;
 const redisDb = process.env.REDIS_DB || 0;
 const redisPassword = process.env.REDIS_PASSWORD || undefined;
 
-const redisUrl = process.env.REDIS_URL || `redis://${redisPassword ? ':' + redisPassword + '@' : ''}${redisHost}:${redisPort}/${redisDb}`;
-
-// Redis client configuration
-const redis = createClient({
-  url: redisUrl,
-  password: redisPassword,
-  socket: {
-    tls: true, // Enable TLS for ElastiCache
-    reconnectStrategy: (retries) => {
-      // Exponential backoff with maximum delay
-      const delay = Math.min(Math.pow(2, retries) * 100, 3000);
-      return delay;
-    }
-  }
+console.log('Strike Game Redis Config:', {
+    host: redisHost,
+    port: redisPort,
+    db: redisDb,
+    tls: 'enabled'
 });
 
-// Connect to Redis when this module is imported
+// TLS-enabled Redis client for ElastiCache
+const redis = createClient({
+    socket: {
+        host: redisHost,
+        port: redisPort,
+        
+        // TLS configuration for ElastiCache
+        tls: true,
+        rejectUnauthorized: false,
+        checkServerIdentity: () => undefined,
+        
+        reconnectStrategy: (retries) => {
+            const delay = Math.min(Math.pow(2, retries) * 100, 3000);
+            console.log(`🔄 Strike Game Redis reconnecting in ${delay}ms (attempt ${retries})`);
+            return delay;
+        },
+        
+        connectTimeout: 15000,
+        family: 4 // Force IPv4
+    },
+    password: redisPassword,
+    database: redisDb
+});
+
+// Connect to ElastiCache
 (async () => {
-  try {
-    await redis.connect();
-    console.log('✅ Redis connected successfully');
-    
-    // Set up Redis error handling
-    redis.on('error', (err) => {
-      console.error('❌ Redis error:', err);
-    });
-    
-    redis.on('reconnecting', () => {
-      console.log('⚠️ Redis reconnecting...');
-    });
-    
-  } catch (error) {
-    console.error('❌ Redis connection error:', error.message);
-    // Don't exit process, allow for graceful fallback
-  }
+    try {
+        await redis.connect();
+        console.log('✅ Strike Game Redis connected to ElastiCache with TLS');
+        
+        // Test connection
+        const pingResult = await redis.ping();
+        console.log('✅ Strike Game Redis PING result:', pingResult);
+        
+        redis.on('error', (err) => {
+            console.error('❌ Strike Game Redis error:', err.message);
+        });
+        
+        redis.on('reconnecting', () => {
+            console.log('⚠️ Strike Game Redis reconnecting to ElastiCache...');
+        });
+        
+    } catch (error) {
+        console.error('❌ Strike Game Redis connection error:', error.message);
+        console.error('🔧 Check: Security groups, VPC settings, and TLS configuration');
+    }
 })();
 
-// Export both the client and a helper function to check connection
 module.exports = {
-  redis,
-  isConnected: () => redis.isOpen
+    redis,
+    isConnected: () => redis.isOpen
 };

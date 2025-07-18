@@ -12,16 +12,6 @@ const { getSequelizeInstance } = require('../config/db');
 const { initializeModels } = require('../models');
 const { recordVipExperience } = require('./autoVipService');
 
-const gameIntervals = new Map();
-let gameTicksStarted = false;
-
-const GAME_CONFIGS = {
-    wingo: [30, 60, 180, 300],
-    trx_wix: [30, 60, 180, 300],
-    fiveD: [60, 180, 300, 600],
-    k3: [60, 180, 300, 600]
-};
-
 // Import game logic functions for bet processing
 const {
     validateBetWithTimeline,
@@ -66,6 +56,20 @@ const gameLogicService = require('./gameLogicService');
 let io = null;
 let models = null;
 
+// Game tick intervals storage
+const gameIntervals = new Map();
+let gameTicksStarted = false;
+
+// FIXED: No timeline multiplication - duration-based rooms only
+const GAME_CONFIGS = {
+    wingo: [30, 60, 180, 300],       // 4 rooms: wingo_30, wingo_60, wingo_180, wingo_300
+    trx_wix: [30, 60, 180, 300],     // 4 rooms: trx_wix_30, trx_wix_60, trx_wix_180, trx_wix_300
+    fiveD: [60, 180, 300, 600],      // 4 rooms: fiveD_60, fiveD_180, fiveD_300, fiveD_600
+    k3: [60, 180, 300, 600]          // 4 rooms: k3_60, k3_180, k3_300, k3_600
+};
+
+// Total: 16 rooms (4 games × 4 durations each)
+
 /**
  * NEW: Get room ID based on game type, duration, and timeline
  * @param {string} gameType - Game type
@@ -93,13 +97,13 @@ const calculatePeriodStartTime = (periodId, duration) => {
         const year = parseInt(dateStr.substring(0, 4), 10);
         const month = parseInt(dateStr.substring(4, 6), 10) - 1;
         const day = parseInt(dateStr.substring(6, 8), 10);
-
+        
         const sequenceStr = periodId.substring(8);
         const sequenceNumber = parseInt(sequenceStr, 10);
-
+        
         const baseTime = moment.tz([year, month, day, 2, 0, 0], 'Asia/Kolkata');
         const startTime = baseTime.add(sequenceNumber * duration, 'seconds');
-
+        
         return startTime.toDate();
     } catch (error) {
         console.error('Error calculating period start time:', error);
@@ -138,248 +142,6 @@ const initializeWebSocketModels = async () => {
     }
 };
 
-
-/**
- * MISSING: Get period info from Redis (this function is missing!)
- */
-const getPeriodInfoFromRedis = async (gameType, duration) => {
-    try {
-        // FIXED: Simple Redis key without timeline complexity
-        const currentPeriodKey = `game_scheduler:${gameType}:${duration}:current`;
-        const periodData = await pubsubRedis.get(currentPeriodKey);
-
-        if (!periodData) {
-            return null;
-        }
-
-        const parsed = JSON.parse(periodData);
-
-        // FIXED: Additional validation to ensure data integrity
-        if (!parsed.periodId || !parsed.endTime) {
-            console.warn(`⚠️ WebSocket: Invalid period data structure for ${gameType}_${duration}`);
-            return null;
-        }
-
-        return parsed;
-    } catch (error) {
-        console.error('❌ WebSocket: Error getting period info from Redis:', error);
-        return null;
-    }
-};
-
-/**
- * MISSING: Start broadcast ticks for duration-based rooms only
- */
-const startBroadcastTicks = () => {
-    try {
-        console.log('🕐 Starting DURATION-BASED broadcast tick system...');
-
-        // FIXED: Start broadcast ticks for each game/duration combination
-        Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
-            durations.forEach(duration => {
-                startBroadcastTicksForGame(gameType, duration);
-            });
-        });
-
-        gameTicksStarted = true;
-        console.log('✅ DURATION-BASED broadcast tick system started');
-
-        // Log active rooms
-        console.log('\n📋 ACTIVE ROOMS:');
-        Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
-            durations.forEach(duration => {
-                console.log(`   - ${gameType}_${duration}`);
-            });
-        });
-        console.log(`📊 Total rooms: ${Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0)}\n`);
-
-    } catch (error) {
-        console.error('❌ Error starting broadcast ticks:', error);
-    }
-};
-
-/**
- * MISSING: Start broadcast ticks for specific game/duration combination
- */
-const startBroadcastTicksForGame = (gameType, duration) => {
-    const key = `${gameType}_${duration}`;
-
-    // Clear existing interval
-    if (gameIntervals.has(key)) {
-        clearInterval(gameIntervals.get(key));
-    }
-
-    // Start broadcast interval - every 1 second
-    const intervalId = setInterval(async () => {
-        await broadcastTick(gameType, duration);
-    }, 1000);
-
-    gameIntervals.set(key, intervalId);
-    console.log(`⏰ Started broadcast ticks for ${gameType} ${duration}s`);
-};
-
-/**
- * MISSING: Broadcast tick - Enhanced time validation to prevent race conditions
- * THIS IS THE CRITICAL FUNCTION THAT SENDS timeUpdate EVERY SECOND
- */
-const broadcastTick = async (gameType, duration) => {
-    try {
-        if (!isConnected()) return;
-
-        const roomId = `${gameType}_${duration}`;
-
-        // Get period info from Redis (populated by game scheduler process)
-        const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
-
-        if (!periodInfo) {
-            // No period info available - skip this tick
-            return;
-        }
-
-        const now = new Date();
-
-        // Calculate actual time remaining using period end time
-        let actualTimeRemaining;
-        try {
-            const actualEndTime = calculatePeriodEndTime(periodInfo.periodId, duration);
-            actualTimeRemaining = Math.max(0, Math.ceil((actualEndTime - now) / 1000));
-        } catch (timeError) {
-            // Fallback to Redis time if calculation fails
-            const redisEndTime = new Date(periodInfo.endTime);
-            actualTimeRemaining = Math.max(0, Math.ceil((redisEndTime - now) / 1000));
-        }
-
-        // Validate time remaining is within reasonable bounds
-        if (actualTimeRemaining < 0 || actualTimeRemaining > duration + 5) {
-            // Period has ended or is invalid, skip this tick
-            return;
-        }
-
-        // CRITICAL: Betting closes at exactly 5 seconds remaining
-        const bettingOpen = actualTimeRemaining > 5;
-
-        // THIS IS THE MISSING PIECE: Broadcast time update to specific room EVERY SECOND
-        io.to(roomId).emit('timeUpdate', {
-            gameType,
-            duration,
-            periodId: periodInfo.periodId,
-            timeRemaining: actualTimeRemaining,
-            endTime: periodInfo.endTime,
-            bettingOpen,
-            bettingCloseTime: actualTimeRemaining <= 5,
-            timestamp: now.toISOString(),
-            roomId,
-            source: 'websocket_tick_broadcast'
-        });
-
-        // Handle betting closure notification - only once at exactly 5 seconds
-        if (actualTimeRemaining === 5 && !bettingOpen) {
-            io.to(roomId).emit('bettingClosed', {
-                gameType,
-                duration,
-                periodId: periodInfo.periodId,
-                message: `Betting closed for ${gameType} ${duration}s`,
-                timeRemaining: 5,
-                roomId,
-                timestamp: now.toISOString()
-            });
-            console.log(`📢 WebSocket: Betting closed for ${roomId} - ${periodInfo.periodId}`);
-        }
-
-    } catch (error) {
-        // Suppress frequent errors to avoid log spam
-        const errorKey = `broadcast_error_${gameType}_${duration}`;
-        const lastError = global[errorKey] || 0;
-        if (Date.now() - lastError > 60000) { // Log once per minute
-            console.error(`❌ WebSocket broadcast tick error [${gameType}|${duration}s]:`, error.message);
-            global[errorKey] = Date.now();
-        }
-    }
-};
-
-/**
- * CRITICAL: Add this function to your initializeWebSocket function
- * Add this line RIGHT BEFORE returning io:
- */
-
-
-/**
- * MISSING: Enhanced sendCurrentPeriodFromRedis with more data
- */
-const sendCurrentPeriodFromRedisEnhanced = async (socket, gameType, duration) => {
-    try {
-        const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
-
-        if (!periodInfo) {
-            socket.emit('error', {
-                message: 'No active period found - game scheduler may not be running',
-                gameType,
-                duration,
-                code: 'NO_ACTIVE_PERIOD'
-            });
-            return;
-        }
-
-        const now = new Date();
-
-        // FIXED: Use actual time calculation for accuracy
-        let timeRemaining;
-        try {
-            const actualEndTime = calculatePeriodEndTime(periodInfo.periodId, duration);
-            timeRemaining = Math.max(0, Math.ceil((actualEndTime - now) / 1000));
-        } catch (timeError) {
-            // Fallback to Redis time
-            const redisEndTime = new Date(periodInfo.endTime);
-            timeRemaining = Math.max(0, Math.ceil((redisEndTime - now) / 1000));
-        }
-
-        const bettingOpen = timeRemaining > 5;
-
-        // FIXED: Validate that time remaining is realistic before sending
-        if (timeRemaining > duration + 5) {
-            console.warn(`⚠️ WebSocket: Unrealistic time remaining ${timeRemaining}s for period ${periodInfo.periodId}, using fallback`);
-            timeRemaining = duration; // Fallback to full duration
-        }
-
-        // Send complete period info like the old version
-        socket.emit('periodInfo', {
-            gameType,
-            duration,
-            periodId: periodInfo.periodId,
-            timeRemaining,
-            endTime: periodInfo.endTime,
-            bettingOpen,
-            bettingCloseTime: timeRemaining <= 5,
-            timestamp: now.toISOString(),
-            source: 'websocket_validated'
-        });
-
-        // ALSO send currentPeriod for backward compatibility
-        socket.emit('currentPeriod', {
-            gameType,
-            duration,
-            periodId: periodInfo.periodId,
-            timeRemaining,
-            endTime: periodInfo.endTime,
-            bettingOpen,
-            bettingCloseTime: timeRemaining <= 5,
-            status: bettingOpen ? 'betting' : 'closed',
-            timestamp: now.toISOString()
-        });
-
-        console.log(`📤 WebSocket: Sent enhanced period info [${gameType}|${duration}s]: ${periodInfo.periodId} (${timeRemaining}s, betting: ${bettingOpen})`);
-
-    } catch (error) {
-        console.error('❌ WebSocket: Error sending period info:', error);
-        socket.emit('error', {
-            message: 'Failed to get current period info',
-            gameType,
-            duration,
-            code: 'PERIOD_INFO_ERROR'
-        });
-    }
-};
-
 /**
  * NEW: WebSocket-specific bet processing that handles timing validation properly
  */
@@ -397,7 +159,7 @@ const processWebSocketBet = async (socket, data) => {
         // Validate input
         console.log(`🔍 [WS_BET_VALIDATION] ==========================================`);
         console.log(`🔍 [WS_BET_VALIDATION] Validating input parameters...`);
-
+        
         if (!gameType || !duration || !betType || betValue === undefined || !betAmount) {
             console.log(`❌ [WS_BET_VALIDATION] Missing required fields:`, { gameType, duration, betType, betValue, betAmount });
             socket.emit('betError', {
@@ -422,7 +184,7 @@ const processWebSocketBet = async (socket, data) => {
         // Get current period
         console.log(`⏰ [WS_BET_PERIOD] ==========================================`);
         console.log(`⏰ [WS_BET_PERIOD] Getting current period for ${gameType} ${duration}s...`);
-
+        
         const currentPeriod = await periodService.getCurrentPeriod(gameType, duration, timeline);
         if (!currentPeriod || !currentPeriod.periodId) {
             console.log(`❌ [WS_BET_PERIOD] No active betting period found`);
@@ -439,12 +201,12 @@ const processWebSocketBet = async (socket, data) => {
         const now = Date.now();
         const periodEnd = currentPeriod.endTime;
         const timeRemaining = periodEnd - now;
-
+        
         console.log(`⏰ [WS_BET_TIMING] ==========================================`);
         console.log(`⏰ [WS_BET_TIMING] Current time: ${new Date(now).toISOString()}`);
         console.log(`⏰ [WS_BET_TIMING] Period end: ${new Date(periodEnd).toISOString()}`);
-        console.log(`⏰ [WS_BET_TIMING] Time remaining: ${timeRemaining}ms (${timeRemaining / 1000}s)`);
-
+        console.log(`⏰ [WS_BET_TIMING] Time remaining: ${timeRemaining}ms (${timeRemaining/1000}s)`);
+        
         if (timeRemaining < 5000) {
             console.log(`❌ [WS_BET_TIMING] Betting closed - only ${timeRemaining}ms remaining`);
             socket.emit('betError', {
@@ -459,7 +221,7 @@ const processWebSocketBet = async (socket, data) => {
         // Validate bet placement using new structure
         console.log(`🔍 [WS_BET_PLACEMENT_VALIDATION] ==========================================`);
         console.log(`🔍 [WS_BET_PLACEMENT_VALIDATION] Validating bet placement...`);
-
+        
         const validation = await validateBetPlacement(userId, gameType, duration, currentPeriod.periodId, betAmount, timeline);
         if (!validation.valid) {
             console.log(`❌ [WS_BET_PLACEMENT_VALIDATION] Validation failed:`, validation.error);
@@ -475,7 +237,7 @@ const processWebSocketBet = async (socket, data) => {
         // Get odds
         console.log(`💰 [WS_BET_ODDS] ==========================================`);
         console.log(`💰 [WS_BET_ODDS] Calculating odds for bet type: ${betType}, value: ${betValue}`);
-
+        
         const odds = calculateOddsForBet(betType, betValue);
         if (!odds) {
             console.log(`❌ [WS_BET_ODDS] Invalid bet type or value: ${betType}:${betValue}`);
@@ -491,7 +253,7 @@ const processWebSocketBet = async (socket, data) => {
         // Process the bet with new structure
         console.log(`🎯 [WS_BET_GAME_LOGIC] ==========================================`);
         console.log(`🎯 [WS_BET_GAME_LOGIC] Calling gameLogicService.processBet...`);
-
+        
         const betDataForProcessing = {
             userId,
             gameType,
@@ -503,9 +265,9 @@ const processWebSocketBet = async (socket, data) => {
             betAmount,
             odds
         };
-
+        
         console.log(`🎯 [WS_BET_GAME_LOGIC] Bet data for processing:`, JSON.stringify(betDataForProcessing, null, 2));
-
+        
         const betResult = await gameLogicService.processBet(betDataForProcessing);
 
         console.log(`📊 [WS_BET_GAME_LOGIC_RESULT] ==========================================`);
@@ -520,7 +282,7 @@ const processWebSocketBet = async (socket, data) => {
             console.log(`✅ [WS_BET_SUCCESS] Platform fee: ₹${betResult.data.platformFee}`);
             console.log(`✅ [WS_BET_SUCCESS] Expected win: ₹${betResult.data.expectedWin}`);
             console.log(`✅ [WS_BET_SUCCESS] Wallet balance after: ₹${betResult.data.walletBalanceAfter}`);
-
+            
             socket.emit('betSuccess', {
                 success: true,
                 betId: betResult.data.betId,
@@ -542,13 +304,13 @@ const processWebSocketBet = async (socket, data) => {
             // Update room with total bets using new hash structure
             console.log(`📡 [WS_BET_BROADCAST] ==========================================`);
             console.log(`📡 [WS_BET_BROADCAST] Updating room with total bets...`);
-
+            
             const roomId = getRoomId(gameType, duration, timeline);
             const totalBets = await getTotalBetsForPeriod(gameType, duration, currentPeriod.periodId, timeline);
-
+            
             console.log(`📡 [WS_BET_BROADCAST] Room ID: ${roomId}`);
             console.log(`📡 [WS_BET_BROADCAST] Total bets:`, JSON.stringify(totalBets, null, 2));
-
+            
             io.to(roomId).emit('totalBetsUpdate', {
                 gameType,
                 duration,
@@ -561,13 +323,13 @@ const processWebSocketBet = async (socket, data) => {
             console.log(`✅ [WS_BET_COMPLETE] ==========================================`);
             console.log(`✅ [WS_BET_COMPLETE] Bet placed successfully for user ${userId}`);
             console.log(`✅ [WS_BET_COMPLETE] Room updated with total bets`);
-
+            
             return { success: true, data: betResult.data };
         } else {
             console.log(`❌ [WS_BET_GAME_LOGIC_FAILED] ==========================================`);
             console.log(`❌ [WS_BET_GAME_LOGIC_FAILED] Game logic processing failed:`, betResult.message);
             console.log(`❌ [WS_BET_GAME_LOGIC_FAILED] Error code:`, betResult.code);
-
+            
             socket.emit('betError', {
                 success: false,
                 message: betResult.message || 'Failed to place bet',
@@ -582,7 +344,7 @@ const processWebSocketBet = async (socket, data) => {
         console.log(`💥 [WS_BET_ERROR] Error:`, error.message);
         console.log(`💥 [WS_BET_ERROR] Stack:`, error.stack);
         console.log(`💥 [WS_BET_ERROR] Bet data:`, JSON.stringify(data, null, 2));
-
+        
         socket.emit('betError', {
             success: false,
             message: 'Server error while processing bet'
@@ -598,7 +360,7 @@ const mapFiveDBet = (betData) => {
     const { type, selection, position } = betData;
     const clientType = String(type || '').toLowerCase();
     const clientSelection = String(selection || '').toLowerCase();
-
+    
     // Check if this is a sum bet (position is 'SUM' or 'sum')
     if (position === 'SUM' || position === 'sum') {
         // Sum-based bets
@@ -616,7 +378,7 @@ const mapFiveDBet = (betData) => {
             };
         }
     }
-
+    
     // Position-based bets (A, B, C, D, E)
     if (clientSelection === 'odd' || clientSelection === 'even') {
         return {
@@ -625,7 +387,7 @@ const mapFiveDBet = (betData) => {
             odds: 2.0
         };
     }
-
+    
     switch (clientType) {
         case 'size':
             return {
@@ -663,7 +425,7 @@ const mapWingoBet = (betData) => {
     const { type, selection } = betData;
     const clientType = String(type || '').toLowerCase();
     const clientSelection = String(selection || '').toLowerCase();
-
+    
     switch (clientType) {
         case 'number':
             return {
@@ -705,7 +467,7 @@ const mapWingoBet = (betData) => {
 const mapClientBetType = (clientType, betData = {}) => {
     const type = String(clientType || '').toLowerCase();
     const selection = String(betData.selection || '').toLowerCase();
-
+    
     // Check if this is a position-based bet (has position field)
     if (betData.position && betData.position !== 'sum' && betData.position !== 'SUM') {
         // Position-based bets (A, B, C, D, E)
@@ -713,7 +475,7 @@ const mapClientBetType = (clientType, betData = {}) => {
         if (selection === 'odd' || selection === 'even') {
             return 'POSITION_PARITY';
         }
-
+        
         switch (type) {
             case 'size':
                 return 'POSITION_SIZE';
@@ -732,7 +494,7 @@ const mapClientBetType = (clientType, betData = {}) => {
         if (selection === 'odd' || selection === 'even') {
             return 'SUM_PARITY';
         }
-
+        
         switch (type) {
             case 'size':
                 return 'SUM_SIZE';
@@ -755,7 +517,7 @@ const mapClientBetValue = (clientSelection, clientType, betData = {}) => {
     // Handle different client formats - convert to string first
     const selection = String(clientSelection || '').toLowerCase();
     const type = String(clientType || '').toLowerCase();
-
+    
     // Color mapping
     if (type === 'color') {
         const colorMapping = {
@@ -766,16 +528,16 @@ const mapClientBetValue = (clientSelection, clientType, betData = {}) => {
         };
         return colorMapping[selection] || 'green';
     }
-
+    
     // Parity mapping - Handle both position-based and sum-based
     // Check for parity first, even if type is "size" but selection is "odd"/"even"
-    if (type === 'parity' || type === 'odd' || type === 'even' ||
+    if (type === 'parity' || type === 'odd' || type === 'even' || 
         (type === 'size' && (selection === 'odd' || selection === 'even'))) {
         const parityMapping = {
             'odd': 'odd',
             'even': 'even'
         };
-
+        
         // Check if this is a position-based bet
         if (betData.position && betData.position !== 'sum' && betData.position !== 'SUM') {
             // Position-based: A_odd, B_even, etc.
@@ -785,14 +547,14 @@ const mapClientBetValue = (clientSelection, clientType, betData = {}) => {
             return `SUM_${parityMapping[selection] || 'odd'}`;
         }
     }
-
+    
     // Size mapping - Handle both position-based and sum-based
     if (type === 'size') {
         const sizeMapping = {
             'big': 'big',
             'small': 'small'
         };
-
+        
         // Check if this is a position-based bet
         if (betData.position && betData.position !== 'sum' && betData.position !== 'SUM') {
             // Position-based: A_small, B_big, etc.
@@ -802,9 +564,9 @@ const mapClientBetValue = (clientSelection, clientType, betData = {}) => {
             return `SUM_${sizeMapping[selection] || 'small'}`;
         }
     }
+    
 
-
-
+    
     // Number mapping - Handle both position-based and sum-based
     if (type === 'number') {
         // Check if this is a position-based bet
@@ -816,12 +578,12 @@ const mapClientBetValue = (clientSelection, clientType, betData = {}) => {
             return String(clientSelection);
         }
     }
-
+    
     // Sum mapping (for k3 game)
     if (type === 'sum') {
         return String(clientSelection);
     }
-
+    
     // Default fallback
     return String(clientSelection);
 };
@@ -832,17 +594,17 @@ const mapClientBetValue = (clientSelection, clientType, betData = {}) => {
 const calculateOddsForBet = (clientType, clientSelection, betData = {}) => {
     const type = String(clientType || '').toLowerCase();
     const selection = String(clientSelection || '').toLowerCase();
-
+    
     switch (type) {
         case 'number':
             return 9.0; // 1:9 odds for specific number
-
+            
         case 'color':
             if (selection === 'violet' || selection === 'purple') {
                 return 4.5; // Violet odds
             }
             return 2.0; // Red/Green odds
-
+            
         case 'size':
             // Check if this is a position-based bet
             if (betData.position && betData.position !== 'sum') {
@@ -850,7 +612,7 @@ const calculateOddsForBet = (clientType, clientSelection, betData = {}) => {
             } else {
                 return 1.98; // Sum-based size odds
             }
-
+            
         case 'parity':
         case 'odd':
         case 'even':
@@ -860,10 +622,10 @@ const calculateOddsForBet = (clientType, clientSelection, betData = {}) => {
             } else {
                 return 1.98; // Sum-based parity odds
             }
-
+            
         case 'sum':
             return 9.0; // 1:9 odds for sum bets (k3 game)
-
+            
         default:
             // Check if selection indicates parity bet
             if (selection === 'odd' || selection === 'even') {
@@ -884,27 +646,27 @@ const getTotalBetsForPeriod = async (gameType, duration, periodId, timeline = 'd
     try {
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
         const betsData = await redisClient.hgetall(betHashKey);
-
+        
         let totalAmount = 0;
         let totalGross = 0;
         let totalFees = 0;
         let betCount = 0;
         const userBets = new Map();
-
+        
         for (const [betId, betJson] of Object.entries(betsData)) {
             const bet = JSON.parse(betJson);
             totalAmount += parseFloat(bet.netBetAmount || 0);
             totalGross += parseFloat(bet.grossBetAmount || bet.netBetAmount || 0);
             totalFees += parseFloat(bet.platformFee || 0);
             betCount++;
-
+            
             // Track unique users
             if (!userBets.has(bet.userId)) {
                 userBets.set(bet.userId, 0);
             }
             userBets.set(bet.userId, userBets.get(bet.userId) + 1);
         }
-
+        
         return {
             totalAmount: totalAmount.toFixed(2),
             totalGross: totalGross.toFixed(2),
@@ -915,13 +677,13 @@ const getTotalBetsForPeriod = async (gameType, duration, periodId, timeline = 'd
         };
     } catch (error) {
         console.error('Error getting total bets:', error);
-        return {
-            totalAmount: '0',
+        return { 
+            totalAmount: '0', 
             totalGross: '0',
             totalFees: '0',
-            betCount: 0,
+            betCount: 0, 
             uniqueUsers: 0,
-            timeline
+            timeline 
         };
     }
 };
@@ -934,7 +696,7 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
         // Check if user exists
         const models = await ensureModelsInitialized();
         const user = await models.User.findByPk(userId);
-
+        
         if (!user) {
             return { valid: false, error: 'User not found' };
         }
@@ -942,7 +704,7 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
         // Check wallet balance
         const walletBalance = parseFloat(user.wallet_balance);
         const betAmountFloat = parseFloat(betAmount);
-
+        
         if (walletBalance < betAmountFloat) {
             return { valid: false, error: 'Insufficient balance' };
         }
@@ -950,11 +712,11 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
         // Check minimum and maximum bet amounts
         const minBet = getMinBetAmount(gameType);
         const maxBet = getMaxBetAmount(gameType);
-
+        
         if (betAmountFloat < minBet) {
             return { valid: false, error: `Minimum bet amount is ${minBet}` };
         }
-
+        
         if (betAmountFloat > maxBet) {
             return { valid: false, error: `Maximum bet amount is ${maxBet}` };
         }
@@ -962,10 +724,10 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
         // Check if user has already placed maximum bets using new hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
         const allBets = await redisClient.hgetall(betHashKey);
-
+        
         let userBetCount = 0;
         let userTotalAmount = 0;
-
+        
         for (const [betId, betJson] of Object.entries(allBets)) {
             const bet = JSON.parse(betJson);
             if (bet.userId === userId) {
@@ -973,7 +735,7 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
                 userTotalAmount += parseFloat(bet.grossBetAmount || bet.netBetAmount);
             }
         }
-
+        
         const maxBetsPerUser = getMaxBetsPerUser(gameType);
         if (userBetCount >= maxBetsPerUser) {
             return {
@@ -992,7 +754,7 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
         }
 
         return { valid: true };
-
+        
     } catch (error) {
         console.error('Error validating bet placement:', error);
         return { valid: false, error: 'Validation error' };
@@ -1002,10 +764,10 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
 /**
  * FIXED: Initialize WebSocket server with duration-based rooms only + BET FUNCTIONALITY
  */
-const initializeWebSocket = async (server) => {
+const initializeWebSocket = async (server, autoStartTicks = true) => {
     try {
-        console.log('🔄 Initializing WebSocket server (PASSIVE MODE - no period management)...');
-
+        console.log('🔄 Initializing WebSocket server with BET PLACEMENT - DURATION-BASED ROOMS ONLY...');
+        
         // Wait for Redis connection
         if (!isConnected()) {
             console.log('⏳ Waiting for Redis connection...');
@@ -1018,17 +780,17 @@ const initializeWebSocket = async (server) => {
                 }, 1000);
             });
         }
-
+        
         console.log('✅ Redis connected, creating WebSocket server...');
-
+        
         // Ensure game logic models are initialized
         await ensureModelsInitialized();
         console.log('✅ Game logic models initialized');
-
+        
         // Initialize WebSocket models
         models = await initializeWebSocketModels();
         console.log('✅ WebSocket models initialized');
-
+        
         io = new Server(server, {
             cors: {
                 origin: [
@@ -1082,12 +844,12 @@ const initializeWebSocket = async (server) => {
             socket.on('joinGame', async (data) => {
                 try {
                     const { gameType, duration } = data;
-
+                    
                     console.log(`🎮 Join game request: ${gameType} ${duration}s`);
-
+                    
                     // FIXED: Validation - no timeline, only duration
                     if (!GAME_CONFIGS[gameType] || !GAME_CONFIGS[gameType].includes(duration)) {
-                        socket.emit('error', {
+                        socket.emit('error', { 
                             message: `Invalid game: ${gameType} ${duration}s`,
                             code: 'INVALID_GAME_DURATION',
                             availableOptions: GAME_CONFIGS[gameType] || []
@@ -1097,18 +859,17 @@ const initializeWebSocket = async (server) => {
 
                     // FIXED: Create room ID with duration only
                     const roomId = `${gameType}_${duration}`;
-
+                    
                     // Leave previous rooms
                     if (socket.currentGame) {
                         const oldRoomId = `${socket.currentGame.gameType}_${socket.currentGame.duration}`;
                         socket.leave(oldRoomId);
                         console.log(`👋 User left previous room: ${oldRoomId}`);
                     }
-
+                    
                     // Join new duration-based room
                     socket.join(roomId);
                     socket.currentGame = { gameType, duration, roomId };
-                    console.log(`[DEBUG] Client ${socket.id} joined room: ${roomId}`);
 
                     // Record game move in transaction
                     try {
@@ -1135,8 +896,8 @@ const initializeWebSocket = async (server) => {
                     }
 
                     socket.emit('joinedGame', {
-                        gameType,
-                        duration,
+                        gameType, 
+                        duration, 
                         roomId,
                         message: `Joined ${gameType} ${duration}s room`,
                         timestamp: new Date().toISOString(),
@@ -1144,7 +905,7 @@ const initializeWebSocket = async (server) => {
                     });
 
                     // Send current period info from Redis (populated by game scheduler)
-                    await sendCurrentPeriodFromRedisEnhanced(socket, gameType, duration);
+                    await sendCurrentPeriodFromRedis(socket, gameType, duration);
 
                 } catch (error) {
                     console.error('❌ Error joining game:', error);
@@ -1157,9 +918,9 @@ const initializeWebSocket = async (server) => {
                 try {
                     const { gameType, duration } = data;
                     const roomId = `${gameType}_${duration}`;
-
+                    
                     socket.leave(roomId);
-
+                    
                     // Record game move out transaction
                     try {
                         const user = await models.User.findByPk(socket.user.userId);
@@ -1186,7 +947,7 @@ const initializeWebSocket = async (server) => {
 
                     socket.currentGame = null;
                     socket.emit('leftGame', { gameType, duration, roomId });
-
+                    
                     console.log(`👋 User left room: ${roomId}`);
                 } catch (error) {
                     console.error('❌ Error leaving game:', error);
@@ -1198,17 +959,17 @@ const initializeWebSocket = async (server) => {
                 try {
                     const userId = socket.user.userId || socket.user.id;
                     const timestamp = new Date().toISOString();
-
+                    
                     console.log(`\n🎯 [WEBSOCKET_BET_START] ==========================================`);
                     console.log(`🎯 [WEBSOCKET_BET_START] User ${userId} placing bet at ${timestamp}`);
                     console.log(`🎯 [WEBSOCKET_BET_START] Socket ID: ${socket.id}`);
                     console.log(`🎯 [WEBSOCKET_BET_START] Raw bet received:`, JSON.stringify(betData, null, 2));
                     console.log(`🎯 [WEBSOCKET_BET_START] User object:`, JSON.stringify(socket.user, null, 2));
-
+                    
                     // Transform client data format to expected format
                     // Transform the client bet data to server format using room-wise mapping
                     let transformedBetData;
-
+                    
                     // Use room-specific mapping for different games
                     if (betData.gameType === 'fiveD' || betData.gameType === '5d') {
                         // 5D Room mapping
@@ -1266,28 +1027,28 @@ const initializeWebSocket = async (server) => {
                             odds: calculateOddsForBet(betData.type, betData.selection, betData)
                         };
                     }
-
+                    
                     console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] ==========================================`);
                     console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Original type: ${betData.type} -> Server type: ${transformedBetData.betType}`);
                     console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Original selection: ${betData.selection} -> Server value: ${transformedBetData.betValue}`);
                     console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Original amount: ${betData.amount} -> Server amount: ${transformedBetData.betAmount}`);
                     console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Calculated odds: ${transformedBetData.odds}`);
                     console.log(`🔄 [WEBSOCKET_BET_TRANSFORM] Transformed bet data:`, JSON.stringify(transformedBetData, null, 2));
-
+                    
                     // CRITICAL: Validate bet placement first
                     console.log(`🔍 [WEBSOCKET_BET_VALIDATION] ==========================================`);
                     console.log(`🔍 [WEBSOCKET_BET_VALIDATION] Starting validation for user ${userId}...`);
-
+                    
                     const validation = await validateBetPlacement(userId, transformedBetData.gameType, transformedBetData.duration, transformedBetData.periodId, transformedBetData.betAmount, transformedBetData.timeline);
-
+                    
                     console.log(`🔍 [WEBSOCKET_BET_VALIDATION] Validation result:`, JSON.stringify(validation, null, 2));
-
+                    
                     if (!validation.valid) {
                         console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] ==========================================`);
                         console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] Validation failed for user ${userId}:`, validation.message);
                         console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] Error details:`, JSON.stringify(validation, null, 2));
-
-                        socket.emit('betError', {
+                        
+                        socket.emit('betError', { 
                             message: validation.message,
                             code: validation.code,
                             timeRemaining: validation.timeRemaining,
@@ -1297,28 +1058,28 @@ const initializeWebSocket = async (server) => {
                         });
                         return;
                     }
-
+                    
                     console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] ==========================================`);
                     console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Validation passed for user ${userId}`);
                     console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Time remaining: ${validation.timeRemaining}s`);
                     console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Current balance: ₹${validation.currentBalance}`);
-
+                    
                     // Use corrected bet amount from validation
                     const finalBetData = {
                         ...transformedBetData,
                         betAmount: validation.correctedBetAmount || transformedBetData.betAmount
                     };
-
+                    
                     console.log(`🔍 [WEBSOCKET_BET_FINAL_DATA] ==========================================`);
                     console.log(`🔍 [WEBSOCKET_BET_FINAL_DATA] Final bet data for processing:`, JSON.stringify(finalBetData, null, 2));
                     console.log(`🔍 [WEBSOCKET_BET_FINAL_DATA] Processing bet for user ${userId}...`);
-
+                    
                     // Process bet using WebSocket-specific processing (bypasses timing validation)
                     const result = await processWebSocketBet(socket, finalBetData);
-
+                    
                     console.log(`📊 [WEBSOCKET_BET_PROCESSING_RESULT] ==========================================`);
                     console.log(`📊 [WEBSOCKET_BET_PROCESSING_RESULT] Processing result:`, JSON.stringify(result, null, 2));
-
+                    
                     if (result.success) {
                         console.log(`✅ [WEBSOCKET_BET_SUCCESS] ==========================================`);
                         console.log(`✅ [WEBSOCKET_BET_SUCCESS] Bet processed successfully for user ${userId}`);
@@ -1327,7 +1088,7 @@ const initializeWebSocket = async (server) => {
                         console.log(`✅ [WEBSOCKET_BET_SUCCESS] Period: ${finalBetData.periodId}`);
                         console.log(`✅ [WEBSOCKET_BET_SUCCESS] Bet type: ${finalBetData.betType}:${finalBetData.betValue}`);
                         console.log(`✅ [WEBSOCKET_BET_SUCCESS] Odds: ${finalBetData.odds}x`);
-
+                        
                         // Success response to the betting user only
                         socket.emit('betSuccess', {
                             ...result.data,
@@ -1335,27 +1096,27 @@ const initializeWebSocket = async (server) => {
                             timestamp: timestamp,
                             timeRemaining: validation.timeRemaining
                         });
-
+                        
                         // Store user as having placed bet in this period for result notifications
                         const roomId = `${betData.gameType}_${betData.duration}`;
                         if (!socket.activeBets) {
                             socket.activeBets = new Set();
                         }
                         socket.activeBets.add(`${betData.gameType}_${betData.duration}_${betData.periodId}`);
-
+                        
                         console.log(`📡 [WEBSOCKET_BET_BROADCAST] ==========================================`);
                         console.log(`📡 [WEBSOCKET_BET_BROADCAST] Broadcasting bet activity to room: ${roomId}`);
-
+                        
                         // Broadcast general bet activity to room (no user-specific data)
                         const totalBets = await getTotalBetsForPeriod(
-                            betData.gameType,
-                            betData.duration,
-                            betData.periodId,
+                            betData.gameType, 
+                            betData.duration, 
+                            betData.periodId, 
                             betData.timeline || 'default'
                         );
-
+                        
                         console.log(`📡 [WEBSOCKET_BET_BROADCAST] Total bets for period:`, JSON.stringify(totalBets, null, 2));
-
+                        
                         socket.to(roomId).emit('betActivity', {
                             periodId: betData.periodId,
                             totalBets: totalBets,
@@ -1363,30 +1124,30 @@ const initializeWebSocket = async (server) => {
                             duration: betData.duration,
                             timestamp: timestamp
                         });
-
+                        
                         console.log(`✅ [WEBSOCKET_BET_COMPLETE] ==========================================`);
                         console.log(`✅ [WEBSOCKET_BET_COMPLETE] Bet flow completed successfully for user ${userId}`);
-
+                        
                     } else {
                         console.log(`❌ [WEBSOCKET_BET_PROCESSING_FAILED] ==========================================`);
                         console.log(`❌ [WEBSOCKET_BET_PROCESSING_FAILED] Bet processing failed for user ${userId}:`, result.message);
                         console.log(`❌ [WEBSOCKET_BET_PROCESSING_FAILED] Error details:`, JSON.stringify(result, null, 2));
-
-                        socket.emit('betError', {
+                        
+                        socket.emit('betError', { 
                             message: result.message,
                             code: result.code,
                             timestamp: timestamp
                         });
                     }
-
+                    
                 } catch (error) {
                     console.log(`💥 [WEBSOCKET_BET_ERROR] ==========================================`);
                     console.log(`💥 [WEBSOCKET_BET_ERROR] Unexpected error processing bet for user ${socket.user?.userId || socket.user?.id}:`);
                     console.log(`💥 [WEBSOCKET_BET_ERROR] Error:`, error.message);
                     console.log(`💥 [WEBSOCKET_BET_ERROR] Stack:`, error.stack);
                     console.log(`💥 [WEBSOCKET_BET_ERROR] Bet data:`, JSON.stringify(betData, null, 2));
-
-                    socket.emit('betError', {
+                    
+                    socket.emit('betError', { 
                         message: 'Failed to process bet due to server error',
                         code: 'PROCESSING_ERROR',
                         timestamp: new Date().toISOString()
@@ -1399,34 +1160,34 @@ const initializeWebSocket = async (server) => {
                 try {
                     const userId = socket.user.userId || socket.user.id;
                     console.log(`🚧 [DEBUG_BET] Debug bet received from user ${userId}:`, JSON.stringify(betData, null, 2));
-
+                    
                     // Simple validation only (no game logic validation)
                     if (!betData.amount || betData.amount <= 0) {
-                        socket.emit('betError', {
+                        socket.emit('betError', { 
                             message: 'Invalid bet amount',
                             code: 'INVALID_AMOUNT'
                         });
                         return;
                     }
-
+                    
                     // CRITICAL FIX: Add duration validation even in debug mode
                     const gameType = betData.gameType;
                     const duration = parseInt(betData.duration);
-
+                    
                     // Validate duration for game type
                     if (!GAME_CONFIGS[gameType] || !GAME_CONFIGS[gameType].includes(duration)) {
-                        socket.emit('betError', {
+                        socket.emit('betError', { 
                             message: `Invalid duration ${duration}s for game type ${gameType}. Valid durations: ${GAME_CONFIGS[gameType]?.join(', ') || 'none'}`,
                             code: 'INVALID_DURATION'
                         });
                         return;
                     }
-
+                    
                     console.log(`🚧 [DEBUG_BET] Duration validation passed: ${gameType} ${duration}s`);
-
+                    
                     // Transform data using room-wise mapping
                     let finalBetData;
-
+                    
                     // Use room-specific mapping for different games
                     if (betData.gameType === 'fiveD' || betData.gameType === '5d') {
                         // 5D Room mapping
@@ -1484,31 +1245,31 @@ const initializeWebSocket = async (server) => {
                             odds: calculateOddsForBet(betData.type, betData.selection, betData)
                         };
                     }
-
+                    
                     console.log(`🚧 [DEBUG_BET] Bypassing validation, processing directly:`, JSON.stringify(finalBetData, null, 2));
-
+                    
                     // Process bet directly
                     const result = await processBet(finalBetData);
-
+                    
                     if (result.success) {
                         socket.emit('betSuccess', {
                             ...result.data,
                             message: '🚧 DEBUG: Bet placed successfully (validation bypassed)!',
                             timestamp: new Date().toISOString()
                         });
-
+                        
                         console.log(`🚧 [DEBUG_BET] Debug bet processed successfully for user ${userId}`);
                     } else {
-                        socket.emit('betError', {
+                        socket.emit('betError', { 
                             message: `🚧 DEBUG: ${result.message}`,
                             code: result.code,
                             timestamp: new Date().toISOString()
                         });
                     }
-
+                    
                 } catch (error) {
                     console.error('❌ [DEBUG_BET] Error in debug bet:', error);
-                    socket.emit('betError', {
+                    socket.emit('betError', { 
                         message: '🚧 DEBUG: Server error',
                         code: 'DEBUG_ERROR'
                     });
@@ -1526,7 +1287,7 @@ const initializeWebSocket = async (server) => {
                     });
                 } catch (error) {
                     console.error('❌ Error getting user balance:', error);
-                    socket.emit('error', {
+                    socket.emit('error', { 
                         message: 'Failed to get balance',
                         code: 'BALANCE_ERROR'
                     });
@@ -1538,12 +1299,12 @@ const initializeWebSocket = async (server) => {
                 try {
                     const userId = socket.user.userId || socket.user.id;
                     const { gameType, duration, periodId } = data;
-
+                    
                     const history = await getUserBetHistory(userId, gameType, duration, {
                         periodId,
                         limit: 50
                     });
-
+                    
                     socket.emit('myBets', {
                         ...history,
                         gameType,
@@ -1553,7 +1314,7 @@ const initializeWebSocket = async (server) => {
                     });
                 } catch (error) {
                     console.error('❌ Error getting user bet history:', error);
-                    socket.emit('error', {
+                    socket.emit('error', { 
                         message: 'Failed to get bet history',
                         code: 'BET_HISTORY_ERROR'
                     });
@@ -1571,7 +1332,7 @@ const initializeWebSocket = async (server) => {
                     });
                 } catch (error) {
                     console.error('❌ Error getting period statistics:', error);
-                    socket.emit('error', {
+                    socket.emit('error', { 
                         message: 'Failed to get period stats',
                         code: 'PERIOD_STATS_ERROR'
                     });
@@ -1582,17 +1343,17 @@ const initializeWebSocket = async (server) => {
             socket.on('getPeriodInfo', async (data) => {
                 try {
                     const { gameType, duration } = data;
-
+                    
                     if (!GAME_CONFIGS[gameType] || !GAME_CONFIGS[gameType].includes(duration)) {
-                        socket.emit('error', {
+                        socket.emit('error', { 
                             message: `Invalid game: ${gameType} ${duration}s`,
                             code: 'INVALID_GAME_DURATION'
                         });
                         return;
                     }
-
+                    
                     const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
-
+                    
                     if (!periodInfo) {
                         socket.emit('periodInfoResponse', {
                             success: false,
@@ -1602,7 +1363,7 @@ const initializeWebSocket = async (server) => {
                         });
                         return;
                     }
-
+                    
                     // Calculate time remaining
                     let timeRemaining;
                     try {
@@ -1612,9 +1373,9 @@ const initializeWebSocket = async (server) => {
                         const redisEndTime = new Date(periodInfo.endTime);
                         timeRemaining = Math.max(0, Math.ceil((redisEndTime - new Date()) / 1000));
                     }
-
+                    
                     const bettingOpen = timeRemaining > 5;
-
+                    
                     socket.emit('periodInfoResponse', {
                         success: true,
                         data: {
@@ -1630,10 +1391,10 @@ const initializeWebSocket = async (server) => {
                         },
                         timestamp: new Date().toISOString()
                     });
-
+                    
                 } catch (error) {
                     console.error('❌ Error getting period info:', error);
-                    socket.emit('error', {
+                    socket.emit('error', { 
                         message: 'Failed to get period info',
                         code: 'PERIOD_INFO_ERROR'
                     });
@@ -1642,7 +1403,7 @@ const initializeWebSocket = async (server) => {
 
             // EXISTING: Ping handler
             socket.on('ping', () => {
-                socket.emit('pong', {
+                socket.emit('pong', { 
                     timestamp: new Date().toISOString(),
                     gameTicksActive: gameTicksStarted,
                     currentGame: socket.currentGame,
@@ -1653,7 +1414,7 @@ const initializeWebSocket = async (server) => {
             // EXISTING: Disconnect handler
             socket.on('disconnect', () => {
                 console.log('🔌 WebSocket disconnected:', socket.id);
-
+                
                 // Clean up user's active bets tracking
                 if (socket.activeBets) {
                     socket.activeBets.clear();
@@ -1661,14 +1422,12 @@ const initializeWebSocket = async (server) => {
             });
         });
 
-        // Setup Redis subscriptions to listen to scheduler events
-        setupRedisSubscriptions();
-
-        // START THE TIME BROADCAST SYSTEM - THIS STARTS THE timeUpdate EVERY SECOND
-        setTimeout(() => {
-            startBroadcastTicks();
-        }, 2000);
-
+        if (autoStartTicks) {
+            setTimeout(() => {
+                startBroadcastTicks();
+            }, 1000);
+        }
+        
         console.log('✅ WebSocket server initialized with BET PLACEMENT - DURATION-BASED ROOMS ONLY');
         return io;
     } catch (error) {
@@ -1678,366 +1437,501 @@ const initializeWebSocket = async (server) => {
 };
 
 /**
- * EXISTING: Setup Redis subscriptions for game scheduler events
+ * EXISTING: Start broadcast ticks for duration-based rooms only
  */
-// Backend/services/websocketService.js - FIX Redis Subscription
-
-// Add this to your websocketService.js - FIXED Redis Subscriptions Setup
-
-/**
- * CRITICAL FIX: Proper Redis Subscriptions Setup for ElastiCache
- */
-const setupRedisSubscriptions = () => {
-    (async () => {
-        try {
-            console.log('🔄 [REDIS_PUBSUB] Setting up Redis subscriptions for Strike Game ElastiCache...');
-
-            const Redis = require('ioredis');
-
-            // Create subscriber using SAME TLS config as your working redis.js
-            const subscriberConfig = {
-                host: process.env.REDIS_HOST || 'localhost',
-                port: process.env.REDIS_PORT || 6379,
-                password: process.env.REDIS_PASSWORD || '',
-                db: process.env.REDIS_DB || 0,
-
-                // CRITICAL: TLS configuration matching your ElastiCache
-                tls: {
-                    rejectUnauthorized: false,
-                    requestCert: true,
-                    agent: false
-                },
-
-                retryStrategy: function (times) {
-                    const delay = Math.min(times * 50, 2000);
-                    console.log(`🔄 [REDIS_PUBSUB] Retrying subscription connection in ${delay}ms (attempt ${times})`);
-                    return delay;
-                },
-
-                // Connection optimizations
-                connectTimeout: 15000,
-                commandTimeout: 5000,
-                lazyConnect: false,
-                enableOfflineQueue: true,
-                maxRetriesPerRequest: 3,
-                family: 4
-            };
-
-            console.log('🔄 [REDIS_PUBSUB] Creating subscriber with Strike Game ElastiCache config:', {
-                host: subscriberConfig.host,
-                port: subscriberConfig.port,
-                db: subscriberConfig.db,
-                tls: 'enabled'
+const startBroadcastTicks = () => {
+    try {
+        console.log('🕐 Starting DURATION-BASED broadcast tick system...');
+        
+        // FIXED: Start broadcast ticks for each game/duration combination
+        Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
+            durations.forEach(duration => {
+                startBroadcastTicksForGame(gameType, duration);
             });
-
-            const subscriber = new Redis(subscriberConfig);
-
-            // Enhanced connection event handlers
-            subscriber.on('connect', () => {
-                console.log('✅ [REDIS_PUBSUB] Strike Game subscriber connected to ElastiCache');
+        });
+        
+        gameTicksStarted = true;
+        console.log('✅ DURATION-BASED broadcast tick system started');
+        
+        // Log active rooms
+        console.log('\n📋 ACTIVE ROOMS:');
+        Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
+            durations.forEach(duration => {
+                console.log(`   - ${gameType}_${duration}`);
             });
-
-            subscriber.on('ready', () => {
-                console.log('✅ [REDIS_PUBSUB] Strike Game subscriber ready for subscriptions');
-                // Disable offline queue after connection
-                subscriber.options.enableOfflineQueue = false;
-            });
-
-            subscriber.on('error', (err) => {
-                console.error('❌ [REDIS_PUBSUB] Strike Game subscriber error:', err.message);
-            });
-
-            subscriber.on('reconnecting', (ms) => {
-                console.log(`🔄 [REDIS_PUBSUB] Strike Game subscriber reconnecting in ${ms}ms...`);
-            });
-
-            // Wait for connection to be ready
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error('Strike Game Redis subscriber connection timeout after 20 seconds'));
-                }, 20000);
-
-                if (subscriber.status === 'ready') {
-                    clearTimeout(timeout);
-                    resolve();
-                    return;
-                }
-
-                subscriber.on('ready', () => {
-                    clearTimeout(timeout);
-                    resolve();
-                });
-
-                subscriber.on('error', (err) => {
-                    clearTimeout(timeout);
-                    reject(err);
-                });
-            });
-
-            console.log('✅ [REDIS_PUBSUB] Strike Game subscriber connection established');
-
-            // Subscribe to all game scheduler channels
-            const channels = [
-                'game_scheduler:period_start',
-                'game_scheduler:period_result',
-                'game_scheduler:betting_closed',
-                'game_scheduler:period_error'
-            ];
-
-            console.log('🔔 [REDIS_PUBSUB] Subscribing to Strike Game scheduler channels...');
-
-            for (const channel of channels) {
-                try {
-                    await subscriber.subscribe(channel);
-                    console.log(`✅ [REDIS_PUBSUB] Subscribed to: ${channel}`);
-                } catch (subError) {
-                    console.error(`❌ [REDIS_PUBSUB] Failed to subscribe to ${channel}:`, subError);
-                }
-            }
-
-            // CRITICAL: Message handler that processes scheduler events
-            subscriber.on('message', (channel, message) => {
-                const timestamp = new Date().toISOString();
-                console.log(`\n📨 [SCHEDULER_EVENT_RECEIVED] ==========================================`);
-                console.log(`📨 [SCHEDULER_EVENT_RECEIVED] Channel: ${channel}`);
-                console.log(`📨 [SCHEDULER_EVENT_RECEIVED] Timestamp: ${timestamp}`);
-                console.log(`📨 [SCHEDULER_EVENT_RECEIVED] Raw message: ${message}`);
-
-                try {
-                    const data = JSON.parse(message);
-                    console.log(`📨 [SCHEDULER_EVENT_RECEIVED] Parsed data:`, JSON.stringify(data, null, 2));
-
-                    // Validate required fields
-                    if (!data.gameType || !data.duration) {
-                        console.error(`❌ [SCHEDULER_EVENT_RECEIVED] Missing required fields: gameType=${data.gameType}, duration=${data.duration}`);
-                        return;
-                    }
-
-                    console.log(`🎮 [SCHEDULER_EVENT_RECEIVED] Game: ${data.gameType} ${data.duration}s`);
-                    console.log(`🆔 [SCHEDULER_EVENT_RECEIVED] Period: ${data.periodId || 'unknown'}`);
-
-                    // Call the existing handler to process the event
-                    handleGameSchedulerEvent(channel, data);
-
-                    console.log(`✅ [SCHEDULER_EVENT_RECEIVED] Event processed and broadcasted successfully`);
-
-                } catch (parseError) {
-                    console.error(`❌ [SCHEDULER_EVENT_RECEIVED] Error parsing message from ${channel}:`, parseError);
-                    console.error(`❌ [SCHEDULER_EVENT_RECEIVED] Raw message was: ${message}`);
-                }
-            });
-
-            // Add subscription confirmation handler
-            subscriber.on('subscribe', (channel, count) => {
-                console.log(`✅ [REDIS_SUBSCRIPTION_CONFIRMED] Successfully subscribed to ${channel} (total subscriptions: ${count})`);
-            });
-
-            // Test subscription after 3 seconds
-            setTimeout(async () => {
-                try {
-                    console.log('🧪 [REDIS_PUBSUB_TEST] Testing Strike Game subscription by publishing test message...');
-
-                    // Get the main Redis client (redisHelper)
-                    const redisHelper = require('../config/redis');
-                    await redisHelper.getClient().publish('game_scheduler:period_start', JSON.stringify({
-                        test: true,
-                        source: 'websocket_service_test',
-                        timestamp: new Date().toISOString(),
-                        gameType: 'test',
-                        duration: 30,
-                        periodId: 'test_period_123',
-                        message: 'Testing Strike Game WebSocket subscription'
-                    }));
-
-                    console.log('✅ [REDIS_PUBSUB_TEST] Test message published successfully');
-                } catch (testError) {
-                    console.error('❌ [REDIS_PUBSUB_TEST] Failed to publish test message:', testError);
-                }
-            }, 3000);
-
-            // Periodic health check
-            setInterval(async () => {
-                try {
-                    await subscriber.ping();
-                    console.log('💓 [REDIS_PUBSUB_HEARTBEAT] Strike Game subscriber connection healthy');
-                } catch (pingError) {
-                    console.error('❌ [REDIS_PUBSUB_HEARTBEAT] Strike Game subscriber connection unhealthy:', pingError.message);
-                }
-            }, 60000); // Every 60 seconds
-
-            console.log('✅ [REDIS_PUBSUB] Strike Game Redis subscriptions setup completed successfully');
-
-            // Store subscriber reference for cleanup
-            global.strikeGameSubscriber = subscriber;
-
-        } catch (error) {
-            console.error('❌ [REDIS_PUBSUB_CRITICAL_ERROR] Critical error setting up Strike Game Redis subscriptions:', error);
-            console.error('❌ [REDIS_PUBSUB_CRITICAL_ERROR] Stack trace:', error.stack);
-
-            console.log('\n🔧 [REDIS_PUBSUB_TROUBLESHOOTING] Troubleshooting completed:');
-            console.log('✅ ElastiCache connection: WORKING (confirmed by previous test)');
-            console.log('✅ Pub/Sub functionality: WORKING (confirmed by previous test)');
-            console.log('✅ Scheduler publishing: WORKING (confirmed by previous test)');
-            console.log('❌ WebSocket subscription setup: FAILED (this error)');
-            console.log('🔧 Fix: Check TLS configuration and connection parameters');
-        }
-    })();
+        });
+        console.log(`📊 Total rooms: ${Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0)}\n`);
+        
+    } catch (error) {
+        console.error('❌ Error starting broadcast ticks:', error);
+    }
 };
 
 /**
- * CRITICAL: Add cleanup function
+ * EXISTING: Start broadcast ticks for specific game/duration combination
  */
-const stopRedisSubscriptions = () => {
+const startBroadcastTicksForGame = (gameType, duration) => {
+    const key = `${gameType}_${duration}`;
+    
+    // Clear existing interval
+    if (gameIntervals.has(key)) {
+        clearInterval(gameIntervals.get(key));
+    }
+    
+    // Start broadcast interval - every 1 second
+    const intervalId = setInterval(async () => {
+        await broadcastTick(gameType, duration);
+    }, 1000);
+    
+    gameIntervals.set(key, intervalId);
+    console.log(`⏰ Started broadcast ticks for ${gameType} ${duration}s`);
+};
+
+
+const updateLiveExposure = async (gameType, duration, periodId, betData) => {
+    // Placeholder for future real-time exposure monitoring
+    // This will be implemented when you add admin monitoring features
     try {
-        if (global.strikeGameSubscriber) {
-            global.strikeGameSubscriber.disconnect();
-            console.log('🛑 [REDIS_PUBSUB] Strike Game subscriptions stopped');
-        }
+        // Future implementation will broadcast exposure updates to admin users
+        // For now, exposure is handled in gameLogicService
+        return;
     } catch (error) {
-        console.error('❌ [REDIS_PUBSUB] Error stopping subscriptions:', error);
+        console.error('Error updating live exposure:', error);
+    }
+};
+
+
+const broadcastExposureUpdate = async (io, gameType, duration, periodId) => {
+    // Placeholder for future admin monitoring
+    try {
+        // Future implementation:
+        // 1. Get current exposure data from Redis
+        // 2. Calculate optimal result
+        // 3. Broadcast to admin room
+        
+        // const adminRoomId = `admin_${gameType}_${duration}`;
+        // const exposureData = await gameLogicService.getExposureSnapshot(gameType, duration, periodId);
+        // io.to(adminRoomId).emit('exposureUpdate', exposureData);
+        
+        return;
+    } catch (error) {
+        console.error('Error broadcasting exposure update:', error);
+    }
+};
+
+const getExposureSnapshot = async (gameType, duration, periodId) => {
+    // Placeholder for future admin monitoring
+    try {
+        // Future implementation will return:
+        // - Current exposure by outcome
+        // - Optimal result based on exposure
+        // - Potential payout amounts
+        // - Risk analysis
+        
+        return {
+            exposures: {},
+            totalExposure: 0,
+            optimalResult: null,
+            timestamp: new Date().toISOString()
+        };
+    } catch (error) {
+        console.error('Error getting exposure snapshot:', error);
+        return null;
+    }
+};
+
+const handleAdminConnection = async (socket) => {
+    // Placeholder for future admin monitoring
+    socket.on('subscribeToExposure', async (data) => {
+        const { gameType, duration } = data;
+        const adminRoomId = `admin_${gameType}_${duration}`;
+        
+        socket.join(adminRoomId);
+        console.log(`Admin ${socket.userId} subscribed to exposure updates for ${gameType} ${duration}s`);
+        
+        // Send initial exposure data
+        // const exposureData = await getExposureSnapshot(gameType, duration, currentPeriodId);
+        // socket.emit('exposureSnapshot', exposureData);
+    });
+    
+    socket.on('unsubscribeFromExposure', (data) => {
+        const { gameType, duration } = data;
+        const adminRoomId = `admin_${gameType}_${duration}`;
+        
+        socket.leave(adminRoomId);
+        console.log(`Admin ${socket.userId} unsubscribed from exposure updates`);
+    });
+};
+
+const getUserBetsForPeriod = async (userId, gameType, duration, periodId, timeline = 'default') => {
+    try {
+        const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const allBets = await redisClient.hgetall(betHashKey);
+        
+        const userBets = [];
+        for (const [betId, betJson] of Object.entries(allBets)) {
+            const bet = JSON.parse(betJson);
+            if (bet.userId === userId) {
+                userBets.push({
+                    betId,
+                    ...bet
+                });
+            }
+        }
+        
+        return userBets;
+    } catch (error) {
+        console.error('Error getting user bets:', error);
+        return [];
     }
 };
 
 
 /**
- * EXISTING: Handle events from game scheduler process with validation
+ * EXISTING: Broadcast tick - Enhanced time validation to prevent race conditions
  */
+const broadcastTick = async (gameType, duration) => {
+    try {
+        if (!isConnected()) return;
+
+        const roomId = `${gameType}_${duration}`;
+        
+        // Get period info from Redis (populated by game scheduler process)
+        const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
+        
+        if (!periodInfo) {
+            // No period info available - request new period from scheduler
+            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
+                gameType,
+                duration,
+                roomId,
+                timestamp: new Date().toISOString()
+            }));
+            return;
+        }
+
+        const now = new Date();
+        
+        // Calculate actual time remaining using period end time
+        let actualTimeRemaining;
+        try {
+            const actualEndTime = calculatePeriodEndTime(periodInfo.periodId, duration);
+            actualTimeRemaining = Math.max(0, Math.ceil((actualEndTime - now) / 1000));
+        } catch (timeError) {
+            // Fallback to Redis time if calculation fails
+            const redisEndTime = new Date(periodInfo.endTime);
+            actualTimeRemaining = Math.max(0, Math.ceil((redisEndTime - now) / 1000));
+        }
+        
+        // Validate time remaining is within reasonable bounds
+        if (actualTimeRemaining < 0 || actualTimeRemaining > duration + 5) {
+            // Period has ended or is invalid, request new period from scheduler
+            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
+                gameType,
+                duration,
+                roomId,
+                currentPeriodId: periodInfo.periodId,
+                timestamp: now.toISOString()
+            }));
+            return;
+        }
+        
+        // CRITICAL: Betting closes at exactly 5 seconds remaining
+        const bettingOpen = actualTimeRemaining > 5;
+
+        // Broadcast time update to specific room
+        io.to(roomId).emit('timeUpdate', {
+            gameType,
+            duration,
+            periodId: periodInfo.periodId,
+            timeRemaining: actualTimeRemaining,
+            endTime: periodInfo.endTime,
+            bettingOpen,
+            bettingCloseTime: actualTimeRemaining <= 5,
+            timestamp: now.toISOString(),
+            roomId,
+            source: 'websocket_validated'
+        });
+
+        // Handle betting closure notification - only once at exactly 5 seconds
+        if (actualTimeRemaining === 5 && !bettingOpen) {
+            io.to(roomId).emit('bettingClosed', {
+                gameType, 
+                duration,
+                periodId: periodInfo.periodId,
+                message: `Betting closed for ${gameType} ${duration}s`,
+                timeRemaining: 5,
+                roomId,
+                timestamp: now.toISOString()
+            });
+            console.log(`📢 WebSocket: Betting closed for ${roomId} - ${periodInfo.periodId}`);
+        }
+
+        // If period is about to end (less than 1 second remaining), request next period
+        if (actualTimeRemaining <= 1) {
+            await pubsubRedis.publish('game_scheduler:period_request', JSON.stringify({
+                gameType,
+                duration,
+                roomId,
+                currentPeriodId: periodInfo.periodId,
+                timestamp: now.toISOString()
+            }));
+        }
+
+    } catch (error) {
+        // Suppress frequent errors to avoid log spam
+        const errorKey = `broadcast_error_${gameType}_${duration}`;
+        const lastError = global[errorKey] || 0;
+        if (Date.now() - lastError > 60000) { // Log once per minute
+            console.error(`❌ WebSocket broadcast tick error [${gameType}|${duration}s]:`, error.message);
+            global[errorKey] = Date.now();
+        }
+    }
+};
+
 /**
- * ENHANCED: Handle events from game scheduler process
- * This sends the complete time updates like the old version
+ * FIXED: Get period info from Redis (populated by game scheduler)
+ */
+const getPeriodInfoFromRedis = async (gameType, duration, timeline = 'default') => {
+    try {
+        // FIXED: Use the correct Redis key format that matches game scheduler
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        const periodData = await pubsubRedis.get(periodKey);
+        
+        if (!periodData) {
+            return null;
+        }
+        
+        return JSON.parse(periodData);
+    } catch (error) {
+        console.error('Error getting period info from Redis:', error);
+        return null;
+    }
+};
+
+/**
+ * FIXED: Send current period info from Redis with enhanced validation
+ */
+const sendCurrentPeriodFromRedis = async (socket, gameType, duration, timeline = 'default') => {
+    try {
+        // FIXED: Use the correct Redis key format that matches game scheduler
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        const periodData = await pubsubRedis.get(periodKey);
+        
+        if (!periodData) {
+            console.log(`No period data in Redis for ${gameType} ${duration}s ${timeline}`);
+            return;
+        }
+        
+        const period = JSON.parse(periodData);
+        const now = Date.now();
+        const timeRemaining = Math.max(0, period.endTime - now);
+        
+        // Get total bets using new structure
+        const totalBets = await getTotalBetsForPeriod(gameType, duration, period.periodId, timeline);
+        
+        socket.emit('currentPeriod', {
+            gameType,
+            duration,
+            periodId: period.periodId,
+            timeRemaining: Math.floor(timeRemaining / 1000),
+            totalBets: totalBets.totalAmount,
+            betCount: totalBets.betCount,
+            uniqueUsers: totalBets.uniqueUsers,
+            timeline,
+            status: timeRemaining > 5000 ? 'betting' : 'closed'
+        });
+        
+    } catch (error) {
+        console.error('Error sending current period from Redis:', error);
+    }
+};
+
+/**
+ * EXISTING: Setup Redis subscriptions for game scheduler events
+ */
+const setupRedisSubscriptions = () => {
+    try {
+        const { redis: subscriberRedis } = require('../config/redisConfig');
+        
+        // Create separate Redis connection for subscriptions
+        const subscriber = subscriberRedis.duplicate();
+        
+        // Subscribe to game scheduler events
+        subscriber.subscribe('game_scheduler:period_start');
+        subscriber.subscribe('game_scheduler:period_result');
+        subscriber.subscribe('game_scheduler:betting_closed');
+        subscriber.subscribe('game_scheduler:period_error');
+        
+        subscriber.on('message', (channel, message) => {
+            try {
+                const data = JSON.parse(message);
+                handleGameSchedulerEvent(channel, data);
+            } catch (error) {
+                console.error('❌ WebSocket: Error handling Redis message:', error);
+            }
+        });
+        
+        console.log('✅ WebSocket: Redis subscriptions setup for game scheduler events');
+        
+    } catch (error) {
+        console.error('❌ WebSocket: Error setting up Redis subscriptions:', error);
+    }
+};
+
+/**
+ * EXISTING: Handle events from game scheduler process with validation
  */
 const handleGameSchedulerEvent = (channel, data) => {
     try {
         const { gameType, duration, roomId, periodId } = data;
         const timestamp = new Date().toISOString();
-
-        console.log(`\n📢 [WEBSOCKET_BROADCAST_START] ==========================================`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Broadcasting scheduler event: ${channel}`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Game: ${gameType} ${duration}s`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Period: ${periodId}`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Event data:`, JSON.stringify(data, null, 2));
-
-        // Ensure correct room ID format
+        
+        console.log(`\n📢 [WEBSOCKET_EVENT_START] ==========================================`);
+        console.log(`📢 [WEBSOCKET_EVENT_START] Received event: ${channel} at ${timestamp}`);
+        console.log(`📢 [WEBSOCKET_EVENT_START] Event data:`, JSON.stringify(data, null, 2));
+        
+        // FIXED: Validate roomId format (should be gameType_duration only)
         const expectedRoomId = `${gameType}_${duration}`;
-        const finalRoomId = roomId || expectedRoomId;
-
+        if (roomId !== expectedRoomId) {
+            console.warn(`⚠️ WebSocket: Room ID mismatch: expected ${expectedRoomId}, got ${roomId}`);
+            // Use expected room ID to ensure delivery
+            data.roomId = expectedRoomId;
+        }
+        
+        // FIXED: Additional validation for period events
+        if (periodId && (channel === 'game_scheduler:period_start' || channel === 'game_scheduler:period_result')) {
+            try {
+                // Validate period ID format
+                if (!/^\d{17}$/.test(periodId)) {
+                    console.warn(`⚠️ WebSocket: Invalid period ID format: ${periodId}`);
+                    return;
+                }
+                
+                // For period start events, validate timing
+                if (channel === 'game_scheduler:period_start') {
+                    const endTime = calculatePeriodEndTime(periodId, duration);
+                    const timeRemaining = Math.max(0, (endTime - new Date()) / 1000);
+                    
+                    if (timeRemaining < duration - 5) {
+                        console.warn(`⚠️ WebSocket: Period start event received too late for ${periodId} (${timeRemaining}s remaining)`);
+                    }
+                }
+            } catch (validationError) {
+                console.error(`❌ WebSocket: Event validation error for ${periodId}:`, validationError.message);
+                return;
+            }
+        }
+        
         switch (channel) {
             case 'game_scheduler:period_start':
-                console.log(`📢 [PERIOD_START_BROADCAST] Broadcasting period start to room: ${finalRoomId}`);
-
-                // Calculate time remaining for the new period
-                let timeRemaining = duration; // Default to full duration
-                try {
-                    if (data.endTime) {
-                        const endTime = new Date(data.endTime);
-                        timeRemaining = Math.max(0, Math.ceil((endTime - new Date()) / 1000));
-                    }
-                } catch (timeError) {
-                    console.warn('⚠️ Error calculating time remaining, using default duration');
-                }
-
-                // Broadcast complete period start data (like old version)
-                io.to(finalRoomId).emit('periodStart', {
-                    gameType,
-                    duration,
-                    periodId,
-                    timeRemaining,
-                    endTime: data.endTime,
+                console.log(`📢 [WEBSOCKET_PERIOD_START] ==========================================`);
+                console.log(`📢 [WEBSOCKET_PERIOD_START] Broadcasting period start: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_START] Period data:`, JSON.stringify(data, null, 2));
+                
+                io.to(expectedRoomId).emit('periodStart', {
+                    ...data,
+                    roomId: expectedRoomId,
+                    source: 'game_scheduler',
+                    validated: true,
                     bettingOpen: true,
-                    bettingCloseTime: false,
-                    roomId: finalRoomId,
-                    source: 'game_scheduler',
-                    validated: true,
-                    timestamp: timestamp,
-
-                    // Include all original data
-                    ...data
+                    timestamp: timestamp
                 });
-
-                console.log(`✅ [PERIOD_START_BROADCAST] Period start broadcasted successfully`);
+                
+                console.log(`✅ [WEBSOCKET_PERIOD_START] Period start broadcasted successfully`);
                 break;
-
+                
             case 'game_scheduler:period_result':
-                console.log(`📢 [PERIOD_RESULT_BROADCAST] Broadcasting period result to room: ${finalRoomId}`);
-                console.log(`📊 [PERIOD_RESULT_BROADCAST] Result data:`, JSON.stringify(data.result || {}, null, 2));
-
-                // Broadcast complete period result data (like old version)
-                io.to(finalRoomId).emit('periodResult', {
-                    gameType,
-                    duration,
-                    periodId,
-                    result: data.result,
-                    timeRemaining: 0,
-                    bettingOpen: false,
-                    bettingCloseTime: true,
-                    roomId: finalRoomId,
+                console.log(`📢 [WEBSOCKET_PERIOD_RESULT] ==========================================`);
+                console.log(`📢 [WEBSOCKET_PERIOD_RESULT] Broadcasting period result: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_RESULT] Result data:`, JSON.stringify(data, null, 2));
+                
+                // Log detailed result information
+                if (data.result) {
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] ==========================================`);
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] Game: ${gameType} ${duration}s`);
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] Period: ${periodId}`);
+                    console.log(`📊 [WEBSOCKET_PERIOD_RESULT_DETAILS] Result:`, JSON.stringify(data.result, null, 2));
+                    
+                    // Log game-specific result details
+                    if (gameType === 'fiveD' || gameType === '5d') {
+                        const result = data.result;
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] ==========================================`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] 5D Result: A=${result.A}, B=${result.B}, C=${result.C}, D=${result.D}, E=${result.E}`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] Sum: ${result.A + result.B + result.C + result.D + result.E}`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] Sum category: ${(result.A + result.B + result.C + result.D + result.E) > 22 ? 'BIG' : 'SMALL'}`);
+                        console.log(`🎲 [WEBSOCKET_5D_RESULT_DETAILS] Sum parity: ${(result.A + result.B + result.C + result.D + result.E) % 2 === 0 ? 'EVEN' : 'ODD'}`);
+                    } else if (gameType === 'wingo') {
+                        const result = data.result;
+                        console.log(`🎯 [WEBSOCKET_WINGO_RESULT_DETAILS] ==========================================`);
+                        console.log(`🎯 [WEBSOCKET_WINGO_RESULT_DETAILS] Wingo Result: Number=${result.number}, Color=${result.color}`);
+                        console.log(`🎯 [WEBSOCKET_WINGO_RESULT_DETAILS] Parity: ${result.number % 2 === 0 ? 'EVEN' : 'ODD'}`);
+                    } else if (gameType === 'k3') {
+                        const result = data.result;
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] ==========================================`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] K3 Result: Dice=[${result.dice_1}, ${result.dice_2}, ${result.dice_3}]`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Sum: ${result.sum}`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Has pair: ${result.has_pair}`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Has triple: ${result.has_triple}`);
+                        console.log(`🎲 [WEBSOCKET_K3_RESULT_DETAILS] Is straight: ${result.is_straight}`);
+                    }
+                }
+                
+                io.to(expectedRoomId).emit('periodResult', {
+                    ...data,
+                    roomId: expectedRoomId,
                     source: 'game_scheduler',
                     validated: true,
-                    timestamp: timestamp,
-
-                    // Include all original data
-                    ...data
+                    bettingOpen: false,
+                    timestamp: timestamp
                 });
-
-                console.log(`✅ [PERIOD_RESULT_BROADCAST] Period result broadcasted successfully`);
+                
+                console.log(`✅ [WEBSOCKET_PERIOD_RESULT] Period result broadcasted successfully`);
                 break;
-
+                
             case 'game_scheduler:betting_closed':
-                console.log(`📢 [BETTING_CLOSED_BROADCAST] Broadcasting betting closed to room: ${finalRoomId}`);
-
-                // Broadcast betting closed (like old version)
-                io.to(finalRoomId).emit('bettingClosed', {
-                    gameType,
-                    duration,
-                    periodId,
-                    timeRemaining: 5,
+                console.log(`📢 [WEBSOCKET_BETTING_CLOSED] ==========================================`);
+                console.log(`📢 [WEBSOCKET_BETTING_CLOSED] Broadcasting betting closed: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_BETTING_CLOSED] Betting closed data:`, JSON.stringify(data, null, 2));
+                
+                io.to(expectedRoomId).emit('bettingClosed', {
+                    ...data,
+                    roomId: expectedRoomId,
+                    source: 'game_scheduler',
+                    validated: true,
                     bettingOpen: false,
-                    bettingCloseTime: true,
-                    message: `Betting closed for ${gameType} ${duration}s`,
-                    roomId: finalRoomId,
-                    source: 'game_scheduler',
-                    validated: true,
-                    timestamp: timestamp,
-
-                    // Include all original data
-                    ...data
+                    timestamp: timestamp
                 });
-
-                console.log(`✅ [BETTING_CLOSED_BROADCAST] Betting closed broadcasted successfully`);
+                
+                console.log(`✅ [WEBSOCKET_BETTING_CLOSED] Betting closed broadcasted successfully`);
                 break;
-
+                
             case 'game_scheduler:period_error':
-                console.log(`📢 [PERIOD_ERROR_BROADCAST] Broadcasting period error to room: ${finalRoomId}`);
-
-                // Broadcast period error (like old version)
-                io.to(finalRoomId).emit('periodError', {
-                    gameType,
-                    duration,
-                    periodId,
-                    error: data.error || 'Period processing error',
-                    roomId: finalRoomId,
+                console.log(`📢 [WEBSOCKET_PERIOD_ERROR] ==========================================`);
+                console.log(`📢 [WEBSOCKET_PERIOD_ERROR] Broadcasting period error: ${periodId} to ${expectedRoomId}`);
+                console.log(`📢 [WEBSOCKET_PERIOD_ERROR] Error data:`, JSON.stringify(data, null, 2));
+                
+                io.to(expectedRoomId).emit('periodError', {
+                    ...data,
+                    roomId: expectedRoomId,
                     source: 'game_scheduler',
                     validated: true,
-                    timestamp: timestamp,
-
-                    // Include all original data
-                    ...data
+                    timestamp: timestamp
                 });
-
-                console.log(`✅ [PERIOD_ERROR_BROADCAST] Period error broadcasted successfully`);
+                
+                console.log(`✅ [WEBSOCKET_PERIOD_ERROR] Period error broadcasted successfully`);
                 break;
-
-            default:
-                console.log(`⚠️ [UNKNOWN_EVENT_BROADCAST] Unknown scheduler event: ${channel}`);
         }
-
-        console.log(`✅ [WEBSOCKET_BROADCAST_COMPLETE] Event ${channel} broadcasted successfully to ${finalRoomId}`);
-
+        
+        console.log(`✅ [WEBSOCKET_EVENT_COMPLETE] ==========================================`);
+        console.log(`✅ [WEBSOCKET_EVENT_COMPLETE] Event ${channel} processed successfully`);
+        
     } catch (error) {
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error broadcasting scheduler event: ${channel}`);
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error:`, error.message);
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Stack:`, error.stack);
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Event data:`, JSON.stringify(data, null, 2));
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] ==========================================`);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Error handling game scheduler event: ${channel}`);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Error:`, error.message);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Stack:`, error.stack);
+        console.log(`💥 [WEBSOCKET_EVENT_ERROR] Event data:`, JSON.stringify(data, null, 2));
     }
 };
 
@@ -2049,90 +1943,90 @@ const mapK3Bet = (betData) => {
     const clientType = String(type || '').toLowerCase();
     const clientSelection = String(selection || '').toLowerCase();
     const clientExtra = String(extra || '').toLowerCase();
-
+    
     console.log(`🎲 [K3_MAPPING] Mapping K3 bet:`, { type: clientType, selection: clientSelection, extra: clientExtra });
-
+    
     // SUM bet - Handle both single and multiple values
     if (clientType === 'sum') {
         // Check if this is a multiple sum bet (comma-separated values)
         if (clientSelection.includes(',')) {
             console.log(`🎲 [K3_MAPPING] Multiple sum bet detected: ${clientSelection}`);
-            return {
-                betType: 'SUM_MULTIPLE',
-                betValue: clientSelection,
+            return { 
+                betType: 'SUM_MULTIPLE', 
+                betValue: clientSelection, 
                 odds: 0  // Will be calculated per individual value
             };
         }
         // Single sum bet
         else if (!isNaN(clientSelection)) {
             console.log(`🎲 [K3_MAPPING] Single sum bet detected: ${clientSelection}`);
-            return {
-                betType: 'SUM',
-                betValue: clientSelection,
+            return { 
+                betType: 'SUM', 
+                betValue: clientSelection, 
                 odds: 0  // Will be calculated by game logic
             };
         }
     }
-
+    
     // SUM_SIZE: big/small
     if (clientType === 'sum_size' || clientType === 'size') {
         if (clientSelection === 'big' || clientSelection === 'small') {
             return { betType: 'SUM_SIZE', betValue: clientSelection, odds: 0 };
         }
     }
-
+    
     // SUM_PARITY: odd/even
     if (clientType === 'sum_parity' || clientType === 'parity') {
         if (clientSelection === 'odd' || clientSelection === 'even') {
             return { betType: 'SUM_PARITY', betValue: clientSelection, odds: 0 };
         }
     }
-
+    
     // ANY_TRIPLE: any triple
     if (clientType === 'triple' && clientSelection === 'any') {
         return { betType: 'ANY_TRIPLE', betValue: null, odds: 0 };
     }
-
+    
     // SPECIFIC_TRIPLE: specific triple (e.g., triple: 4)
     if (clientType === 'triple' && !isNaN(clientSelection)) {
         return { betType: 'SPECIFIC_TRIPLE', betValue: clientSelection, odds: 0 };
     }
-
+    
     // ANY_PAIR: any pair
     if (clientType === 'pair' && clientSelection === 'any') {
         return { betType: 'ANY_PAIR', betValue: null, odds: 0 };
     }
-
+    
     // SPECIFIC_PAIR: specific pair (e.g., pair: 2)
     if (clientType === 'pair' && !isNaN(clientSelection) && !clientExtra) {
         return { betType: 'SPECIFIC_PAIR', betValue: clientSelection, odds: 0 };
     }
-
+    
     // PAIR_COMBINATION: specific pair with specific single (e.g., pair: 2, extra: 5)
     if (clientType === 'pair' && !isNaN(clientSelection) && !isNaN(clientExtra)) {
         return { betType: 'PAIR_COMBINATION', betValue: [clientSelection, clientExtra], odds: 0 };
     }
-
+    
     // STRAIGHT: straight sequence (including "3 Continuous")
     if (clientType === 'straight' || (clientType === 'different' && clientSelection && (clientSelection.includes('continuous') || clientSelection.includes('straight')))) {
         return { betType: 'STRAIGHT', betValue: null, odds: 0 };
     }
-
+    
     // ALL_DIFFERENT: three different numbers
     if (clientType === 'all_different' || clientType === 'different') {
         return { betType: 'ALL_DIFFERENT', betValue: null, odds: 0 };
     }
-
+    
     // TWO_DIFFERENT: two specific different numbers
     if (clientType === 'two_different' && clientSelection && clientExtra) {
         return { betType: 'TWO_DIFFERENT', betValue: [clientSelection, clientExtra], odds: 0 };
     }
-
+    
     // SINGLE_NUMBER: single number 1-6
     if (clientType === 'number' && !isNaN(clientSelection)) {
         return { betType: 'SINGLE_NUMBER', betValue: clientSelection, odds: 0 };
     }
-
+    
     // Fallback: return as-is
     console.log(`⚠️ [K3_MAPPING] Unknown bet type: ${clientType}, returning as-is`);
     return { betType: clientType.toUpperCase(), betValue: clientSelection, odds: 0 };
@@ -2141,37 +2035,46 @@ const mapK3Bet = (betData) => {
 // Export WebSocket service - DURATION-BASED ROOMS WITH BET PLACEMENT
 module.exports = {
     initializeWebSocket,
-
+    
+    startGameTickSystem: () => {
+        console.log('🕐 Starting WebSocket DURATION-BASED broadcast system with BETTING...');
+        startBroadcastTicks();
+        setupRedisSubscriptions();
+    },
+    
+    // Broadcast functions for external use
     broadcastToGame: (gameType, duration, event, data) => {
         try {
             if (!io) return;
-
+            
             const roomId = `${gameType}_${duration}`;
-
+            
+            // FIXED: Add validation before broadcasting
             if (event === 'timeUpdate' && data.timeRemaining !== undefined) {
                 if (data.timeRemaining < 0 || data.timeRemaining > duration + 5) {
                     console.warn(`⚠️ WebSocket: Invalid time remaining ${data.timeRemaining}s in external broadcast, skipping`);
                     return;
                 }
+                // Add betting status
                 data.bettingOpen = data.timeRemaining > 5;
                 data.bettingCloseTime = data.timeRemaining <= 5;
             }
-
+            
             io.to(roomId).emit(event, {
                 ...data,
-                gameType,
-                duration,
+                gameType, 
+                duration, 
                 roomId,
                 source: 'external_broadcast',
                 validated: true
             });
-
+            
             console.log(`📢 WebSocket: External broadcast ${event} to ${roomId}`);
         } catch (error) {
             console.error('❌ WebSocket: Error broadcasting to game:', error);
         }
     },
-
+    
     broadcastToAll: (event, data) => {
         try {
             if (!io) return;
@@ -2187,16 +2090,16 @@ module.exports = {
             console.error('❌ WebSocket: Error broadcasting to all:', error);
         }
     },
-
+    
     // NEW: Broadcast bet results only to users who placed bets
     broadcastBetResults: (gameType, duration, periodId, periodResult, winningBets = []) => {
         try {
             if (!io) return;
-
+            
             const roomId = `${gameType}_${duration}`;
             const periodKey = `${gameType}_${duration}_${periodId}`;
             const timestamp = new Date().toISOString();
-
+            
             console.log(`\n🎯 [BET_RESULTS_START] ==========================================`);
             console.log(`🎯 [BET_RESULTS_START] Broadcasting results for ${periodKey} at ${timestamp}`);
             console.log(`🎯 [BET_RESULTS_START] Game: ${gameType} ${duration}s`);
@@ -2204,65 +2107,65 @@ module.exports = {
             console.log(`🎯 [BET_RESULTS_START] Result:`, JSON.stringify(periodResult, null, 2));
             console.log(`🎯 [BET_RESULTS_START] Winning bets count: ${winningBets.length}`);
             console.log(`🎯 [BET_RESULTS_START] Winning bets details:`, JSON.stringify(winningBets, null, 2));
-
+            
             // Get all sockets in the room
             const room = io.sockets.adapter.rooms.get(roomId);
             if (!room) {
                 console.log(`⚠️ [BET_RESULTS] No room found: ${roomId}`);
                 return;
             }
-
+            
             console.log(`👥 [BET_RESULTS_ROOM] ==========================================`);
             console.log(`👥 [BET_RESULTS_ROOM] Room ${roomId} has ${room.size} connected users`);
-
+            
             let notificationsSent = 0;
             let bettingUsersFound = 0;
             let watchingUsersFound = 0;
-
+            
             // Iterate through all sockets in the room
             for (const socketId of room) {
                 const socket = io.sockets.sockets.get(socketId);
-
+                
                 if (!socket || !socket.user) {
                     console.log(`👤 [BET_RESULTS] Socket ${socketId} has no user, skipping`);
                     continue;
                 }
-
+                
                 const userId = socket.user.userId || socket.user.id;
-
+                
                 if (!socket.activeBets) {
                     console.log(`👁️ [BET_RESULTS] User ${userId} has no active bets, watching only`);
                     watchingUsersFound++;
                     continue;
                 }
-
+                
                 // Check if this user placed a bet in this period
                 if (!socket.activeBets.has(periodKey)) {
                     console.log(`👁️ [BET_RESULTS] User ${userId} was only watching period ${periodId}, no notification sent`);
                     watchingUsersFound++;
                     continue;
                 }
-
+                
                 bettingUsersFound++;
                 console.log(`🎯 [BET_RESULTS_USER] ==========================================`);
                 console.log(`🎯 [BET_RESULTS_USER] Processing results for betting user: ${userId}`);
                 console.log(`🎯 [BET_RESULTS_USER] Socket ID: ${socket.id}`);
                 console.log(`🎯 [BET_RESULTS_USER] Active bets:`, Array.from(socket.activeBets));
-
+                
                 // Find if this user won
-                const userWinnings = winningBets.filter(bet =>
+                const userWinnings = winningBets.filter(bet => 
                     bet.userId === userId || bet.userId === socket.user.id
                 );
-
+                
                 const hasWon = userWinnings.length > 0;
                 const totalWinnings = userWinnings.reduce((sum, bet) => sum + (bet.winnings || 0), 0);
-
+                
                 console.log(`💰 [BET_RESULTS_WINNINGS] ==========================================`);
                 console.log(`💰 [BET_RESULTS_WINNINGS] User ${userId} win status: ${hasWon ? 'WON' : 'LOST'}`);
                 console.log(`💰 [BET_RESULTS_WINNINGS] Winning bets found: ${userWinnings.length}`);
                 console.log(`💰 [BET_RESULTS_WINNINGS] Total winnings: ₹${totalWinnings}`);
                 console.log(`💰 [BET_RESULTS_WINNINGS] Winning bet details:`, JSON.stringify(userWinnings, null, 2));
-
+                
                 // Prepare personalized result data
                 const personalizedResult = {
                     gameType,
@@ -2285,25 +2188,25 @@ module.exports = {
                     timestamp: timestamp,
                     source: 'bet_result_notification'
                 };
-
+                
                 console.log(`📤 [BET_RESULTS_SEND] ==========================================`);
                 console.log(`📤 [BET_RESULTS_SEND] Sending personalized result to user ${userId}:`);
                 console.log(`📤 [BET_RESULTS_SEND] Result data:`, JSON.stringify(personalizedResult, null, 2));
-
+                
                 // Send personalized result to this betting user
                 socket.emit('betResult', personalizedResult);
-
+                
                 notificationsSent++;
-
+                
                 console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] ==========================================`);
                 console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Result sent to user ${userId}: ${hasWon ? `WON ₹${totalWinnings}` : 'LOST'}`);
                 console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Notification #${notificationsSent} sent successfully`);
-
+                
                 // Remove this period from user's active bets
                 socket.activeBets.delete(periodKey);
                 console.log(`🗑️ [BET_RESULTS_CLEANUP] Removed period ${periodKey} from user ${userId} active bets`);
             }
-
+            
             console.log(`✅ [BET_RESULTS_COMPLETE] ==========================================`);
             console.log(`✅ [BET_RESULTS_COMPLETE] Results broadcast completed for ${periodKey}`);
             console.log(`✅ [BET_RESULTS_COMPLETE] Total users in room: ${room.size}`);
@@ -2311,7 +2214,7 @@ module.exports = {
             console.log(`✅ [BET_RESULTS_COMPLETE] Watching users found: ${watchingUsersFound}`);
             console.log(`✅ [BET_RESULTS_COMPLETE] Notifications sent: ${notificationsSent}`);
             console.log(`✅ [BET_RESULTS_COMPLETE] Winning bets total: ${winningBets.length}`);
-
+            
         } catch (error) {
             console.log(`💥 [BET_RESULTS_ERROR] ==========================================`);
             console.log(`💥 [BET_RESULTS_ERROR] Error broadcasting bet results for ${gameType}_${duration}_${periodId}:`);
@@ -2321,15 +2224,15 @@ module.exports = {
             console.log(`💥 [BET_RESULTS_ERROR] Winning bets:`, JSON.stringify(winningBets, null, 2));
         }
     },
-
+    
     // NEW: Broadcast general period result to all users in room (non-betting users get this)
     broadcastPeriodResult: async (io, gameType, duration, periodId, result, timeline = 'default') => {
         try {
             const roomId = getRoomId(gameType, duration, timeline);
-
+            
             // Get total statistics using new hash structure
             const stats = await getTotalBetsForPeriod(gameType, duration, periodId, timeline);
-
+            
             // Broadcast general period result to entire room
             io.to(roomId).emit('periodResult', {
                 gameType,
@@ -2347,19 +2250,19 @@ module.exports = {
                 timestamp: new Date().toISOString(),
                 source: 'period_result_general'
             });
-
+            
             console.log(`📢 [PERIOD_RESULT] Broadcasted general result for ${gameType}_${duration}_${periodId} to all users in room`);
-
+            
         } catch (error) {
             console.error('❌ Error broadcasting period result:', error);
         }
     },
-
+    
     // NEW: Broadcast balance update to specific user
     broadcastBalanceUpdate: (userId, balanceData) => {
         try {
             if (!io) return;
-
+            
             for (const [socketId, socket] of io.sockets.sockets) {
                 if (socket.user && (socket.user.userId === userId || socket.user.id === userId)) {
                     socket.emit('balanceUpdate', {
@@ -2374,7 +2277,7 @@ module.exports = {
             console.error('❌ WebSocket: Error broadcasting balance update:', error);
         }
     },
-
+    
     // Status functions
     getSystemStats: () => ({
         connectedClients: io ? io.sockets.sockets.size : 0,
@@ -2387,9 +2290,9 @@ module.exports = {
         bettingEnabled: true,
         features: ['time_validation', 'balance_validation', 'room_validation', 'bet_placement']
     }),
-
+    
     getIo: () => io,
-
+    
     stopGameTicks: () => {
         gameIntervals.forEach((intervalId, key) => {
             clearInterval(intervalId);
@@ -2399,21 +2302,21 @@ module.exports = {
         gameTicksStarted = false;
         console.log('🛑 WebSocket: All broadcast ticks stopped');
     },
-
+    
     // Debug functions
     verifyGameTicks: () => {
         console.log('🔍 Verifying DURATION-BASED broadcast system with BETTING...');
-
+        
         const expectedIntervals = Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0);
         const activeIntervals = gameIntervals.size;
-
+        
         console.log(`📊 WebSocket broadcast system status:`);
         console.log(`   - Active intervals: ${activeIntervals}`);
         console.log(`   - Expected intervals: ${expectedIntervals}`);
         console.log(`   - System started: ${gameTicksStarted}`);
         console.log(`   - Connected clients: ${io ? io.sockets.sockets.size : 0}`);
         console.log(`   - Betting enabled: ✅`);
-
+        
         // Show detailed status
         Object.keys(GAME_CONFIGS).forEach(gameType => {
             console.log(`\n📋 ${gameType.toUpperCase()} rooms:`);
@@ -2425,7 +2328,7 @@ module.exports = {
                 console.log(`   - ${key}: ${hasInterval ? '✅ Active' : '❌ Inactive'} | ${clientCount} clients | Betting: ✅`);
             });
         });
-
+        
         return {
             active: activeIntervals,
             expected: expectedIntervals,
@@ -2435,18 +2338,18 @@ module.exports = {
             bettingEnabled: true
         };
     },
-
+    
     // Additional utility functions for debugging
     getCurrentPeriodInfo: async (gameType, duration) => {
         return await getPeriodInfoFromRedis(gameType, duration);
     },
-
+    
     validatePeriodTiming: (periodId, duration) => {
         try {
             const endTime = calculatePeriodEndTime(periodId, duration);
             const timeRemaining = Math.max(0, (endTime - new Date()) / 1000);
             const bettingOpen = timeRemaining > 5;
-
+            
             return {
                 valid: timeRemaining >= 0 && timeRemaining <= duration,
                 timeRemaining,
@@ -2462,17 +2365,17 @@ module.exports = {
             };
         }
     },
-
+    
     // NEW: Get connected users in a specific room
     getRoomUsers: (gameType, duration) => {
         try {
             if (!io) return [];
-
+            
             const roomId = `${gameType}_${duration}`;
             const room = io.sockets.adapter.rooms.get(roomId);
-
+            
             if (!room) return [];
-
+            
             const users = [];
             for (const socketId of room) {
                 const socket = io.sockets.sockets.get(socketId);
@@ -2484,14 +2387,14 @@ module.exports = {
                     });
                 }
             }
-
+            
             return users;
         } catch (error) {
             console.error('❌ Error getting room users:', error);
             return [];
         }
     },
-
+    
     // NEW: Get system health with betting features
     getSystemHealth: async () => {
         try {
@@ -2514,7 +2417,7 @@ module.exports = {
                     status: isConnected() ? 'connected' : 'disconnected'
                 }
             };
-
+            
             // Test Redis connectivity
             try {
                 await pubsubRedis.ping();
@@ -2523,7 +2426,7 @@ module.exports = {
                 health.redis.status = 'error';
                 health.redis.error = redisError.message;
             }
-
+            
             return health;
         } catch (error) {
             return {
@@ -2532,14 +2435,13 @@ module.exports = {
             };
         }
     },
-
+    
     GAME_CONFIGS,
-    initializeWebSocket,
-
+    
     // NEW: Utility functions
     validateBetPlacement,
     getTotalBetsForPeriod,
-
+    
     // Additional utility functions
     getRoomId,
     isConnected,
@@ -2550,69 +2452,16 @@ module.exports = {
     mapClientBetType,
     mapClientBetValue,
     calculateOddsForBet,
-    setupRedisSubscriptions,
-    handleGameSchedulerEvent,
-    setupRedisSubscriptions,
-    stopRedisSubscriptions,
-    startGameTickSystem,
     startBroadcastTicks,
     startBroadcastTicksForGame,
+    updateLiveExposure,
+    broadcastExposureUpdate,
+    getExposureSnapshot,
+    handleAdminConnection,
+    getUserBetsForPeriod,
     broadcastTick,
     getPeriodInfoFromRedis,
-    sendCurrentPeriodFromRedisEnhanced,
-
-};
-
-// Ensure this function is defined before it is used in the joinGame handler
-const sendCurrentPeriodFromRedis = async (socket, gameType, duration, timeline = 'default') => {
-    try {
-        // The Redis key for the current period is:
-        //   game_scheduler:${gameType}:${duration}:current
-        // This is set by the scheduler process.
-        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
-        const periodData = await pubsubRedis.get(periodKey);
-
-        if (!periodData) {
-            console.log(`No period data in Redis for ${gameType} ${duration}s ${timeline}`);
-            socket.emit('currentPeriod', {
-                gameType,
-                duration,
-                periodId: null,
-                timeRemaining: null,
-                status: 'no_period',
-                message: 'No active period found'
-            });
-            return;
-        }
-
-        const period = JSON.parse(periodData);
-        const now = Date.now();
-        const timeRemaining = Math.max(0, new Date(period.endTime).getTime() - now);
-
-        // Get total bets using new structure
-        const totalBets = await getTotalBetsForPeriod(gameType, duration, period.periodId, timeline);
-
-        socket.emit('currentPeriod', {
-            gameType,
-            duration,
-            periodId: period.periodId, // <-- THIS IS THE CURRENT PERIOD ID
-            timeRemaining: Math.floor(timeRemaining / 1000),
-            totalBets: totalBets.totalAmount,
-            betCount: totalBets.betCount,
-            uniqueUsers: totalBets.uniqueUsers,
-            timeline,
-            status: timeRemaining > 5 ? 'betting' : 'closed',
-            endTime: period.endTime
-        });
-    } catch (error) {
-        console.error('Error sending current period from Redis:', error);
-        socket.emit('currentPeriod', {
-            gameType,
-            duration,
-            periodId: null,
-            timeRemaining: null,
-            status: 'error',
-            message: 'Error fetching period info'
-        });
-    }
+    sendCurrentPeriodFromRedis,
+    setupRedisSubscriptions,
+    handleGameSchedulerEvent
 };

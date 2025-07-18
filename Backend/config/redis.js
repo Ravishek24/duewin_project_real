@@ -1,74 +1,124 @@
+// Backend/config/redis.js - Fix startup timing issue
+
 const Redis = require('ioredis');
 require('dotenv').config();
 const { CACHE } = require('./constants');
+
 console.log('REDIS_HOST from process.env:', process.env.REDIS_HOST);
 
-// Redis configuration
+// Redis configuration for ElastiCache with TLS - FIXED VERSION
 const redisConfig = {
     host: process.env.REDIS_HOST || 'localhost',
     port: process.env.REDIS_PORT || 6379,
     password: process.env.REDIS_PASSWORD || '',
     db: process.env.REDIS_DB || 0,
     keyPrefix: CACHE.PREFIX,
+    
+    // TLS configuration for ElastiCache
+    tls: {
+        rejectUnauthorized: false,
+        requestCert: true,
+        agent: false
+    },
+    
     retryStrategy: function(times) {
         const delay = Math.min(times * 50, 2000);
         return delay;
     },
-    tls: {} // Always use TLS for ElastiCache
+    
+    // FIX: Allow offline queue temporarily during startup
+    enableOfflineQueue: true,  // Changed from false to true
+    maxRetriesPerRequest: 3,
+    
+    // ElastiCache optimizations
+    connectTimeout: 15000,
+    commandTimeout: 5000,
+    lazyConnect: false,  // Changed from true to false for immediate connection
+    family: 4
 };
 
-console.log('REDIS_HOST from process.env:', process.env.REDIS_HOST);
-
-// Log the Redis config (excluding password)
-const { password, ...logConfig } = redisConfig;
-console.log('Redis config at startup:', logConfig);
+console.log('Redis config for Strike Game ElastiCache:', {
+    host: redisConfig.host,
+    port: redisConfig.port,
+    db: redisConfig.db,
+    tls: 'enabled',
+    keyPrefix: redisConfig.keyPrefix
+});
 
 // Create Redis client
 const redisClient = new Redis(redisConfig);
 
-// Handle Redis connection events
+// Enhanced connection event handlers
 redisClient.on('connect', () => {
-    console.log('Redis client connected');
+    console.log('✅ Strike Game Redis client connected to ElastiCache with TLS');
 });
 
 redisClient.on('error', (err) => {
-    console.error('Redis client error:', err);
+    console.error('❌ Strike Game Redis client error:', err.message);
 });
 
 redisClient.on('ready', () => {
-    console.log('Redis client ready');
+    console.log('✅ Strike Game Redis client ready');
+    
+    // DISABLE offline queue after connection is ready
+    redisClient.options.enableOfflineQueue = false;
 });
 
 redisClient.on('end', () => {
-    console.log('Redis client connection closed');
+    console.log('🔌 Strike Game Redis client connection closed');
 });
 
-// Helper functions for Redis operations
+// Wait for connection before testing
+const waitForConnection = async () => {
+    return new Promise((resolve, reject) => {
+        if (redisClient.status === 'ready') {
+            resolve();
+            return;
+        }
+        
+        redisClient.once('ready', resolve);
+        redisClient.once('error', reject);
+        
+        // Timeout after 30 seconds
+        setTimeout(() => reject(new Error('Connection timeout')), 30000);
+    });
+};
+
+// Test ElastiCache connection after it's ready
+(async () => {
+    try {
+        await waitForConnection();
+        
+        await redisClient.ping();
+        console.log('✅ Strike Game ElastiCache connection test: SUCCESS');
+        
+        // Test set/get
+        await redisClient.set('strike_test_key', 'ElastiCache Working!', 'EX', 60);
+        const value = await redisClient.get('strike_test_key');
+        console.log('✅ Strike Game ElastiCache set/get test:', value);
+        
+        // Clean up test key
+        await redisClient.del('strike_test_key');
+        
+    } catch (err) {
+        console.error('❌ Strike Game ElastiCache connection test: FAILED', err.message);
+    }
+})();
+
+// Keep all your existing helper functions unchanged
 const redisHelper = {
-    /**
-     * Set a key-value pair in Redis with optional expiration
-     * @param {string} key - Redis key
-     * @param {string|number|object} value - Value to store
-     * @param {string} [option] - Redis option (e.g., 'EX', 'NX')
-     * @param {number} [ttl] - Time to live in seconds
-     * @param {string} [nx] - NX option for SET
-     * @returns {Promise<boolean>} - Whether the operation was successful
-     */
     async set(key, value, option = null, ttl = null, nx = null) {
         try {
             const stringValue = typeof value === 'object' ? JSON.stringify(value) : value;
             
             if (option === 'EX' && nx === 'NX') {
-                // Ensure ttl is a valid integer
                 const ttlSeconds = Math.floor(Number(ttl));
                 if (isNaN(ttlSeconds) || ttlSeconds <= 0) {
                     throw new Error('Invalid TTL value. Must be a positive number.');
                 }
-                // Use SET with EX and NX options
                 const result = await redisClient.set(key, stringValue, 'EX', ttlSeconds, 'NX');
                 return result === 'OK';
             } else if (ttl) {
-                // Simple SETEX
                 const ttlSeconds = Math.floor(Number(ttl));
                 if (isNaN(ttlSeconds) || ttlSeconds <= 0) {
                     throw new Error('Invalid TTL value. Must be a positive number.');
@@ -76,7 +126,6 @@ const redisHelper = {
                 await redisClient.setex(key, ttlSeconds, stringValue);
                 return true;
             } else {
-                // Simple SET
                 await redisClient.set(key, stringValue);
                 return true;
             }
@@ -86,11 +135,6 @@ const redisHelper = {
         }
     },
 
-    /**
-     * Get a value from Redis by key
-     * @param {string} key - Redis key
-     * @returns {Promise<string|object|null>}
-     */
     async get(key) {
         try {
             const value = await redisClient.get(key);
@@ -106,11 +150,6 @@ const redisHelper = {
         }
     },
 
-    /**
-     * Delete a key from Redis
-     * @param {string} key - Redis key
-     * @returns {Promise<void>}
-     */
     async del(key) {
         try {
             await redisClient.del(key);
@@ -120,11 +159,6 @@ const redisHelper = {
         }
     },
 
-    /**
-     * Check if a key exists in Redis
-     * @param {string} key - Redis key
-     * @returns {Promise<boolean>}
-     */
     async exists(key) {
         try {
             const result = await redisClient.exists(key);
@@ -135,12 +169,6 @@ const redisHelper = {
         }
     },
 
-    /**
-     * Set key expiration time
-     * @param {string} key - Redis key
-     * @param {number} ttl - Time to live in seconds
-     * @returns {Promise<void>}
-     */
     async expire(key, ttl) {
         try {
             await redisClient.expire(key, ttl);
@@ -150,12 +178,6 @@ const redisHelper = {
         }
     },
 
-    /**
-     * Increment a counter
-     * @param {string} key - Redis key
-     * @param {number} [increment=1] - Increment value
-     * @returns {Promise<number>}
-     */
     async incr(key, increment = 1) {
         try {
             return await redisClient.incrby(key, increment);
@@ -165,12 +187,6 @@ const redisHelper = {
         }
     },
 
-    /**
-     * Decrement a counter
-     * @param {string} key - Redis key
-     * @param {number} [decrement=1] - Decrement value
-     * @returns {Promise<number>}
-     */
     async decr(key, decrement = 1) {
         try {
             return await redisClient.decrby(key, decrement);
@@ -180,24 +196,9 @@ const redisHelper = {
         }
     },
 
-    /**
-     * Get Redis client instance
-     * @returns {Redis}
-     */
     getClient() {
         return redisClient;
     }
 };
 
-// Elasticache connection test (safe to remove after verification)
-(async () => {
-  try {
-    await redisClient.set('elasticache_test_key_12345', 'hello-from-elasticache', 'EX', 300);
-    const value = await redisClient.get('elasticache_test_key_12345');
-    console.log('Elasticache test value:', value);
-  } catch (err) {
-    console.error('Elasticache test error:', err);
-  }
-})();
-
-module.exports = redisHelper; 
+module.exports = redisHelper;
