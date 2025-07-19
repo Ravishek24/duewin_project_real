@@ -159,7 +159,7 @@ const securityConfig = {
     // Game settings
     game: {
         maxBetAmount: 1000000,
-        minBetAmount: 10,
+        minBetAmount: 0.97,
         validGameTypes: ['wingo', 'fiveD', 'k3'],
         validDurations: [30, 60, 180, 300, 600],
         maxRoomSize: 1000

@@ -73,6 +73,15 @@ const validationRules = {
         body('new_password')
             .isLength({ min: 6 })
             .withMessage('Password must be at least 6 characters long'),
+        body('otp_session_id')
+            .notEmpty()
+            .withMessage('OTP session ID is required'),
+        body('phone')
+            .matches(/^[+]?\d{10,15}$/)
+            .withMessage('Phone number must be in E.164 format'),
+        body('otp_code')
+            .notEmpty()
+            .withMessage('OTP code is required'),
         validate
     ],
 

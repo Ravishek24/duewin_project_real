@@ -30,7 +30,7 @@ class GameConfig extends Model {
             },
             min_bet_amount: {
                 type: DataTypes.DECIMAL(10, 2),
-                defaultValue: 10.00,
+                defaultValue: 0.97,
                 comment: 'Minimum bet amount allowed'
             },
             max_bet_amount: {

@@ -1,0 +1,311 @@
+Send OTP codes worldwide using the Verify API
+Integrate the Prelude Verify API from any language to start sending OTP messages to your users worldwide using multiple messaging channels.
+
+​
+API
+The Prelude v2 API is a REST API and uses standard HTTP features and statuses.
+
+The current URL is https://api.prelude.dev/v2.
+
+​
+Authentication
+To perform requests on the API, you need to provide a v2 API key in the Authorization header.
+
+You can create an API key in the Dashboard, under the API Keys section of the settings.
+
+Example request
+
+Copy
+
+Ask AI
+curl --request POST \
+     --url 'https://api.prelude.dev/v2/*' \
+     --header 'Accept: application/json' \
+     --header 'Authorization: Bearer <API_KEY>'
+​
+Errors
+Prelude uses conventional HTTP statuses to indicate the success or failure of a request:
+
+Codes in the 2xx range indicate success.
+Codes in the 4xx range indicate an error that failed given the information provided (e.g. required parameter was omitted or an authentication failed).
+Codes in the 5xx range indicate an error with Prelude's servers (these are rare).
+The Prelude API returns errors using a JSON object in the response body with a machine-readable code and a human-readable message and a param field.
+
+See Errors for more details as well as a list of all possible error codes.
+
+​
+Reference
+
+Quickstart
+Send and verify a code in 2 minutes and 3 simple steps with our SDKs, available for Node.js, Python, and Go.
+
+​
+Get the SDK
+We provide SDKs for Node.js, Python, and Go to make your life easier.
+
+
+Node.js
+
+Python
+
+Go
+
+Java Gradle
+
+Java Maven
+
+Copy
+
+Ask AI
+npm add @prelude.so/sdk
+Want to see another language make its way to the list? Tell us
+
+​
+Initialize the SDK
+Initialize the SDK by pasting the snippet below.
+
+Get your API_KEY from the Settings > Keys page of your Dashboard.
+
+
+Node.js
+
+Python
+
+Go
+
+Java
+
+Copy
+
+Ask AI
+import Prelude from "@prelude.so/sdk";
+
+const client = new Prelude({
+  apiToken: "API_KEY",
+});
+​
+Send a code
+Call the Create Verification endpoint to send a verification code to a phone number. You will receive a code by SMS.
+
+
+Node.js
+
+Python
+
+Go
+
+Java
+
+Copy
+
+Ask AI
+import Prelude from "@prelude.so/sdk";
+
+const client = new Prelude();
+
+async function main() {
+  const verification = await client.verification.create({
+    target: {
+      type: "phone_number",
+      value: "+30123456789",
+    },
+    // Optional signals dispatchId value, captured in the frontend SDKs
+    dispatch_id: "client dispatchId",
+  });
+
+  console.log(verification.id);
+}
+
+main();
+​
+Verify the code
+Call the Check endpoint with the same phone number and the code you received.
+
+
+Node.js
+
+Python
+
+Go
+
+Java
+
+Copy
+
+Ask AI
+import Prelude from "@prelude.so/sdk";
+
+const client = new Prelude();
+
+async function main() {
+  const check = await client.verification.check({
+    target: {
+      type: "phone_number",
+      value: "+30123456789",
+    },
+    code: "123456",
+  });
+
+  console.log(check.id);
+}
+
+main();
+
+
+Webhook for the Verify API
+Prelude Verify API can notify your application about events using webhooks. Get notified when your messages are delivered and billed.
+
+Prelude can notify your application about events using webhooks. You can configure a webhook URL using the callback_url parameter of your request.
+
+​
+The event object
+​
+id
+string
+The unique identifier of the event.
+
+​
+type
+string
+The type of the event, possible values are:
+
+Type	Description
+verify.authentication	A verification was created and billed
+verify.attempt	A verification attempt was sent to the user
+verify.delivery_status	Sent when we receive a delivery status from the carrier
+​
+payload
+object
+The payload of the event, whose structure depends on the event type.
+
+​
+created_at
+RFC3339 date string
+The timestamp of the event creation.
+
+​
+How to set up your Webhook
+To start receiving webhook events in your app, create and register a webhook endpoint by following the steps below. You can register and create one endpoint to handle several different event types at once, or set up individual endpoints for specific events.
+
+1
+Implement the handler
+
+Develop a webhook endpoint function to receive event data POST requests.
+
+2
+Pass the URL
+
+Add your webhook endpoint URL to your Verification requests to start receiving events.
+
+3
+Return OK
+
+Return a 200 OK HTTP response to the POST request to acknowledge receipt of the event. If you don’t, Prelude will retry sending the event for 2 weeks.
+
+​
+Delivery Statuses
+When we receive a delivery status from the carrier, we send a webhook event with the verify.delivery_status type. The status field in the payload indicates the current state of the message delivery.
+
+Here are the possible status values:
+
+Status	Code	Description
+Submitted	submitted	The message has been submitted to the carrier.
+In Transit	in_transit	The message is in transit to the recipient.
+Delivered	delivered	The message was successfully delivered to the recipient.
+Undeliverable	undeliverable	The message could not be delivered to the recipient.
+Unknown	unknown	The delivery status cannot be determined due to unspecified issues or lack of detailed information from the carrier or network.
+​
+Webhook Signature
+To ensure the authenticity of the webhook events, we use a signature mechanism.
+
+The signature is a base64 RSASSA-PSS on the SHA256 hash of the payload.
+
+The signature is sent as a string prefixed with rsassa-pss-sha256= in the X-Webhook-Signature header of each request to your webhook endpoint.
+
+To enable the webhook signature, go to your Dashboard in the Settings->Keys section and generate a webhook signing key for your application.
+
+You can then verify the signature of the webhook events in your webhook endpoint and process the event only if the signature is valid.
+
+Authentication:
+
+{
+  "id": "evt_01jnh4zwabf1grfsaq955ej3mt",
+  "type": "verify.authentication",
+  "payload": {
+    "metadata": {
+      "correlation_id": "e9156dad-de79-4d47-9e6b-e0c40e9244a4"
+    },
+    "price": {
+      "amount": 0.009,
+      "currency": "EUR"
+    },
+    "target": {
+      "type": "phone_number",
+      "value": "+33xxxxxxxx"
+    },
+    "time": "2025-03-04T17:59:19.067887456Z",
+    "verification_id": "vrf_01jnh4zt8vfq5r71n1sx9yvx5m"
+  },
+  "created_at": "2025-03-04T17:59:21.163921113Z"
+}
+
+
+Attempt:
+
+{
+  "id": "evt_01jnh50110f1gt7n74yb6kcrzb",
+  "type": "verify.attempt",
+  "payload": {
+    "carrier_information": {
+      "mcc": "208",
+      "mnc": "10"
+    },
+    "delivery_status": "delivered",
+    "id": "att_3v9s0v9gzt8hws0cp753q4gj0c",
+    "metadata": {
+      "correlation_id": "e9156dad-de79-4d47-9e6b-e0c40e9244a4"
+    },
+    "price": {
+      "amount": 0.03,
+      "currency": "EUR"
+    },
+    "target": {
+      "type": "phone_number",
+      "value": "+33xxxxxxxx"
+    },
+    "time": "2025-03-04T17:59:21.375073507Z",
+    "verification_id": "vrf_01jnh4zt8vfq5r71n1sx9yvx5m"
+  },
+  "created_at": "2025-03-04T17:59:25.984640901Z"
+}
+
+Delivery  Status:
+
+
+{
+  "id": "evt_01jnh500a6frv9ky0wn4r6aycv",
+  "type": "verify.delivery_status",
+  "payload": {
+    "attempt_id": "att_3v9s0v9gzt8hws0cp753q4gj0c",
+    "carrier_information": {
+      "mcc": "208",
+      "mnc": "10"
+    },
+    "id": "dls_1mzny4yepa9berf8hemgys2391",
+    "metadata": {
+      "correlation_id": "e9156dad-de79-4d47-9e6b-e0c40e9244a4"
+    },
+    "price": {
+      "amount": 0.03,
+      "currency": "EUR"
+    },
+    "status": "delivered",
+    "target": {
+      "type": "phone_number",
+      "value": "+33xxxxxxxx"
+    },
+    "time": "2025-03-04T17:59:25.129596712Z",
+    "verification_id": "vrf_01jnh4zt8vfq5r71n1sx9yvx5m"
+  },
+  "created_at": "2025-03-04T17:59:25.254545815Z"
+}

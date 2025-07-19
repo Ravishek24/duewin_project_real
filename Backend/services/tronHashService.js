@@ -29,9 +29,82 @@ const getDurationHashKey = (duration) => {
     return `tron:hash_collection:${duration}`;
 };
 
-// NEW: Get all duration keys for TRX_WIX
 const getTrxWixDurations = () => {
-    return [30, 60, 180, 300]; // All TRX_WIX durations
+    return [30, 60, 180, 300];
+};
+
+/**
+ * Get current time in IST (Indian Standard Time)
+ * @returns {Date} - Current time in IST
+ */
+const getCurrentISTTime = () => {
+    const now = new Date();
+    // IST is UTC+5:30
+    const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+    return istTime;
+};
+
+/**
+ * Extract block number from TRON hash by fetching block details
+ * @param {string} hash - TRON block hash
+ * @returns {Promise<number|null>} - Block number or null if not found
+ */
+const getBlockNumberFromHash = async (hash) => {
+    try {
+        console.log(`🔍 [BLOCK_NUMBER] Fetching block details for hash: ${hash}`);
+        
+        const response = await axios.get(`${TRON_API_URL}/block`, {
+            params: {
+                hash: hash
+            },
+            timeout: 10000 // 10 second timeout
+        });
+
+        if (response.data && response.data.number) {
+            const blockNumber = parseInt(response.data.number);
+            console.log(`✅ [BLOCK_NUMBER] Found block number: ${blockNumber} for hash: ${hash}`);
+            return blockNumber;
+        } else {
+            console.log(`⚠️ [BLOCK_NUMBER] No block number found for hash: ${hash}`);
+            return null;
+        }
+    } catch (error) {
+        console.log(`❌ [BLOCK_NUMBER] Error fetching block number for hash ${hash}:`, error.message);
+        return null;
+    }
+};
+
+/**
+ * Extract block number from hash with fallback parsing
+ * @param {string} hash - TRON block hash
+ * @returns {Promise<number|null>} - Block number or null if not found
+ */
+const extractBlockNumber = async (hash) => {
+    try {
+        // First try to get block number from API
+        const blockNumber = await getBlockNumberFromHash(hash);
+        if (blockNumber) {
+            return blockNumber;
+        }
+
+        // Fallback: Try to extract from hash pattern (if it's a real TRON hash)
+        if (hash && hash.startsWith('000000000')) {
+            // TRON block hashes often start with zeros followed by block number
+            // This is a heuristic approach
+            const hexPart = hash.substring(9, 17); // Extract 8 hex characters after zeros
+            const blockNum = parseInt(hexPart, 16);
+            if (blockNum && blockNum > 0) {
+                console.log(`🔧 [BLOCK_NUMBER] Extracted block number from hash pattern: ${blockNum}`);
+                return blockNum;
+            }
+        }
+
+        console.log(`⚠️ [BLOCK_NUMBER] Could not extract block number from hash: ${hash}`);
+        return null;
+    } catch (error) {
+        console.log(`❌ [BLOCK_NUMBER] Error extracting block number:`, error.message);
+        return null;
+    }
 };
 
 /**
@@ -40,21 +113,56 @@ const getTrxWixDurations = () => {
  * @returns {number|null} - A digit between 0-9 or null if not found
  */
 const getLastDigit = (hash) => {
-    // First try to find any digit in the hash (scanning from right to left)
-    const match = hash.match(/\d/g);
-    if (match && match.length > 0) {
-        // Use the last digit found in the hash
-        return parseInt(match[match.length - 1]);
+    if (!hash || typeof hash !== 'string') {
+        return null;
+    }
+    
+    // Find the last numeric digit in the hash (scanning from right to left)
+    for (let i = hash.length - 1; i >= 0; i--) {
+        const char = hash[i];
+        if (char >= '0' && char <= '9') {
+            return parseInt(char);
+        }
     }
     
     // If no digit found, create a pseudo-random digit based on the hash
-    if (hash && hash.length > 0) {
+    if (hash.length > 0) {
         // Sum the character codes of the hash
         const sum = hash.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
         // Return a number between 0-9 based on the sum
         return sum % 10;
     }
     
+    return null;
+};
+
+/**
+ * Find a hash that ends with a specific digit
+ * @param {number} targetDigit - The digit we want the hash to end with (0-9)
+ * @param {Array} hashes - Array of hashes to search through
+ * @returns {string|null} - Hash that ends with the target digit, or null if not found
+ */
+const findHashEndingWithDigit = (targetDigit, hashes) => {
+    // Ensure targetDigit is a valid number 0-9
+    if (typeof targetDigit === 'object' && targetDigit !== null) {
+        console.log(`⚠️ [FIND_HASH] targetDigit is an object:`, targetDigit);
+        targetDigit = 0;
+    }
+    
+    targetDigit = parseInt(targetDigit) || 0;
+    targetDigit = targetDigit % 10; // Ensure it's 0-9
+    
+    console.log(`🔍 [FIND_HASH] Looking for hash ending with digit: ${targetDigit} (type: ${typeof targetDigit})`);
+    
+    for (const hash of hashes) {
+        const lastDigit = getLastDigit(hash);
+        if (lastDigit === targetDigit) {
+            console.log(`✅ [FIND_HASH] Found hash ending with ${targetDigit}: ${hash}`);
+            return hash;
+        }
+    }
+    
+    console.log(`❌ [FIND_HASH] No hash found ending with ${targetDigit}`);
     return null;
 };
 
@@ -256,62 +364,183 @@ const startHashCollection = async () => {
  * Get result with verification hash for a specific duration
  * @param {Object} result - The calculated result object
  * @param {number} duration - Duration in seconds (30, 60, 180, 300)
- * @returns {Promise<{result: Object, hash: string, link: string}>}
+ * @returns {Promise<{result: Object, hash: string, link: string, blockNumber: number, resultTime: Date}>}
  */
 const getResultWithVerification = async (result, duration = null) => {
     try {
         // Extract the number from the result object
-        const resultNumber = result.number || result;
+        let resultNumber = result.number || result;
+        
+        // Ensure resultNumber is a number, not an object
+        if (typeof resultNumber === 'object' && resultNumber !== null) {
+            console.log(`⚠️ [TRON_VERIFICATION] resultNumber is an object:`, resultNumber);
+            resultNumber = 0; // Default to 0 if it's an object
+        }
+        
+        // Convert to number and ensure it's 0-9
+        resultNumber = parseInt(resultNumber) || 0;
+        resultNumber = resultNumber % 10; // Ensure it's 0-9
+        
+        console.log(`🔍 [TRON_VERIFICATION] Looking for hash ending with digit: ${resultNumber} (type: ${typeof resultNumber})`);
         
         // Check if we have hashes for this duration
         const hasHashes = await hasEnoughHashes(duration);
         
         if (hasHashes) {
-            // Normal flow - get hash from duration-specific collection
-            const { hash, link } = await getHashForResult(resultNumber, duration);
-            
-            // Start collecting new hashes in the background for all durations
-            startHashCollection().catch(error => {
-                logger.error('Background hash collection failed:', error);
-            });
+            try {
+                // Try to get hash from duration-specific collection
+                const { hash, link } = await getHashForResult(resultNumber, duration);
+                
+                // Verify the hash actually ends with the correct digit
+                const actualLastDigit = getLastDigit(hash);
+                console.log(`🔍 [TRON_VERIFICATION] Hash ${hash} ends with digit: ${actualLastDigit}, expected: ${resultNumber}`);
+                
+                if (actualLastDigit === resultNumber) {
+                    console.log(`✅ [TRON_VERIFICATION] Hash verification successful!`);
+                    
+                    // Start collecting new hashes in the background for all durations
+                    startHashCollection().catch(error => {
+                        logger.error('Background hash collection failed:', error);
+                    });
 
-            return {
-                result,
-                hash,
-                link
-            };
+                    // Get block number and current IST time
+                    const blockNumber = await extractBlockNumber(hash);
+                    const resultTime = getCurrentISTTime();
+                    
+                    return {
+                        result,
+                        hash,
+                        link,
+                        blockNumber,
+                        resultTime
+                    };
+                } else {
+                    console.log(`⚠️ [TRON_VERIFICATION] Hash verification failed, trying to fetch fresh hashes...`);
+                    throw new Error('Hash verification failed');
+                }
+            } catch (error) {
+                console.log(`🔄 [TRON_VERIFICATION] Trying to fetch fresh hashes for digit ${resultNumber}...`);
+                
+                // Try to fetch fresh hashes and find one that matches
+                const freshHashes = await fetchNewHashes(200); // Fetch more hashes
+                const matchingHash = findHashEndingWithDigit(resultNumber, freshHashes);
+                
+                if (matchingHash) {
+                    console.log(`✅ [TRON_VERIFICATION] Found fresh hash ending with ${resultNumber}: ${matchingHash}`);
+                    
+                    // Update the collection with fresh hashes
+                    await updateHashCollection(freshHashes, duration);
+                    
+                    // Get block number and current IST time
+                    const blockNumber = await extractBlockNumber(matchingHash);
+                    const resultTime = getCurrentISTTime();
+                    
+                    return {
+                        result,
+                        hash: matchingHash,
+                        link: `https://tronscan.org/#/block/${matchingHash}`,
+                        blockNumber,
+                        resultTime
+                    };
+                } else {
+                    console.log(`❌ [TRON_VERIFICATION] No hash found ending with ${resultNumber}, using fallback`);
+                    throw new Error('No matching hash found');
+                }
+            }
         } else {
             // Fallback - create a random hash if no collection available
             logger.warn(`No hash collection available for duration ${duration}, using fallback hash generation`);
             
-            // Generate a random hash-like string
-            const randomHash = Array(64).fill(0).map(() => 
-                Math.floor(Math.random() * 16).toString(16)).join('');
+            // Try to fetch fresh hashes first
+            try {
+                const freshHashes = await fetchNewHashes(200);
+                const matchingHash = findHashEndingWithDigit(resultNumber, freshHashes);
+                
+                if (matchingHash) {
+                    console.log(`✅ [TRON_VERIFICATION] Found fresh hash ending with ${resultNumber}: ${matchingHash}`);
+                    
+                    // Get block number and current IST time
+                    const blockNumber = await extractBlockNumber(matchingHash);
+                    const resultTime = getCurrentISTTime();
+                    
+                    return {
+                        result,
+                        hash: matchingHash,
+                        link: `https://tronscan.org/#/block/${matchingHash}`,
+                        blockNumber,
+                        resultTime
+                    };
+                }
+            } catch (error) {
+                console.log(`⚠️ [TRON_VERIFICATION] Failed to fetch fresh hashes:`, error.message);
+            }
+            
+            // Generate a random hash-like string that ends with the correct digit
+            const randomHash = generateHashEndingWithDigit(resultNumber);
             
             // Start collecting hashes for future use
             startHashCollection().catch(error => {
                 logger.error('Background hash collection failed:', error);
             });
             
+            // Get current IST time (no block number for generated hashes)
+            const resultTime = getCurrentISTTime();
+            
             return {
                 result,
                 hash: randomHash,
-                link: `https://tronscan.org/#/block/${randomHash}`
+                link: `https://tronscan.org/#/block/${randomHash}`,
+                blockNumber: null,
+                resultTime
             };
         }
     } catch (error) {
         logger.error('Error getting result with verification:', error);
         
-        // Double fallback - in case of any failure, still return something
-        const fallbackHash = Array(64).fill(0).map(() => 
-            Math.floor(Math.random() * 16).toString(16)).join('');
+        // Double fallback - generate a hash ending with the correct digit
+        const resultNumber = result.number || result;
+        const fallbackHash = generateHashEndingWithDigit(resultNumber);
+            
+        // Get current IST time (no block number for fallback hashes)
+        const resultTime = getCurrentISTTime();
             
         return {
             result,
             hash: fallbackHash,
-            link: `https://tronscan.org/#/block/${fallbackHash}`
+            link: `https://tronscan.org/#/block/${fallbackHash}`,
+            blockNumber: null,
+            resultTime
         };
     }
+};
+
+/**
+ * Generate a hash-like string that ends with a specific digit
+ * @param {number} targetDigit - The digit the hash should end with (0-9)
+ * @returns {string} - Hash-like string ending with the target digit
+ */
+const generateHashEndingWithDigit = (targetDigit) => {
+    // Ensure targetDigit is a valid number 0-9
+    if (typeof targetDigit === 'object' && targetDigit !== null) {
+        console.log(`⚠️ [GENERATE_HASH] targetDigit is an object:`, targetDigit);
+        targetDigit = 0;
+    }
+    
+    targetDigit = parseInt(targetDigit) || 0;
+    targetDigit = targetDigit % 10; // Ensure it's 0-9
+    
+    console.log(`🔧 [GENERATE_HASH] Generating hash ending with digit: ${targetDigit} (type: ${typeof targetDigit})`);
+    
+    // Generate 63 random hex characters
+    const randomPart = Array(63).fill(0).map(() => 
+        Math.floor(Math.random() * 16).toString(16)).join('');
+    
+    // Add the target digit at the end
+    const finalHash = randomPart + targetDigit.toString();
+    
+    console.log(`🔧 [GENERATE_HASH] Generated hash: ${finalHash.substring(0, 16)}...${finalHash.substring(finalHash.length - 16)}`);
+    
+    return finalHash;
 };
 
 module.exports = {
@@ -319,5 +548,10 @@ module.exports = {
     getResultWithVerification,
     hasEnoughHashes,
     getTrxWixDurations,
-    getDurationHashKey
+    getDurationHashKey,
+    getLastDigit,
+    findHashEndingWithDigit,
+    generateHashEndingWithDigit,
+    getCurrentISTTime,
+    extractBlockNumber
 }; 

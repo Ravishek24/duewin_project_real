@@ -14,10 +14,13 @@ const {
     getUserBankDetails,
     getUserTransactionHistory,
     getUserTeamSummary,
+    getUserTeamLevelStats,
     getUserRebateEarnings,
     getUserDetails,
     getInHouseGamesStatsController,
-    getGameBetHistoryController
+    getGameBetHistoryController,
+    getThirdPartyGamesStatsController,
+    getThirdPartyGameHistoryController
 } = require('../controllers/userController/index');
 const { auth, isAdmin, requirePhoneVerification } = require('../middlewares/authMiddleware');
 const validationRules = require('../middleware/inputValidator');
@@ -97,6 +100,7 @@ router.get('/admin/users/:user_id/withdrawal-history', auth, isAdmin, getUserWit
 router.get('/admin/users/:user_id/bank-details', auth, isAdmin, getUserBankDetails);
 router.get('/admin/users/:user_id/transaction-history', auth, isAdmin, getUserTransactionHistory);
 router.get('/admin/users/:user_id/team-summary', auth, isAdmin, getUserTeamSummary);
+router.get('/admin/users/:user_id/team-level-stats', auth, isAdmin, getUserTeamLevelStats);
 router.get('/admin/users/:user_id/rebate-earnings', auth, isAdmin, getUserRebateEarnings);
 
 // User details route
@@ -149,5 +153,9 @@ router.get('/betting-requirement', auth, async (req, res) => {
 // In-house games statistics routes
 router.get('/in-house-games/stats', auth, getInHouseGamesStatsController);
 router.get('/in-house-games/:gameType/history', auth, getGameBetHistoryController);
+
+// Third-party games statistics routes
+router.get('/third-party-games/stats', auth, getThirdPartyGamesStatsController);
+router.get('/third-party-games/:gameType/history', auth, getThirdPartyGameHistoryController);
 
 module.exports = router;

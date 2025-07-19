@@ -14,7 +14,7 @@ const { processBetForActivityReward } = require('../services/activityRewardsServ
 const fiveDProtectionService = require('./fiveDProtectionService');
 // CONSTANTS - Add to top of file
 const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
-const ENHANCED_USER_THRESHOLD = 100; // New minimum user threshold
+const ENHANCED_USER_THRESHOLD = 3; // New minimum user threshold
 
 const globalProcessingLocks = new Map();
 
@@ -1135,18 +1135,25 @@ function checkK3WinCondition(combination, betType, betValue) {
         return false;
     }
     
-    // Standard handling for other bet types
-    const checkValue = `${betType}:${betValue}`;
-    console.log(`🎲 [K3_WIN_CHECK] Checking standard bet: ${checkValue} vs combination:`, combination);
+    // CRITICAL FIX: Handle bet type mapping mismatches
+    let checkValue = `${betType}:${betValue}`;
+    
+    // Map SUM_SIZE to SUM_CATEGORY for winning conditions
+    if (betType === 'SUM_SIZE') {
+        checkValue = `SUM_CATEGORY:${betValue}`;
+        console.log(`🎲 [K3_SIZE_MAPPING] Mapping SUM_SIZE:${betValue} to SUM_CATEGORY:${betValue}`);
+    }
+    
+    console.log(`🎲 [K3_WIN_CHECK] Checking bet: ${checkValue} vs combination:`, combination);
 
     // Check in all condition arrays
     for (const conditionGroup of Object.values(conditions)) {
         if (Array.isArray(conditionGroup) && conditionGroup.includes(checkValue)) {
-            console.log(`🎲 [K3_WIN_FOUND] Standard bet wins with ${checkValue}`);
+            console.log(`🎲 [K3_WIN_FOUND] Bet wins with ${checkValue}`);
             return true;
         }
     }
-    console.log(`🎲 [K3_WIN_NOT_FOUND] Standard bet loses - no matching conditions`);
+    console.log(`🎲 [K3_WIN_NOT_FOUND] Bet loses - no matching conditions for ${checkValue}`);
     return false;
 }
 async function getOptimalResultByExposure(gameType, duration, periodId, timeline = 'default') {
@@ -2874,7 +2881,9 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
             result: result,
             verification: verification ? {
                 hash: verification.hash,
-                link: verification.link
+                link: verification.link,
+                blockNumber: verification.blockNumber,
+                resultTime: verification.resultTime
             } : null,
             protectionMode: shouldUseProtectedResult,
             protectionReason: shouldUseProtectedResult ? 'INSUFFICIENT_USERS' : 'NORMAL_OPERATION',
@@ -3664,7 +3673,9 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                         },
                         verification: { // ENHANCED: Add verification
                             hash: result.verification_hash,
-                            link: result.verification_link
+                            link: result.verification_link,
+                            block: result.block_number || null,
+                            time: result.result_time || result.created_at
                         },
                         createdAt: result.created_at,
                         duration: result.duration,
@@ -3672,6 +3683,25 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
                         gameType: 'trx_wix'
                     };
                 });
+                
+                // 💰 CRYPTO HISTORY LOGGER - Track when TRX_WIX history is retrieved
+                if (results.length > 0) {
+                    const latestResult = results[0];
+                    console.log('💰 [TRX_WIX_HISTORY] Retrieved game history:', {
+                        gameType: 'trx_wix',
+                        duration: duration,
+                        resultsCount: results.length,
+                        latestPeriodId: latestResult.periodId,
+                        latestResult: latestResult.result,
+                        latestVerification: {
+                            hash: latestResult.verification.hash,
+                            link: latestResult.verification.link,
+                            block: latestResult.verification.block || 'NULL',
+                            time: latestResult.verification.time || 'NULL'
+                        },
+                        timestamp: new Date().toISOString()
+                    });
+                }
                 break;
 
             case 'k3':
@@ -4714,6 +4744,36 @@ const checkK3Win = (betType, betValue, result) => {
             console.log(`❓ [K3_UNKNOWN_SUM_CATEGORY] Unknown sum category: ${betValue}`);
             return false;
 
+        case 'SUM_SIZE':
+            // SUM_SIZE is the same as SUM_CATEGORY for size bets
+            const normalizedSizeValue = betValue.toLowerCase();
+            if (normalizedSizeValue === 'big') {
+                const isSumSizeWin = sum >= 11;
+                console.log(`📏 [K3_SUM_SIZE_CHECK] big vs ${sum} (>= 11) = ${isSumSizeWin}`);
+                return isSumSizeWin;
+            } else if (normalizedSizeValue === 'small') {
+                const isSumSizeWin = sum < 11;
+                console.log(`📏 [K3_SUM_SIZE_CHECK] small vs ${sum} (< 11) = ${isSumSizeWin}`);
+                return isSumSizeWin;
+            }
+            console.log(`❓ [K3_UNKNOWN_SUM_SIZE] Unknown sum size: ${betValue}`);
+            return false;
+
+        case 'SUM_PARITY':
+            // SUM_PARITY is the same as SUM_CATEGORY for parity bets
+            const normalizedParityValue = betValue.toLowerCase();
+            if (normalizedParityValue === 'odd') {
+                const isSumParityWin = sum % 2 === 1;
+                console.log(`⚖️ [K3_SUM_PARITY_CHECK] odd vs ${sum} = ${isSumParityWin}`);
+                return isSumParityWin;
+            } else if (normalizedParityValue === 'even') {
+                const isSumParityWin = sum % 2 === 0;
+                console.log(`⚖️ [K3_SUM_PARITY_CHECK] even vs ${sum} = ${isSumParityWin}`);
+                return isSumParityWin;
+            }
+            console.log(`❓ [K3_UNKNOWN_SUM_PARITY] Unknown sum parity: ${betValue}`);
+            return false;
+
         case 'MATCHING_DICE':
             const normalizedMatchingValue = betValue.toLowerCase();
             if (normalizedMatchingValue === 'triple_any') {
@@ -4976,7 +5036,9 @@ const getLastResult = async (gameType, duration = null) => {
                             },
                             verification: { // ENHANCED: Add verification
                                 hash: result.verification_hash,
-                                link: result.verification_link
+                                link: result.verification_link,
+                                block: result.block_number || null,
+                                time: result.result_time || result.created_at
                             },
                             createdAt: result.created_at,
                             gameType: 'trx_wix'
@@ -5741,7 +5803,7 @@ const generateVerificationHash = () => {
  */
 const generateVerificationLink = () => {
     const hash = generateVerificationHash();
-    return `https://tronscan.org/#/transaction/${hash}`;
+    return `https://tronscan.org/#/block/${hash}`;
 };
 
 
@@ -5829,10 +5891,10 @@ const validateBetWithTimeline = async (betData) => {
         const netBetAmount = grossBetAmount - platformFee;
 
         // Validate minimum bet on NET amount
-        if (netBetAmount < 1) {
+        if (netBetAmount < 0.95) {
             return {
                 valid: false,
-                message: 'Net bet amount after platform fee must be at least ₹1',
+                message: 'Net bet amount after platform fee must be at least ₹0.95',
                 code: 'MINIMUM_NET_BET',
                 breakdown: {
                     grossAmount: grossBetAmount,
@@ -6284,9 +6346,25 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         result: JSON.stringify(result),
                         verification_hash: resultWithVerification.verification?.hash || generateVerificationHash(),
                         verification_link: resultWithVerification.verification?.link || generateVerificationLink(),
+                        block_number: resultWithVerification.verification?.blockNumber || null,
+                        result_time: resultWithVerification.verification?.resultTime || new Date(),
                         duration: duration,
                         timeline: timeline
                     }, { transaction: useTransaction });
+                    
+                    // 💰 CRYPTO RESULT LOGGER - Easy to identify new TRX_WIX results from game logic
+                    console.log('💰 [TRX_WIX_GAME_LOGIC] New result generated and stored:', {
+                        periodId: periodId,
+                        result: result,
+                        hash: resultWithVerification.verification?.hash || 'GENERATED',
+                        link: resultWithVerification.verification?.link || 'GENERATED',
+                        blockNumber: resultWithVerification.verification?.blockNumber || 'NULL',
+                        resultTime: resultWithVerification.verification?.resultTime || 'DEFAULT',
+                        duration: duration,
+                        timeline: timeline,
+                        resultId: savedResult.result_id,
+                        timestamp: new Date().toISOString()
+                    });
                 }
 
                 console.log('🏆 [PROCESS_WINNERS] Processing winning bets...');
@@ -7345,6 +7423,14 @@ const calculateOdds = (gameType, betType, betValue) => {
 
                     case 'SUM_CATEGORY':
                         // Small/Big/Odd/Even bets - 2.0x payout
+                        return 2.0;
+
+                    case 'SUM_SIZE':
+                        // SUM_SIZE is mapped to SUM_CATEGORY - same 2.0x payout
+                        return 2.0;
+
+                    case 'SUM_PARITY':
+                        // SUM_PARITY bets - 2.0x payout
                         return 2.0;
 
                     case 'PATTERN':

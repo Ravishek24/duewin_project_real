@@ -86,9 +86,8 @@ const initBankAccountAddition = async (userId, accountData) => {
 };
 
 // Service to complete bank account addition after OTP verification
-const completeBankAccountAddition = async (userId, otpSessionId) => {
+const completeBankAccountAddition = async (userId, otpSessionId, phone, otp_code) => {
     const t = await sequelize.transaction();
-
     try {
         // Get user
         const user = await User.findByPk(userId, { transaction: t });
@@ -99,7 +98,6 @@ const completeBankAccountAddition = async (userId, otpSessionId) => {
                 message: 'User not found.'
             };
         }
-        
         // Verify OTP session ID matches
         if (user.phone_otp_session_id !== otpSessionId.toString()) {
             await t.rollback();
@@ -108,10 +106,8 @@ const completeBankAccountAddition = async (userId, otpSessionId) => {
                 message: 'Invalid OTP session for this user.'
             };
         }
-        
-        // Check OTP verification status
-        const otpVerificationResult = await otpService.checkOtpSession(otpSessionId);
-        
+        // Check OTP verification status (with phone and code)
+        const otpVerificationResult = await otpService.checkOtpSession(otpSessionId, phone, otp_code);
         if (!otpVerificationResult.success) {
             await t.rollback();
             return {
@@ -119,7 +115,6 @@ const completeBankAccountAddition = async (userId, otpSessionId) => {
                 message: `OTP verification failed: ${otpVerificationResult.message}`
             };
         }
-        
         // If OTP is not verified yet
         if (!otpVerificationResult.verified) {
             await t.rollback();
@@ -129,18 +124,14 @@ const completeBankAccountAddition = async (userId, otpSessionId) => {
                 status: otpVerificationResult.status
             };
         }
-        
         // Extract account data from OTP session (stored in udf1)
-        const accountData = JSON.parse(otpVerificationResult.userData.udf1);
-        
+        const accountData = JSON.parse(otpVerificationResult.userData?.udf1 || '{}');
         // Check if this is the first account (should be primary)
         const existingAccounts = await BankAccount.count({
             where: { user_id: userId },
             transaction: t
         });
-
         const shouldBePrimary = existingAccounts === 0 ? true : accountData.is_primary;
-
         // If this account should be primary, unset primary from all other accounts
         if (shouldBePrimary) {
             await BankAccount.update(
@@ -151,7 +142,6 @@ const completeBankAccountAddition = async (userId, otpSessionId) => {
                 }
             );
         }
-
         // Create the new bank account
         const newBankAccount = await BankAccount.create({
             user_id: userId,
@@ -163,15 +153,12 @@ const completeBankAccountAddition = async (userId, otpSessionId) => {
             is_primary: shouldBePrimary,
             is_verified: true // Mark as verified since OTP verified
         }, { transaction: t });
-        
         // Clear OTP session ID
         await User.update(
             { phone_otp_session_id: null },
             { where: { user_id: userId }, transaction: t }
         );
-
         await t.commit();
-
         return {
             success: true,
             message: 'Bank account added and verified successfully.',

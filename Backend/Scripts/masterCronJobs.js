@@ -411,7 +411,7 @@ const processRebateCommissionType = async (gameType) => {
             betRecords = await db.query(`
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
-                    SELECT user_id, bet_amount FROM bet_record_wingo 
+                    SELECT user_id, bet_amount FROM bet_record_wingos 
                     WHERE created_at BETWEEN :start AND :end AND status = 'completed'
                     UNION ALL
                     SELECT user_id, bet_amount FROM bet_record_5ds

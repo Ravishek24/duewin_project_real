@@ -149,13 +149,16 @@ const processRebateCommission = async (gameType) => {
             betRecords = await sequelizeInstance.query(`
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
-                    SELECT user_id, bet_amount FROM bet_record_wingo 
+                    SELECT user_id, bet_amount FROM bet_record_wingos 
                     WHERE created_at BETWEEN :start AND :end
                     UNION ALL
-                    SELECT user_id, bet_amount FROM bet_record_5d
+                    SELECT user_id, bet_amount FROM bet_record_5ds
                     WHERE created_at BETWEEN :start AND :end
                     UNION ALL
-                    SELECT user_id, bet_amount FROM bet_record_k3
+                    SELECT user_id, bet_amount FROM bet_record_k3s
+                    WHERE created_at BETWEEN :start AND :end
+                    UNION ALL
+                    SELECT user_id, bet_amount FROM bet_record_trx_wix
                     WHERE created_at BETWEEN :start AND :end
                 ) as combined_bets
                 GROUP BY user_id
@@ -2498,17 +2501,20 @@ const processMultiLevelRebateCommission = async (gameType) => {
 
         // Get bet records based on game type
         if (gameType === 'lottery') {
-            // Aggregate internal game bets (Wingo, 5D, K3)
+            // Aggregate internal game bets (Wingo, 5D, K3, TRX Wix)
             betRecords = await sequelizeInstance.query(`
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
-                    SELECT user_id, bet_amount FROM bet_record_wingo 
+                    SELECT user_id, bet_amount FROM bet_record_wingos 
                     WHERE created_at BETWEEN :start AND :end
                     UNION ALL
-                    SELECT user_id, bet_amount FROM bet_record_5d
+                    SELECT user_id, bet_amount FROM bet_record_5ds
                     WHERE created_at BETWEEN :start AND :end
                     UNION ALL
-                    SELECT user_id, bet_amount FROM bet_record_k3
+                    SELECT user_id, bet_amount FROM bet_record_k3s
+                    WHERE created_at BETWEEN :start AND :end
+                    UNION ALL
+                    SELECT user_id, bet_amount FROM bet_record_trx_wix
                     WHERE created_at BETWEEN :start AND :end
                 ) as combined_bets
                 GROUP BY user_id

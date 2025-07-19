@@ -87,7 +87,7 @@ const calculateResultWithVerification = async (duration, periodId) => {
                           duration === 180 ? '3m' : 
                           duration === 300 ? '5m' : '10m';
         
-        broadcastToGame('trx_wix', duration, 'periodResult', {
+        const broadcastData = {
             gameType: 'trx_wix',
             duration,
             periodId,
@@ -95,19 +95,40 @@ const calculateResultWithVerification = async (duration, periodId) => {
                 ...result.optimalResult.result,
                 verification: {
                     hash: verification.hash,
-                    link: verification.link
+                    link: verification.link,
+                    block: verification.blockNumber,
+                    time: verification.resultTime
                 }
             },
             winners,
             riskLevel: result.optimalResult.riskLevel,
             houseEdgePercent: result.optimalResult.houseEdgePercent
+        };
+        
+        // 💰 CRYPTO BROADCAST LOGGER - Track when results are sent to clients
+        console.log('💰 [TRX_WIX_BROADCAST] Broadcasting result to clients:', {
+            periodId: periodId,
+            result: result.optimalResult.result,
+            verification: {
+                hash: verification.hash,
+                link: verification.link,
+                block: verification.blockNumber || 'NULL',
+                time: verification.resultTime || 'DEFAULT'
+            },
+            duration: duration,
+            winnersCount: winners.length,
+            timestamp: new Date().toISOString()
         });
+        
+        broadcastToGame('trx_wix', duration, 'periodResult', broadcastData);
         
         return {
             result: result.optimalResult.result,
             verification: {
                 hash: verification.hash,
-                link: verification.link
+                link: verification.link,
+                block: verification.blockNumber,
+                time: verification.resultTime
             },
             winners,
             riskLevel: result.optimalResult.riskLevel,
@@ -135,11 +156,26 @@ const storeResult = async (duration, periodId, result) => {
         await gameLogicService.storeTemporaryResult('trx_wix', duration, periodId, result);
         
         // Store in database
-        await BetResultTrxWix.create({
+        const dbResult = await BetResultTrxWix.create({
             period: periodId,
             result: result.result,
             verification_hash: result.hash,
-            verification_link: result.link
+            verification_link: result.link,
+            block_number: result.blockNumber || null,
+            result_time: result.resultTime || new Date()
+        });
+        
+        // 💰 CRYPTO RESULT LOGGER - Easy to identify new TRX_WIX results
+        console.log('💰 [TRX_WIX_RESULT] New result generated and stored:', {
+            periodId: periodId,
+            result: result.result,
+            hash: result.hash,
+            link: result.link,
+            blockNumber: result.blockNumber || 'NULL',
+            resultTime: result.resultTime || 'DEFAULT',
+            duration: duration,
+            resultId: dbResult.result_id,
+            timestamp: new Date().toISOString()
         });
         
         // Store result in Redis for history

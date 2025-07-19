@@ -661,6 +661,159 @@ const setupPaymentGateways = async () => {
     }
 };
 
+/**
+ * Get available deposit gateways for users (enhanced version)
+ * @param {number} userId - User ID for potential user-specific logic
+ * @param {number} amount - Optional amount to filter gateways by limits
+ * @returns {Object} - List of available gateways for deposit
+ */
+const getUserAvailableDepositGateways = async (userId = null, amount = null) => {
+  try {
+    await initializeModels();
+    
+    // Base query for active gateways that support deposits
+    let whereClause = {
+      is_active: true,
+      supports_deposit: true
+    };
+
+    // If amount is provided, filter by min/max limits
+    if (amount && parseFloat(amount) > 0) {
+      const depositAmount = parseFloat(amount);
+      whereClause = {
+        ...whereClause,
+        min_deposit: { [sequelize.Op.lte]: depositAmount },
+        max_deposit: { [sequelize.Op.gte]: depositAmount }
+      };
+    }
+    
+    const gateways = await PaymentGateway.findAll({
+      where: whereClause,
+      attributes: [
+        'gateway_id',
+        'name',
+        'code',
+        'description',
+        'logo_url',
+        'min_deposit',
+        'max_deposit',
+        'display_order',
+        'is_active',
+        'supports_deposit'
+      ],
+      order: [['display_order', 'ASC']]
+    });
+
+    // Format response for frontend
+    const formattedGateways = gateways.map(gateway => ({
+      id: gateway.gateway_id,
+      name: gateway.name,
+      code: gateway.code,
+      description: gateway.description,
+      logo_url: gateway.logo_url,
+      min_amount: parseFloat(gateway.min_deposit),
+      max_amount: parseFloat(gateway.max_deposit),
+      display_order: gateway.display_order,
+      is_active: gateway.is_active,
+      supports_deposit: gateway.supports_deposit
+    }));
+
+    return {
+      success: true,
+      gateways: formattedGateways,
+      total: formattedGateways.length,
+      message: amount ? 
+        `Found ${formattedGateways.length} gateways available for ₹${amount}` : 
+        `Found ${formattedGateways.length} active deposit gateways`
+    };
+  } catch (error) {
+    console.error('Error getting user available deposit gateways:', error);
+    return {
+      success: false,
+      message: 'Error fetching available deposit gateways',
+      gateways: [],
+      total: 0
+    };
+  }
+};
+
+/**
+ * Validate gateway for deposit
+ * @param {string} gatewayCode - Gateway code
+ * @param {number} amount - Deposit amount
+ * @returns {Object} - Validation result
+ */
+const validateGatewayForDeposit = async (gatewayCode, amount) => {
+  try {
+    await initializeModels();
+    
+    const gateway = await PaymentGateway.findOne({
+      where: {
+        code: gatewayCode,
+        is_active: true,
+        supports_deposit: true
+      }
+    });
+
+    if (!gateway) {
+      return {
+        success: false,
+        message: 'Gateway not found or inactive',
+        code: 'GATEWAY_NOT_FOUND'
+      };
+    }
+
+    const depositAmount = parseFloat(amount);
+    const minDeposit = parseFloat(gateway.min_deposit);
+    const maxDeposit = parseFloat(gateway.max_deposit);
+
+    if (depositAmount < minDeposit) {
+      return {
+        success: false,
+        message: `Minimum deposit amount for ${gateway.name} is ₹${minDeposit}`,
+        code: 'AMOUNT_TOO_LOW',
+        gateway: {
+          name: gateway.name,
+          min_amount: minDeposit,
+          max_amount: maxDeposit
+        }
+      };
+    }
+
+    if (depositAmount > maxDeposit) {
+      return {
+        success: false,
+        message: `Maximum deposit amount for ${gateway.name} is ₹${maxDeposit}`,
+        code: 'AMOUNT_TOO_HIGH',
+        gateway: {
+          name: gateway.name,
+          min_amount: minDeposit,
+          max_amount: maxDeposit
+        }
+      };
+    }
+
+    return {
+      success: true,
+      message: 'Gateway validation successful',
+      gateway: {
+        id: gateway.gateway_id,
+        name: gateway.name,
+        code: gateway.code,
+        min_amount: minDeposit,
+        max_amount: maxDeposit
+      }
+    };
+  } catch (error) {
+    console.error('Error validating gateway for deposit:', error);
+    return {
+      success: false,
+      message: 'Error validating gateway',
+      code: 'VALIDATION_ERROR'
+    };
+  }
+};
+
 module.exports = {
   getActivePaymentGateways,
   getPaymentGatewayByCode,
@@ -675,5 +828,7 @@ module.exports = {
   toggleWithdrawalStatus,
   updateDepositLimits,
   getPaymentGatewayStats,
-  setupPaymentGateways
+  setupPaymentGateways,
+  getUserAvailableDepositGateways,
+  validateGatewayForDeposit
 };

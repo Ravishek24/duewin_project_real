@@ -19,7 +19,8 @@ const {
   ppayProDepositCallbackController,
   ppayProWithdrawalCallbackController,
   solPayDepositCallbackController,
-  solPayWithdrawalCallbackController
+  solPayWithdrawalCallbackController,
+  getAvailableDepositGatewaysController
 } = require('../controllers/paymentController');
 
 console.log('solPayDepositCallbackController:', solPayDepositCallbackController);
@@ -81,6 +82,13 @@ router.post('/solpay/payout-callback', paymentCallbackWhitelist, solPayWithdrawa
 
 // 101pay callback routes are now handled in the main routes/index.js file
 // to avoid authentication conflicts
+
+// Get available deposit gateways (for frontend to show options)
+router.get('/available-gateways',
+    auth,
+    rateLimiters.general,
+    getAvailableDepositGatewaysController
+);
 
 // Deposit routes
 router.post('/deposit',

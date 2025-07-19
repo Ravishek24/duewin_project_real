@@ -10,7 +10,7 @@ const { validateRequest } = require('../utils/validationUtils');
  */
 const sendOtpController = async (req, res) => {
     try {
-        const { phone, purpose } = req.body;
+        const { phone, purpose, countryCode } = req.body;
 
         if (!phone || !purpose) {
             return res.status(400).json({
@@ -28,8 +28,15 @@ const sendOtpController = async (req, res) => {
             });
         }
 
+        // Ensure phone is in E.164 format for Prelude
+        let formattedPhone = phone;
+        if (!formattedPhone.startsWith('+')) {
+            const cc = countryCode || '91';
+            formattedPhone = `+${cc}${phone}`;
+        }
+
         // Send OTP
-        const result = await otpService.createOtpSession(phone, '91', '', {}, purpose);
+        const result = await otpService.createOtpSession(formattedPhone, countryCode || '91', '', {}, purpose);
 
         if (!result.success) {
             return res.status(400).json(result);
@@ -52,16 +59,22 @@ const sendOtpController = async (req, res) => {
  */
 const verifyOtpController = async (req, res) => {
     try {
-        const { otp_session_id } = req.body;
+        const { otp_session_id, phone, code } = req.body;
 
-        if (!otp_session_id) {
+        if (!otp_session_id || !phone || !code) {
             return res.status(400).json({
                 success: false,
-                message: 'OTP session ID is required'
+                message: 'OTP session ID, phone, and code are required'
             });
         }
 
-        const result = await otpService.checkOtpSession(otp_session_id);
+        // Ensure phone is in E.164 format
+        let formattedPhone = phone;
+        if (!formattedPhone.startsWith('+')) {
+            formattedPhone = `+91${phone}`;
+        }
+
+        const result = await otpService.checkOtpSession(otp_session_id, formattedPhone, code);
 
         if (!result.success) {
             return res.status(400).json(result);

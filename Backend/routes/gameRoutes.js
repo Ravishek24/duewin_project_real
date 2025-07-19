@@ -91,6 +91,17 @@ router.get('/:gameType/:duration/history', async (req, res) => {
       offsetNum
     );
 
+    // 💰 DEBUG: Log the raw result from gameLogicService
+    if (result.success && result.data.results.length > 0) {
+      const firstResult = result.data.results[0];
+      console.log('💰 [ROUTE_DEBUG] Raw result from gameLogicService:', {
+        periodId: firstResult.periodId,
+        verification: firstResult.verification,
+        hasBlock: !!firstResult.verification?.block,
+        hasTime: !!firstResult.verification?.time
+      });
+    }
+
     if (!result.success) {
       return res.status(500).json(result);
     }
@@ -108,7 +119,9 @@ router.get('/:gameType/:duration/history', async (req, res) => {
           },
           verification: { // ENHANCED: Add verification
             hash: item.verification?.hash || item.verification_hash,
-            link: item.verification?.link || item.verification_link
+            link: item.verification?.link || item.verification_link,
+            block: item.verification?.block || null,
+            time: item.verification?.time || null
           },
           createdAt: item.created_at || item.timestamp,
           gameType: mappedGameType,
@@ -163,6 +176,17 @@ router.get('/:gameType/:duration/history', async (req, res) => {
       }
       return item;
     });
+
+    // 💰 DEBUG: Log the formatted result
+    if (formattedResults.length > 0) {
+      const firstFormatted = formattedResults[0];
+      console.log('💰 [ROUTE_DEBUG] Formatted result:', {
+        periodId: firstFormatted.periodId,
+        verification: firstFormatted.verification,
+        hasBlock: !!firstFormatted.verification?.block,
+        hasTime: !!firstFormatted.verification?.time
+      });
+    }
 
     return res.json({
       success: true,

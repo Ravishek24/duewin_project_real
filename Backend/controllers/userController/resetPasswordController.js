@@ -30,27 +30,23 @@ const validateTokenController = async (req, res) => {
 
 // Controller to reset password
 const resetPasswordController = async (req, res) => {
-    const { token, password } = req.body;
-
+    const { token, new_password, otp_session_id, phone, otp_code } = req.body;
     // Validate input
-    if (!token || !password) {
+    if (!token || !new_password || !otp_session_id || !phone || !otp_code) {
         return res.status(400).json({ 
             success: false, 
-            message: 'Token and new password are required.' 
+            message: 'Token, new password, OTP session ID, phone, and OTP code are required.' 
         });
     }
-
     // Validate password strength
-    if (password.length < 6) {
+    if (new_password.length < 6) {
         return res.status(400).json({ 
             success: false, 
             message: 'Password must be at least 6 characters long.' 
         });
     }
-
     try {
-        const result = await resetPassword(token, password);
-        
+        const result = await resetPassword(token, new_password, otp_session_id, phone, otp_code);
         if (result.success) {
             return res.status(200).json(result);
         } else {

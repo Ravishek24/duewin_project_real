@@ -5,6 +5,7 @@ const { verifyEmailController, resendVerificationController } = require('./email
 const { getProfileController, updateProfileController } = require('./profileController');
 const forgotPasswordController = require('./forgotPasswordController');
 const { getInHouseGamesStatsController, getGameBetHistoryController } = require('./inHouseGamesStatsController');
+const { getThirdPartyGamesStatsController, getThirdPartyGameHistoryController } = require('./thirdPartyGamesStatsController');
 const { User } = require('../../models');
 const { Op } = require('sequelize');
 const { 
@@ -187,9 +188,9 @@ const getUserBetHistory = async (req, res) => {
         // 🚀 SINGLE OPTIMIZED QUERY (was 4-6 queries)
         const allBets = await User.sequelize.query(`
             (SELECT 
-                'wingo' as game_type, id, created_at, bet_amount, 
+                'wingo' as game_type, bet_id, created_at, bet_amount, 
                 win_amount, status, 'Internal' as type
-             FROM bet_record_wingo 
+             FROM bet_record_wingos 
              WHERE user_id = :userId 
              ${start_date ? 'AND created_at >= :startDate' : ''}
              ${end_date ? 'AND created_at <= :endDate' : ''})
@@ -197,9 +198,9 @@ const getUserBetHistory = async (req, res) => {
             UNION ALL
             
             (SELECT 
-                'fiveD' as game_type, id, created_at, bet_amount,
+                'fiveD' as game_type, bet_id, created_at, bet_amount,
                 win_amount, status, 'Internal' as type  
-             FROM bet_record_5d 
+             FROM bet_record_5ds 
              WHERE user_id = :userId
              ${start_date ? 'AND created_at >= :startDate' : ''}
              ${end_date ? 'AND created_at <= :endDate' : ''})
@@ -207,9 +208,19 @@ const getUserBetHistory = async (req, res) => {
             UNION ALL
             
             (SELECT 
-                'k3' as game_type, id, created_at, bet_amount,
+                'k3' as game_type, bet_id, created_at, bet_amount,
                 win_amount, status, 'Internal' as type
-             FROM bet_record_k3 
+             FROM bet_record_k3s 
+             WHERE user_id = :userId
+             ${start_date ? 'AND created_at >= :startDate' : ''}
+             ${end_date ? 'AND created_at <= :endDate' : ''})
+            
+            UNION ALL
+            
+            (SELECT 
+                'trxWix' as game_type, bet_id, created_at, bet_amount,
+                win_amount, status, 'Internal' as type
+             FROM bet_record_trx_wix 
              WHERE user_id = :userId
              ${start_date ? 'AND created_at >= :startDate' : ''}
              ${end_date ? 'AND created_at <= :endDate' : ''})
@@ -270,11 +281,6 @@ const getUserDepositHistory = async (req, res) => {
                 user_id,
                 ...dateFilter
             },
-            include: [{
-                model: PaymentGateway,
-                as: 'paymentGateway',
-                attributes: ['name']
-            }],
             order: [['created_at', 'DESC']]
         });
 
@@ -283,7 +289,7 @@ const getUserDepositHistory = async (req, res) => {
             deposit_id: deposit.id,
             date: deposit.created_at,
             amount: deposit.amount,
-            method: deposit.paymentGateway ? deposit.paymentGateway.name : 'Unknown',
+            method: deposit.payment_gateway_name || 'Unknown',
             status: deposit.status
         }));
 
@@ -324,29 +330,12 @@ const getUserWithdrawalHistory = async (req, res) => {
             };
         }
 
-        // Get withdrawal history with bank account and USDT account information
+        // Get withdrawal history
         const withdrawals = await WalletWithdrawal.findAll({
             where: {
                 user_id,
                 ...dateFilter
             },
-            include: [
-                {
-                    model: BankAccount,
-                    as: 'bankAccount',
-                    attributes: ['bank_name', 'account_number']
-                },
-                {
-                    model: UsdtAccount,
-                    as: 'usdtAccount',
-                    attributes: ['network', 'address']
-                },
-                {
-                    model: PaymentGateway,
-                    as: 'paymentGateway',
-                    attributes: ['name']
-                }
-            ],
             order: [['created_at', 'DESC']]
         });
 
@@ -354,13 +343,13 @@ const getUserWithdrawalHistory = async (req, res) => {
         const formattedWithdrawals = withdrawals.map((withdrawal, index) => {
             let method = 'Unknown';
             
-            // Determine withdrawal method
-            if (withdrawal.bankAccount) {
-                method = `${withdrawal.bankAccount.bank_name} (${withdrawal.bankAccount.account_number})`;
-            } else if (withdrawal.usdtAccount) {
-                method = `USDT (${withdrawal.usdtAccount.network})`;
-            } else if (withdrawal.paymentGateway) {
-                method = withdrawal.paymentGateway.name;
+            // Determine withdrawal method based on available fields
+            if (withdrawal.bank_name && withdrawal.account_number) {
+                method = `${withdrawal.bank_name} (${withdrawal.account_number})`;
+            } else if (withdrawal.network && withdrawal.address) {
+                method = `USDT (${withdrawal.network})`;
+            } else if (withdrawal.payment_gateway_name) {
+                method = withdrawal.payment_gateway_name;
             }
 
             return {
@@ -398,20 +387,26 @@ const getUserBankDetails = async (req, res) => {
             });
         }
 
-        // Get bank accounts
-        const bankAccounts = await BankAccount.findAll({
-            where: {
-                user_id
-            },
-            order: [['is_default', 'DESC'], ['created_at', 'DESC']]
+        // Get bank accounts - using raw query to avoid model import issues
+        const bankAccounts = await User.sequelize.query(`
+            SELECT id, bank_name, account_number, account_holder, ifsc_code, is_primary, created_at
+            FROM bank_accounts 
+            WHERE user_id = :userId
+            ORDER BY is_primary DESC, created_at DESC
+        `, {
+            replacements: { userId: user_id },
+            type: User.sequelize.QueryTypes.SELECT
         });
 
-        // Get USDT accounts
-        const usdtAccounts = await UsdtAccount.findAll({
-            where: {
-                user_id
-            },
-            order: [['is_default', 'DESC'], ['created_at', 'DESC']]
+        // Get USDT accounts - using raw query to avoid model import issues
+        const usdtAccounts = await User.sequelize.query(`
+            SELECT id, network, address, remark, created_at
+            FROM usdt_accounts 
+            WHERE user_id = :userId
+            ORDER BY created_at DESC
+        `, {
+            replacements: { userId: user_id },
+            type: User.sequelize.QueryTypes.SELECT
         });
 
         // Format bank accounts
@@ -421,7 +416,7 @@ const getUserBankDetails = async (req, res) => {
             account_number: account.account_number,
             account_holder: account.account_holder,
             ifsc_code: account.ifsc_code,
-            is_default: account.is_default,
+            is_primary: Boolean(account.is_primary),
             created_at: account.created_at
         }));
 
@@ -430,7 +425,7 @@ const getUserBankDetails = async (req, res) => {
             account_id: account.id,
             network: account.network,
             address: account.address,
-            is_default: account.is_default,
+            remark: account.remark,
             created_at: account.created_at
         }));
 
@@ -474,43 +469,32 @@ const getUserTransactionHistory = async (req, res) => {
             };
         }
 
-        // Get all transactions
-        const transactions = await Transaction.findAll({
-            where: {
-                user_id,
-                ...dateFilter
+        // Get all transactions - using raw query to avoid model import issues
+        const transactions = await User.sequelize.query(`
+            SELECT id, created_at, type, amount, status, description, reference_id
+            FROM transactions 
+            WHERE user_id = :userId
+            ${start_date ? 'AND created_at >= :startDate' : ''}
+            ${end_date ? 'AND created_at <= :endDate' : ''}
+            ORDER BY created_at DESC
+        `, {
+            replacements: { 
+                userId: user_id,
+                startDate: start_date,
+                endDate: end_date
             },
-            include: [
-                {
-                    model: PaymentGateway,
-                    as: 'paymentGateway',
-                    attributes: ['name']
-                },
-                {
-                    model: BankAccount,
-                    as: 'bankAccount',
-                    attributes: ['bank_name', 'account_number']
-                },
-                {
-                    model: UsdtAccount,
-                    as: 'usdtAccount',
-                    attributes: ['network', 'address']
-                }
-            ],
-            order: [['created_at', 'DESC']]
+            type: User.sequelize.QueryTypes.SELECT
         });
 
         // Format transactions
         const formattedTransactions = transactions.map(transaction => {
             let method = 'Unknown';
             
-            // Determine method based on transaction type and related data
-            if (transaction.paymentGateway) {
-                method = transaction.paymentGateway.name;
-            } else if (transaction.bankAccount) {
-                method = `${transaction.bankAccount.bank_name} (${transaction.bankAccount.account_number})`;
-            } else if (transaction.usdtAccount) {
-                method = `USDT (${transaction.usdtAccount.network})`;
+            // Determine method based on transaction type and description
+            if (transaction.description) {
+                method = transaction.description;
+            } else if (transaction.type) {
+                method = transaction.type;
             }
 
             return {
@@ -519,7 +503,8 @@ const getUserTransactionHistory = async (req, res) => {
                 type: transaction.type,
                 amount: transaction.amount,
                 method: method,
-                status: transaction.status
+                status: transaction.status,
+                reference_id: transaction.reference_id
             };
         });
 
@@ -540,38 +525,85 @@ const getUserTeamSummary = async (req, res) => {
     try {
         const { user_id } = req.params;
 
-        // 🚀 SINGLE OPTIMIZED QUERY (was 13 queries)
-        const teamStats = await User.sequelize.query(`
-            SELECT 
-                r.level,
-                COUNT(DISTINCT r.referred_id) as member_count,
-                COUNT(DISTINCT CASE 
-                  WHEN u.is_active = 1 
-                  AND u.last_login_at > DATE_SUB(NOW(), INTERVAL 30 DAY) 
-                  THEN r.referred_id 
-                END) as active_members,
-                COALESCE(SUM(u.wallet_balance), 0) as total_team_balance,
-                COALESCE(SUM(CASE 
-                  WHEN t.type IN ('deposit', 'admin_credit') 
-                  AND t.status = 'completed' 
-                  THEN t.amount 
-                END), 0) as total_recharge,
-                COALESCE(SUM(CASE 
-                  WHEN t.type IN ('withdrawal', 'admin_debit') 
-                  AND t.status = 'completed' 
-                  THEN t.amount 
-                END), 0) as total_withdraw
-            FROM referrals r
-            LEFT JOIN users u ON r.referred_id = u.user_id
-            LEFT JOIN transactions t ON u.user_id = t.user_id
-            WHERE r.referrer_id = :userId 
-              AND r.level BETWEEN 1 AND 6
-            GROUP BY r.level
-            ORDER BY r.level
+        // Get user's referral tree
+        const userTree = await User.sequelize.query(`
+            SELECT level_1, level_2, level_3, level_4, level_5, level_6
+            FROM referral_trees 
+            WHERE user_id = :userId
         `, {
             replacements: { userId: user_id },
             type: User.sequelize.QueryTypes.SELECT
         });
+
+        if (!userTree || userTree.length === 0) {
+            return res.status(200).json({
+                success: true,
+                data: []
+            });
+        }
+
+        const tree = userTree[0];
+        const teamStats = [];
+
+        // Process each level (1-6)
+        for (let level = 1; level <= 6; level++) {
+            const levelField = `level_${level}`;
+            const levelData = tree[levelField];
+            
+            if (levelData && levelData.trim()) {
+                // Parse user IDs from the level data (comma-separated)
+                const userIds = levelData.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+                
+                if (userIds.length > 0) {
+                    // Get user details for this level
+                    const levelUsers = await User.sequelize.query(`
+                        SELECT user_id, wallet_balance, is_active, last_login_at
+                        FROM users 
+                        WHERE user_id IN (:userIds)
+                    `, {
+                        replacements: { userIds },
+                        type: User.sequelize.QueryTypes.SELECT
+                    });
+
+                    // Get transaction data for this level
+                    const levelTransactions = await User.sequelize.query(`
+                        SELECT user_id, type, amount, status
+                        FROM transactions 
+                        WHERE user_id IN (:userIds)
+                    `, {
+                        replacements: { userIds },
+                        type: User.sequelize.QueryTypes.SELECT
+                    });
+
+                    // Calculate stats
+                    const memberCount = userIds.length;
+                    const activeMembers = levelUsers.filter(user => 
+                        user.is_active === 1 && 
+                        user.last_login_at && 
+                        new Date(user.last_login_at) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+                    ).length;
+                    
+                    const totalTeamBalance = levelUsers.reduce((sum, user) => sum + parseFloat(user.wallet_balance || 0), 0);
+                    
+                    const totalRecharge = levelTransactions
+                        .filter(t => ['deposit', 'admin_credit'].includes(t.type) && t.status === 'completed')
+                        .reduce((sum, t) => sum + parseFloat(t.amount || 0), 0);
+                    
+                    const totalWithdraw = levelTransactions
+                        .filter(t => ['withdrawal', 'admin_debit'].includes(t.type) && t.status === 'completed')
+                        .reduce((sum, t) => sum + parseFloat(t.amount || 0), 0);
+
+                    teamStats.push({
+                        level: level,
+                        member_count: memberCount,
+                        active_members: activeMembers,
+                        total_team_balance: totalTeamBalance,
+                        total_recharge: totalRecharge,
+                        total_withdraw: totalWithdraw
+                    });
+                }
+            }
+        }
 
         res.status(200).json({
             success: true,
@@ -579,6 +611,101 @@ const getUserTeamSummary = async (req, res) => {
         });
     } catch (error) {
         console.error('Error in getUserTeamSummary:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+};
+
+const getUserTeamLevelStats = async (req, res) => {
+    try {
+        const { user_id } = req.params;
+        const { start_date, end_date } = req.query;
+
+        // Get user's referral tree
+        const userTree = await User.sequelize.query(`
+            SELECT level_1, level_2, level_3, level_4, level_5, level_6
+            FROM referral_trees 
+            WHERE user_id = :userId
+        `, {
+            replacements: { userId: user_id },
+            type: User.sequelize.QueryTypes.SELECT
+        });
+
+        if (!userTree || userTree.length === 0) {
+            return res.status(200).json({
+                success: true,
+                data: []
+            });
+        }
+
+        const tree = userTree[0];
+        const teamLevelStats = [];
+
+        // Process each level (1-6)
+        for (let level = 1; level <= 6; level++) {
+            const levelField = `level_${level}`;
+            const levelData = tree[levelField];
+            
+            if (levelData && levelData.trim()) {
+                // Parse user IDs from the level data (comma-separated)
+                const userIds = levelData.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+                
+                if (userIds.length > 0) {
+                    // Build date filter for transactions
+                    let dateFilter = '';
+                    if (start_date && end_date) {
+                        dateFilter = `AND created_at BETWEEN '${start_date}' AND '${end_date}'`;
+                    } else if (start_date) {
+                        dateFilter = `AND created_at >= '${start_date}'`;
+                    } else if (end_date) {
+                        dateFilter = `AND created_at <= '${end_date}'`;
+                    }
+
+                    // Get deposit statistics for this level
+                    const depositStats = await User.sequelize.query(`
+                        SELECT 
+                            user_id,
+                            COUNT(*) as deposit_count,
+                            SUM(amount) as total_deposit_amount,
+                            MIN(created_at) as first_deposit_date
+                        FROM transactions 
+                        WHERE user_id IN (:userIds) 
+                        AND type IN ('deposit', 'admin_credit') 
+                        AND status = 'completed'
+                        ${dateFilter}
+                        GROUP BY user_id
+                    `, {
+                        replacements: { userIds },
+                        type: User.sequelize.QueryTypes.SELECT
+                    });
+
+                    // Calculate level statistics
+                    const registered = userIds.length;
+                    const depositNumber = depositStats.length;
+                    const depositAmount = depositStats.reduce((sum, stat) => sum + parseFloat(stat.total_deposit_amount || 0), 0);
+                    
+                    // Count first-time depositors (users with only one deposit record)
+                    const firstDepositNumber = depositStats.filter(stat => parseInt(stat.deposit_count) === 1).length;
+
+                    teamLevelStats.push({
+                        level: level,
+                        registered: registered,
+                        deposit_number: depositNumber,
+                        deposit_amount: depositAmount,
+                        first_deposit_number: firstDepositNumber
+                    });
+                }
+            }
+        }
+
+        res.status(200).json({
+            success: true,
+            data: teamLevelStats
+        });
+    } catch (error) {
+        console.error('Error in getUserTeamLevelStats:', error);
         res.status(500).json({
             success: false,
             message: 'Internal server error'
@@ -736,8 +863,11 @@ module.exports = {
     getUserBankDetails,
     getUserTransactionHistory,
     getUserTeamSummary,
+    getUserTeamLevelStats,
     getUserRebateEarnings,
     getUserDetails,
     getInHouseGamesStatsController,
-    getGameBetHistoryController
+    getGameBetHistoryController,
+    getThirdPartyGamesStatsController,
+    getThirdPartyGameHistoryController
 };

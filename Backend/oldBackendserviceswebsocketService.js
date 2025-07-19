@@ -27,8 +27,8 @@ const {
  * Bet limit functions for WebSocket validation
  */
 const getMinBetAmount = (gameType) => {
-    // Minimum bet amount is ₹1 (net amount after platform fee)
-    return 0.50;
+    // Minimum bet amount is ₹0.95 (net amount after platform fee)
+    return 0.97;
 };
 
 const getMaxBetAmount = (gameType) => {

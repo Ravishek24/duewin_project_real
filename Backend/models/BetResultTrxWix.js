@@ -36,6 +36,17 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false
     },
+    block_number: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+      comment: 'TRON block number extracted from hash'
+    },
+    result_time: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+      comment: 'Result generation time in IST'
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

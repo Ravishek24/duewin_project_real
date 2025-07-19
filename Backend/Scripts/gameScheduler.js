@@ -1053,7 +1053,9 @@ const checkExistingSchedulerResult = async (gameType, duration, periodId) => {
                         result: resultData,
                         verification: {
                             hash: existingResult.verification_hash,
-                            link: existingResult.verification_link
+                            link: existingResult.verification_link,
+                            block: existingResult.block_number,
+                            time: existingResult.result_time
                         },
                         winners: []
                     };
@@ -1200,7 +1202,7 @@ const generateVerificationHash = () => {
 
 const generateVerificationLink = () => {
     const hash = generateVerificationHash();
-    return `https://tronscan.org/#/transaction/${hash}`;
+    return `https://tronscan.org/#/block/${hash}`;
 };
 
 /**

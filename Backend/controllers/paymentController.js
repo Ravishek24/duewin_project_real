@@ -868,14 +868,31 @@ const initiateDeposit = async (req, res) => {
         const paymentGateway = await PaymentGateway.findOne({
             where: { 
                 code: payment_method,
-                is_active: true 
+                is_active: true,
+                supports_deposit: true
             }
         });
 
         if (!paymentGateway) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid or inactive payment method'
+                message: 'Invalid or inactive payment method. Please select from available gateways.'
+            });
+        }
+
+        // Validate amount against gateway limits
+        const depositAmount = parseFloat(amount);
+        if (depositAmount < parseFloat(paymentGateway.min_deposit)) {
+            return res.status(400).json({
+                success: false,
+                message: `Minimum deposit amount for ${paymentGateway.name} is ₹${paymentGateway.min_deposit}`
+            });
+        }
+
+        if (depositAmount > parseFloat(paymentGateway.max_deposit)) {
+            return res.status(400).json({
+                success: false,
+                message: `Maximum deposit amount for ${paymentGateway.name} is ₹${paymentGateway.max_deposit}`
             });
         }
 
@@ -1462,6 +1479,43 @@ const pay101UTRCallbackController = async (req, res) => {
   }
 };
 
+/**
+ * Get available deposit gateways for users (only active ones)
+ * @route GET /api/payments/available-gateways
+ */
+const getAvailableDepositGatewaysController = async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const { amount } = req.query; // Optional amount filter
+        
+        // Use enhanced service
+        const { getUserAvailableDepositGateways } = require('../services/paymentGatewayService');
+        const result = await getUserAvailableDepositGateways(userId, amount);
+
+        if (result.success) {
+            return res.status(200).json({
+                success: true,
+                message: result.message,
+                data: {
+                    gateways: result.gateways,
+                    total: result.total
+                }
+            });
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: result.message
+            });
+        }
+    } catch (error) {
+        console.error('Error getting available deposit gateways:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting available gateways'
+        });
+    }
+};
+
 module.exports = {
   payInController,
   processWithdrawalAdminAction,
@@ -1491,4 +1545,5 @@ module.exports = {
   pay101PayinCallbackController,
   pay101PayoutCallbackController,
   pay101UTRCallbackController,
+  getAvailableDepositGatewaysController,
 };

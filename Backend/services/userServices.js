@@ -581,7 +581,6 @@ const verifyPhoneUpdateOtp = async (userId, otpSessionId, newPhone) => {
 const requestPasswordReset = async (email) => {
     try {
         const user = await User.findOne({ where: { email } });
-        
         // Always return same message regardless of user existence
         if (!user) {
             return {
@@ -589,9 +588,7 @@ const requestPasswordReset = async (email) => {
                 message: "If your email is registered, you will receive password reset instructions."
             };
         }
-        
         const resetToken = generateJWT(user.user_id, user.email, '1h');
-        
         await User.update(
             {
                 reset_token: resetToken,
@@ -599,12 +596,26 @@ const requestPasswordReset = async (email) => {
             },
             { where: { user_id: user.user_id } }
         );
-        
+        // Send OTP to user's phone
+        const countryCode = user.phone_no.startsWith('+') ? user.phone_no.slice(1, 3) : '91';
+        const otpResponse = await require('../services/otpService').createOtpSession(
+            user.phone_no,
+            countryCode,
+            user.user_name,
+            { udf1: user.email },
+            'forgot_password',
+            user.user_id
+        );
+        if (otpResponse.success) {
+            await User.update(
+                { phone_otp_session_id: otpResponse.otpSessionId },
+                { where: { user_id: user.user_id } }
+            );
+        }
         // Remove token logging in production
         if (process.env.NODE_ENV === 'development') {
             console.log('Reset token generated for testing');
         }
-        
         return {
             success: true,
             message: "If your email is registered, you will receive password reset instructions."
@@ -663,28 +674,39 @@ const validateResetToken = async (token) => {
  * @param {string} newPassword - New password
  * @returns {Object} - Password reset result
  */
-const resetPassword = async (token, newPassword) => {
+const resetPassword = async (token, newPassword, otp_session_id, phone, otp_code) => {
     try {
         // Validate token first
         const validation = await validateResetToken(token);
-        
         if (!validation.success) {
             return validation; // Return validation error
         }
-        
+        // Find user
+        const user = await User.findByPk(validation.userId);
+        if (!user) {
+            return { success: false, message: 'User not found.' };
+        }
+        // Check OTP session ID matches
+        if (user.phone_otp_session_id !== otp_session_id) {
+            return { success: false, message: 'Invalid OTP session for this user.' };
+        }
+        // Verify OTP
+        const otpVerificationResult = await require('../services/otpService').checkOtpSession(otp_session_id, phone, otp_code);
+        if (!otpVerificationResult.success || !otpVerificationResult.verified) {
+            return { success: false, message: 'OTP verification failed: ' + (otpVerificationResult.message || 'Invalid OTP') };
+        }
         // Hash the new password
         const hashedPassword = await bcrypt.hash(newPassword, 10);
-        
-        // Update the user's password and clear reset token
+        // Update the user's password and clear reset token and OTP session
         await User.update(
             {
                 password: hashedPassword,
                 reset_token: null,
-                reset_token_expiry: null
+                reset_token_expiry: null,
+                phone_otp_session_id: null
             },
             { where: { user_id: validation.userId } }
         );
-        
         return {
             success: true,
             message: "Password has been reset successfully."

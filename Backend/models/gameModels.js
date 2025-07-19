@@ -65,7 +65,7 @@ const createDefaultConfigIfNotExists = async (gameType, duration) => {
                 duration,
                 is_active: true,
                 payout_target: 60.00,
-                min_bet_amount: 10.00,
+                min_bet_amount: 0.97,
                 max_bet_amount: 10000.00,
                 max_win_amount: 100000.00,
                 platform_fee_percent: 2.00,
