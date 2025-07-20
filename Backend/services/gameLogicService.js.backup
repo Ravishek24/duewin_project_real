@@ -14,7 +14,765 @@ const { processBetForActivityReward } = require('../services/activityRewardsServ
 const fiveDProtectionService = require('./fiveDProtectionService');
 // CONSTANTS - Add to top of file
 const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
-const ENHANCED_USER_THRESHOLD = 2; // Threshold for protection system
+const ENHANCED_USER_THRESHOLD = 2; // New minimum user threshold
+
+const globalProcessingLocks = new Map();
+
+// Configure Winston logger for game results
+const gameResultsLogger = winston.createLogger({
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.json()
+    ),
+    transports: [
+        new winston.transports.File({
+            filename: path.join('logs', 'game-results.log')
+        }),
+        new winston.transports.File({
+            filename: path.join('logs', 'game-errors.log'),
+            level: 'error'
+        })
+    ]
+});
+
+// Add after other logger imports
+const betDebugLogger = winston.createLogger({
+    format: winston.format.combine(
+        winston.format.timestamp(),
+        winston.format.printf(({ timestamp, level, message, ...meta }) => {
+            return `${timestamp} [${level.toUpperCase()}] ${message} ${Object.keys(meta).length ? JSON.stringify(meta) : ''}`;
+        })
+    ),
+    transports: [
+        new winston.transports.File({ filename: path.join('logs', 'bet-debug.log') }),
+        new winston.transports.Console()
+    ]
+});
+
+const generateTraceId = () => crypto.randomBytes(8).toString('hex');
+
+/**
+ * Get K3 result type categorization for exposure logging
+ * @param {number} d1 - First dice
+ * @param {number} d2 - Second dice
+ * @param {number} d3 - Third dice
+ * @returns {string} - Result type description
+ */
+const getK3ResultType = (d1, d2, d3) => {
+    const dice = [d1, d2, d3].sort((a, b) => a - b);
+    const sum = d1 + d2 + d3;
+
+    // Check for triple
+    if (d1 === d2 && d2 === d3) {
+        return `Triple_${d1} (Sum:${sum})`;
+    }
+
+    // Check for pair
+    if (d1 === d2 || d2 === d3 || d1 === d3) {
+        const pairValue = d1 === d2 ? d1 : d3;
+        const singleValue = d1 === d2 ? d3 : d1;
+        return `Pair_${pairValue}_${singleValue} (Sum:${sum})`;
+    }
+
+    // Check for straight (consecutive)
+    if (dice[1] === dice[0] + 1 && dice[2] === dice[1] + 1) {
+        return `Straight_${dice[0]}-${dice[1]}-${dice[2]} (Sum:${sum})`;
+    }
+
+    // All different
+    return `AllDifferent_${dice[0]}-${dice[1]}-${dice[2]} (Sum:${sum})`;
+};
+
+/**
+ * Get K3 exposure type description for logging
+ * @param {string} betType - Bet type
+ * @param {string} betValue - Bet value
+ * @returns {string} - Exposure type description
+ */
+const getK3ExposureType = (betType, betValue) => {
+    switch (betType) {
+        case 'SUM':
+            return `SUM bet on ${betValue} - affects combinations with sum ${betValue}`;
+        case 'SUM_CATEGORY':
+            if (betValue === 'big') {
+                return 'SUM_CATEGORY big - affects combinations with sum 11-18';
+            } else if (betValue === 'small') {
+                return 'SUM_CATEGORY small - affects combinations with sum 3-10';
+            } else if (betValue === 'odd') {
+                return 'SUM_CATEGORY odd - affects combinations with odd sum';
+            } else if (betValue === 'even') {
+                return 'SUM_CATEGORY even - affects combinations with even sum';
+            }
+            return `SUM_CATEGORY ${betValue}`;
+        case 'MATCHING_DICE':
+            if (betValue === 'triple_any') {
+                return 'MATCHING_DICE triple_any - affects all triple combinations (6 combinations)';
+            } else if (betValue === 'pair_any') {
+                return 'MATCHING_DICE pair_any - affects all pair combinations (90 combinations)';
+            } else if (betValue.startsWith('triple_')) {
+                const number = betValue.split('_')[1];
+                return `MATCHING_DICE triple_${number} - affects specific triple ${number},${number},${number}`;
+            } else if (betValue.startsWith('pair_')) {
+                const [pairNum, singleNum] = betValue.split('_').slice(1);
+                return `MATCHING_DICE pair_${pairNum}_${singleNum} - affects specific pair ${pairNum},${pairNum},${singleNum}`;
+            }
+            return `MATCHING_DICE ${betValue}`;
+        case 'PATTERN':
+            if (betValue === 'all_different') {
+                return 'PATTERN all_different - affects combinations with all different dice (120 combinations)';
+            } else if (betValue === 'straight') {
+                return 'PATTERN straight - affects consecutive combinations (4 combinations)';
+            } else if (betValue === 'two_different') {
+                return 'PATTERN two_different - affects pair combinations (90 combinations)';
+            }
+            return `PATTERN ${betValue}`;
+        default:
+            return `Unknown bet type: ${betType}`;
+    }
+};
+
+// Initialize models variable - will be populated after initialization
+let serviceModels = null;
+
+// Initialize models for the service
+const initializeServiceModels = async () => {
+    try {
+        console.log('🔄 Initializing game logic service models...');
+
+        // Import models module
+        const { getModels } = require('../models');
+
+        // Get initialized models
+        const models = await getModels();
+
+        // Verify required models
+        const requiredModels = [
+            'BetResultWingo',
+            'BetResult5D',
+            'BetResultK3',
+            'BetResultTrxWix',
+            'BetRecordWingo',
+            'BetRecord5D',
+            'BetRecordK3',
+            'BetRecordTrxWix',
+            'GamePeriod',
+            'User',
+            'GameCombinations5D', // Added
+            'Game5DSummaryStats'  // Added
+        ];
+
+        // Check each required model
+        for (const modelName of requiredModels) {
+            if (!models[modelName]) {
+                throw new Error(`Required model ${modelName} not found`);
+            }
+        }
+
+        console.log('✅ Game logic service models initialized successfully');
+        return models;
+    } catch (error) {
+        console.error('❌ Error initializing game logic service models:', error);
+        throw error;
+    }
+};
+
+// REMOVED: Don't initialize models immediately
+// This was causing the circular dependency issue
+
+// Helper function to ensure models are initialized
+const ensureModelsInitialized = async () => {
+    if (!serviceModels) {
+        console.log('🔄 Models not initialized, initializing now...');
+        serviceModels = await initializeServiceModels();
+    }
+    return serviceModels;
+};
+
+const { v4: uuidv4 } = require('uuid');
+const referralService = require('./referralService');
+
+
+
+// Updated Risk Thresholds
+const RISK_THRESHOLDS = {
+    LOW: {
+        maxPayoutPercent: 60,
+        maxBetAmount: 1000,
+        maxConsecutiveWins: 3
+    },
+    MEDIUM: {
+        maxPayoutPercent: 70,
+        maxBetAmount: 5000,
+        maxConsecutiveWins: 5
+    },
+    HIGH: {
+        maxPayoutPercent: 75,
+        maxBetAmount: 10000,
+        maxConsecutiveWins: 7
+    }
+};
+
+
+// Add this new function to the module
+/**
+ * Get deterministic color based on number
+ * @param {number} number - Number (0-9)
+ * @returns {string} - Corresponding color
+ */
+/**
+ * FIXED: Get deterministic color based on number (corrected mapping)
+ * @param {number} number - Number (0-9)
+ * @returns {string} - Corresponding color
+ */
+const getColorForNumber = (number) => {
+    const colorMap = {
+        0: 'red_violet',    // 0 is red + violet
+        1: 'green',         // 1 is green
+        2: 'red',           // 2 is red
+        3: 'green',         // 3 is green
+        4: 'red',           // 4 is red
+        5: 'green_violet',  // 5 is green + violet
+        6: 'red',           // 6 is red
+        7: 'green',         // 7 is green
+        8: 'red',           // 8 is red
+        9: 'green'          // 9 is green
+    };
+
+    const color = colorMap[number];
+    console.log(`🎨 [COLOR_MAP] Number ${number} -> ${color}`);
+    return color;
+};
+
+/**
+ * Validate result against 60/40 criteria
+ * @param {Object} result - Result object with payout information
+ * @param {string} gameType - Game type
+ * @returns {Object} - Validation result
+ */
+const validate60_40Result = async (result, gameType) => {
+    try {
+        const warnings = [];
+
+        if (!result) {
+            return { isSafe: false, warnings: ['Result is null or undefined'] };
+        }
+
+        // Validate payout percentage and house edge
+        if (result.payoutPercentage > 60) {
+            warnings.push(`Payout percentage (${result.payoutPercentage}%) exceeds 60% limit`);
+        }
+        if (result.houseEdge < 40) {
+            warnings.push(`House edge (${result.houseEdge}%) is below 40% minimum`);
+        }
+
+        // Validate result structure based on game type
+        switch (gameType.toLowerCase()) {
+            case 'wingo':
+            case 'trx_wix':
+                if (typeof result.result.number !== 'number') {
+                    warnings.push('Invalid number in result');
+                }
+                if (!['big', 'small'].includes(result.result.size.toLowerCase())) {
+                    warnings.push('Invalid size in result');
+                }
+                if (!['red', 'green', 'red_violet', 'green_violet'].includes(result.result.color.toLowerCase())) {
+                    warnings.push('Invalid color in result');
+                }
+                break;
+
+            case 'fived':
+            case '5d':
+                if (!Array.isArray([result.result.A, result.result.B, result.result.C, result.result.D, result.result.E])) {
+                    warnings.push('Invalid dice results');
+                }
+                if (typeof result.result.sum !== 'number') {
+                    warnings.push('Invalid sum in result');
+                }
+                break;
+
+            case 'k3':
+                if (!Array.isArray([result.result.dice_1, result.result.dice_2, result.result.dice_3])) {
+                    warnings.push('Invalid dice results');
+                }
+                if (typeof result.result.sum !== 'number') {
+                    warnings.push('Invalid sum in result');
+                }
+                if (typeof result.result.has_pair !== 'boolean') {
+                    warnings.push('Invalid pair status');
+                }
+                if (typeof result.result.has_triple !== 'boolean') {
+                    warnings.push('Invalid triple status');
+                }
+                if (typeof result.result.is_straight !== 'boolean') {
+                    warnings.push('Invalid straight status');
+                }
+                break;
+        }
+
+        return {
+            isSafe: warnings.length === 0,
+            warnings
+        };
+    } catch (error) {
+        logger.error('Error validating 60/40 result', {
+            error: error.message,
+            stack: error.stack,
+            gameType
+        });
+        return {
+            isSafe: false,
+            warnings: ['Error during validation: ' + error.message]
+        };
+    }
+};
+
+
+/**
+ * Determine if current period should use minimum bet result
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {boolean} - Whether to use minimum bet result
+ */
+const shouldUseMinimumBetResult = async (gameType, duration, periodId) => {
+    try {
+        // Get current hour's minimum bet periods from Redis
+        const now = new Date();
+        const hourKey = now.toISOString().slice(0, 13); // YYYY-MM-DDTHH
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        const minBetPeriodsKey = `${gameType}:${durationKey}:${hourKey}:min_bet_periods`;
+        let minBetPeriods = await redisClient.get(minBetPeriodsKey);
+
+        if (!minBetPeriods) {
+            // Generate 3 random periods for this hour if not exists
+            const totalPeriodsInHour = 3600 / duration; // Total periods in an hour
+            const periods = new Set();
+
+            while (periods.size < 3) {
+                const randomPeriod = Math.floor(Math.random() * totalPeriodsInHour);
+                periods.add(randomPeriod);
+            }
+
+            minBetPeriods = JSON.stringify(Array.from(periods));
+            await redisClient.set(minBetPeriodsKey, minBetPeriods);
+            await redisClient.expire(minBetPeriodsKey, 3600); // Expire after 1 hour
+        }
+
+        // Calculate current period number within the hour
+        const periodNumber = parseInt(periodId.slice(-9), 10) % (3600 / duration);
+
+        // Check if current period is one of the minimum bet periods
+        const minBetPeriodsArray = JSON.parse(minBetPeriods);
+        return minBetPeriodsArray.includes(periodNumber);
+
+    } catch (error) {
+        logger.error('Error determining minimum bet result period', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            duration,
+            periodId
+        });
+        return false;
+    }
+};
+
+
+
+
+
+/**
+ * Get pre-calculated results for a period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @returns {Object} - Pre-calculated results
+ */
+const getPreCalculatedResults = async (gameType, duration, periodId) => {
+    try {
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        // Get lowest combinations
+        const lowestCombinationsStr = await redisClient.get(
+            `${gameType}:${durationKey}:${periodId}:lowest_combinations`
+        );
+        const lowestCombinations = lowestCombinationsStr ? JSON.parse(lowestCombinationsStr) : [];
+
+        // Get optimized result
+        const optimizedResultStr = await redisClient.get(
+            `${gameType}:${durationKey}:${periodId}:optimized_result`
+        );
+        const optimizedResult = optimizedResultStr ? JSON.parse(optimizedResultStr) : null;
+
+        return {
+            lowestCombinations,
+            optimizedResult
+        };
+    } catch (error) {
+        logger.error('Error getting pre-calculated results', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            periodId
+        });
+        return {
+            lowestCombinations: [],
+            optimizedResult: null
+        };
+    }
+};
+
+/**
+ * Initialize a new game period
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ */
+const initializePeriod = periodService.initializePeriod;
+
+/**
+ * Log suspicious activity for monitoring
+ * @param {string} gameType - Game type
+ * @param {number} duration - Duration in seconds
+ * @param {string} periodId - Period ID
+ * @param {Object} validations - Validation results
+ */
+const logSuspiciousActivity = async (gameType, duration, periodId, validations) => {
+    try {
+        const durationKey = duration === 30 ? '30s' :
+            duration === 60 ? '1m' :
+                duration === 180 ? '3m' :
+                    duration === 300 ? '5m' : '10m';
+
+        // Store suspicious activity in Redis
+        const suspiciousKey = `${gameType}:${durationKey}:${periodId}:suspicious`;
+        await redisClient.set(suspiciousKey, JSON.stringify({
+            timestamp: new Date().toISOString(),
+            validations,
+            action: 'result_override'
+        }));
+
+        // Set expiry for suspicious activity log (7 days)
+        const EXPIRY_SECONDS = 7 * 24 * 60 * 60;
+        await redisClient.expire(suspiciousKey, EXPIRY_SECONDS);
+
+        // Log to file
+        logger.error('Suspicious activity detected', {
+            gameType,
+            periodId,
+            duration,
+            validations,
+            action: 'result_override'
+        });
+
+    } catch (error) {
+        logger.error('Error logging suspicious activity', {
+            error: error.message,
+            stack: error.stack,
+            gameType,
+            periodId
+        });
+    }
+};
+
+
+
+
+
+
+/**
+* Initialize automatic cache management
+*/
+const initializeCacheManagement = () => {
+    try {
+        // Clear expired caches every 2 minutes
+        setInterval(() => {
+            clearPerformanceCaches(false);
+        }, 120000);
+
+        // Force clear all caches every hour to prevent memory leaks
+        setInterval(() => {
+            clearPerformanceCaches(true);
+            logger.info('Hourly cache clear completed');
+        }, 3600000);
+
+        // Monitor cache performance every 10 minutes
+        setInterval(() => {
+            const memoryUsage = getMemoryUsage();
+            const hitRate = getCacheHitRate();
+
+            logger.info('Cache performance metrics', {
+                memoryUsage,
+                hitRate,
+                timestamp: new Date().toISOString()
+            });
+
+            // If cache is getting too large, force clear
+            if (memoryUsage.totalCacheItems > 200) {
+                logger.warn('Cache size exceeded threshold, forcing clear', {
+                    totalItems: memoryUsage.totalCacheItems
+                });
+                clearPerformanceCaches(true);
+            }
+        }, 600000);
+
+        logger.info('Automatic cache management initialized');
+
+    } catch (error) {
+        logger.error('Error initializing cache management', {
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Health check for the performance optimization system
+ * @returns {Object} - Health status
+ */
+const getSystemHealthCheck = async () => {
+    try {
+        const health = {
+            status: 'healthy',
+            timestamp: new Date().toISOString(),
+            cache: {
+                status: 'healthy',
+                memoryUsage: getMemoryUsage(),
+                hitRate: getCacheHitRate()
+            },
+            redis: {
+                status: 'unknown',
+                connected: false
+            },
+            performance: {
+                status: 'healthy',
+                averageOptimizationTime: null
+            }
+        };
+
+        // Check Redis connection
+        try {
+            await redisClient.ping();
+            health.redis.status = 'healthy';
+            health.redis.connected = true;
+        } catch (redisError) {
+            health.redis.status = 'unhealthy';
+            health.redis.error = redisError.message;
+            health.status = 'degraded';
+        }
+
+        // Check cache health
+        const memoryUsage = health.cache.memoryUsage;
+        if (memoryUsage.totalCacheItems > 300) {
+            health.cache.status = 'warning';
+            health.cache.message = 'High cache usage detected';
+            if (health.status === 'healthy') {
+                health.status = 'warning';
+            }
+        }
+
+        // Overall health determination
+        if (health.redis.status === 'unhealthy') {
+            health.status = 'unhealthy';
+        }
+
+        return health;
+
+    } catch (error) {
+        logger.error('Error getting system health check', {
+            error: error.message
+        });
+        return {
+            status: 'error',
+            message: 'Failed to get system health check'
+        };
+    }
+};
+
+
+async function initializeGameCombinations() {
+    try {
+        console.log('🎲 Initializing game combinations...');
+
+        // Initialize Wingo in memory (10 combinations)
+        global.wingoCombinations = {};
+        for (let number = 0; number <= 9; number++) {
+            global.wingoCombinations[number] = {
+                number,
+                color: getColorForNumber(number),
+                size: number >= 5 ? 'Big' : 'Small',
+                parity: number % 2 === 0 ? 'even' : 'odd',
+                winning_conditions: {
+                    exact: [`NUMBER:${number}`],
+                    color: [`COLOR:${getColorForNumber(number)}`],
+                    size: [`SIZE:${number >= 5 ? 'big' : 'small'}`],
+                    parity: [`PARITY:${number % 2 === 0 ? 'even' : 'odd'}`]
+                }
+            };
+        }
+
+        // Initialize K3 in memory (216 combinations)
+        global.k3Combinations = {};
+        for (let d1 = 1; d1 <= 6; d1++) {
+            for (let d2 = 1; d2 <= 6; d2++) {
+                for (let d3 = 1; d3 <= 6; d3++) {
+                    const key = `${d1},${d2},${d3}`;
+                    const sum = d1 + d2 + d3;
+                    const dice = [d1, d2, d3];
+                    const counts = dice.reduce((acc, val) => {
+                        acc[val] = (acc[val] || 0) + 1;
+                        return acc;
+                    }, {});
+
+                    global.k3Combinations[key] = {
+                        dice_1: d1,
+                        dice_2: d2,
+                        dice_3: d3,
+                        sum,
+                        sum_size: sum > 10 ? 'Big' : 'Small',
+                        sum_parity: sum % 2 === 0 ? 'Even' : 'Odd',
+                        patterns: {
+                            triple: Object.values(counts).includes(3),
+                            pair: Object.values(counts).includes(2) && !Object.values(counts).includes(3),
+                            straight: isK3Straight([...dice].sort()),
+                            all_different: Object.keys(counts).length === 3
+                        },
+                        winning_conditions: buildK3WinningConditions(d1, d2, d3, sum, counts)
+                    };
+                }
+            }
+        }
+
+        // For TRX_WIX, use same as Wingo
+        global.trxWixCombinations = global.wingoCombinations;
+
+        console.log('✅ Game combinations initialized');
+        console.log(`   - Wingo: 10 combinations`);
+        console.log(`   - K3: 216 combinations`);
+        console.log(`   - 5D: Lazy loading enabled`);
+
+    } catch (error) {
+        logger.error('Error initializing game combinations', { error: error.message });
+        throw error;
+    }
+}
+
+
+function buildK3WinningConditions(d1, d2, d3, sum, counts) {
+    const conditions = {
+        sum: [`SUM:${sum}`],
+        sum_category: [],
+        dice_matching: [],
+        patterns: []
+    };
+
+    // Sum categories
+    conditions.sum_category.push(`SUM_CATEGORY:${sum > 10 ? 'big' : 'small'}`);
+    conditions.sum_category.push(`SUM_PARITY:${sum % 2 === 0 ? 'even' : 'odd'}`);
+
+    // Dice matching
+    if (Object.values(counts).includes(3)) {
+        conditions.dice_matching.push('MATCHING_DICE:triple_any');
+        conditions.dice_matching.push(`MATCHING_DICE:triple_${d1}`);
+    } else if (Object.values(counts).includes(2)) {
+        conditions.dice_matching.push('MATCHING_DICE:pair_any');
+        // Add specific pair patterns if needed
+    }
+
+    // Patterns
+    const sortedDice = [d1, d2, d3].sort();
+    if (sortedDice[0] + 1 === sortedDice[1] && sortedDice[1] + 1 === sortedDice[2]) {
+        conditions.patterns.push('PATTERN:straight');
+    }
+    if (Object.keys(counts).length === 3) {
+        conditions.patterns.push('PATTERN:all_different');
+    }
+
+    return conditions;
+}
+
+function isK3Straight(sortedDice) {
+    return sortedDice[0] + 1 === sortedDice[1] && sortedDice[1] + 1 === sortedDice[2];
+}
+
+
+async function lazy5DLoader(diceValue) {
+    try {
+        // Check Redis cache first
+        const cacheKey = `5d:combo:${diceValue}`;
+        const cached = await redisClient.get(cacheKey);
+
+        if (cached) {
+            return JSON.parse(cached);
+        }
+
+        // Load from database
+        const models = await ensureModelsInitialized();
+        const combination = await models.GameCombinations5D.findOne({
+            where: { dice_value: diceValue }
+        });
+
+        if (!combination) {
+            throw new Error(`5D combination ${diceValue} not found`);
+        }
+
+        // Parse and prepare data
+        const result = {
+            dice_value: combination.dice_value,
+            dice: {
+                A: combination.dice_a,
+                B: combination.dice_b,
+                C: combination.dice_c,
+                D: combination.dice_d,
+                E: combination.dice_e
+            },
+            sum: combination.sum_value,
+            sum_size: combination.sum_size,
+            sum_parity: combination.sum_parity,
+            position_flags: combination.position_flags,
+            winning_conditions: typeof combination.winning_conditions === 'string' ? (() => {
+                try {
+                    return JSON.parse(combination.winning_conditions);
+                } catch (parseError) {
+                    console.error('Error parsing winning_conditions JSON in lazy5DLoader:', parseError);
+                    return {};
+                }
+            })() : combination.winning_conditions
+        };
+
+        // Cache for 1 hour
+        await redisClient.setex(cacheKey, 3600, JSON.stringify(result));
+
+        return result;
+    } catch (error) {
+        logger.error('Error lazy loading 5D combination', { error: error.message, diceValue });
+        throw error;
+    }
+}
+
+// Backend/services/gameLogicService.js
+const { sequelize, DataTypes, Op } = require('../config/db');
+const redisHelper = require('../config/redis');
+const redisClient = redisHelper.getClient();
+const periodService = require('./periodService');
+const tronHashService = require('./tronHashService');
+const winston = require('winston');
+const path = require('path');
+const logger = require('../utils/logger');
+const crypto = require('crypto');
+const { recordVipExperience } = require('../services/autoVipService');
+const { processSelfRebate } = require('../services/selfRebateService');
+const { processBetForActivityReward } = require('../services/activityRewardsService');
+const fiveDProtectionService = require('./fiveDProtectionService');
+// CONSTANTS - Add to top of file
+const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
+const ENHANCED_USER_THRESHOLD = 2; // New minimum user threshold
 
 const globalProcessingLocks = new Map();
 
@@ -1310,7 +2068,18 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     fullScanQuery += ` WHERE dice_a = 0`;
                 }
                 
-                fullScanQuery += ` ORDER BY RAND() LIMIT 10000`;
+                // Check if all sum combinations are bet on (SUM_even, SUM_odd, SUM_big, SUM_small)
+                const sumBets = Object.keys(betExposures).filter(key => 
+                    key.startsWith('bet:SUM_') && ['SUM_even', 'SUM_odd', 'SUM_big', 'SUM_small'].includes(key.replace('bet:', ''))
+                );
+                
+                if (sumBets.length === 4) {
+                    console.log('🛡️ [5D_PROTECTION] All sum combinations bet on - using systematic scan for lowest exposure');
+                    // Use systematic scan instead of random for better coverage
+                    fullScanQuery += ` ORDER BY sum_value ASC, dice_value ASC LIMIT 50000`;
+                } else {
+                    fullScanQuery += ` ORDER BY RAND() LIMIT 10000`;
+                }
                 
                 const result = await sequelize.query(fullScanQuery, { 
                     type: sequelize.QueryTypes.SELECT 
@@ -1318,14 +2087,26 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
 
                 let minExposure = Infinity;
                 let optimalResult = null;
+                let optimalWinningBets = [];
 
                 for (const combo of result) {
                     const exposure = await calculate5DExposure(combo, betExposures);
                     if (exposure < minExposure) {
                         minExposure = exposure;
                         optimalResult = combo;
+                        
+                        // Log the optimal combination details
+                        console.log(`🎯 [5D_PROTECTION] New optimal found:`, {
+                            combination: format5DResult(combo),
+                            exposure: minExposure
+                        });
                     }
                 }
+
+                console.log(`✅ [5D_PROTECTION] Final optimal result:`, {
+                    combination: format5DResult(optimalResult),
+                    minExposure: minExposure
+                });
 
                 return format5DResult(optimalResult);
 
@@ -1422,39 +2203,110 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
     }
 }
 
-async function calculate5DExposure(combination, betExposures) {
-    let totalExposure = 0;
+// Cache for 5D winning conditions
+const fiveDWinningConditionsCache = new Map();
+
+/**
+ * Get cached winning conditions for a 5D combination
+ * @param {Object} combination - 5D combination
+ * @returns {Object} - Cached winning conditions
+ */
+function getCached5DWinningConditions(combination) {
+    const cacheKey = `${combination.dice_a}_${combination.dice_b}_${combination.dice_c}_${combination.dice_d}_${combination.dice_e}`;
     
-    // Debug logging to understand the issue
-    console.log('🔍 [5D_EXPOSURE_DEBUG] calculate5DExposure called with:', {
-        combinationType: typeof combination,
-        winningConditionsType: typeof combination.winning_conditions,
-        winningConditionsValue: combination.winning_conditions,
-        betExposuresKeys: Object.keys(betExposures)
+    if (fiveDWinningConditionsCache.has(cacheKey)) {
+        return fiveDWinningConditionsCache.get(cacheKey);
+    }
+    
+    // Calculate winning conditions
+    const formattedCombo = format5DResult(combination);
+    const winningConditions = {
+        positions: {
+            exact: [],
+            size: [],
+            parity: []
+        },
+        sum: {
+            value: formattedCombo.sum,
+            size: formattedCombo.sum_size,
+            parity: formattedCombo.sum_parity
+        }
+    };
+    
+    // Generate all possible position bets that would win
+    const positions = ['A', 'B', 'C', 'D', 'E'];
+    positions.forEach(pos => {
+        const value = formattedCombo[pos];
+        
+        // Exact position bet
+        winningConditions.positions.exact.push(`POSITION:${pos}_${value}`);
+        
+        // Position size bet
+        const size = value >= 5 ? 'big' : 'small';
+        winningConditions.positions.size.push(`POSITION_SIZE:${pos}_${size}`);
+        
+        // Position parity bet
+        const parity = value % 2 === 0 ? 'even' : 'odd';
+        winningConditions.positions.parity.push(`POSITION_PARITY:${pos}_${parity}`);
     });
     
+    // Cache the result
+    fiveDWinningConditionsCache.set(cacheKey, winningConditions);
+    
+    // Limit cache size to prevent memory issues
+    if (fiveDWinningConditionsCache.size > 10000) {
+        const firstKey = fiveDWinningConditionsCache.keys().next().value;
+        fiveDWinningConditionsCache.delete(firstKey);
+    }
+    
+    return winningConditions;
+}
+
+async function calculate5DExposure(combination, betExposures) {
+    let totalExposure = 0;
+    let winningBets = [];
+    let losingBets = [];
+    
+    // Use database winning conditions if available, otherwise fallback to cached calculation
     let winningConditions;
-    if (typeof combination.winning_conditions === 'string') {
+    
+    if (combination.winning_conditions) {
         try {
-            winningConditions = JSON.parse(combination.winning_conditions);
+            // Parse database winning conditions
+            winningConditions = typeof combination.winning_conditions === 'string' 
+                ? JSON.parse(combination.winning_conditions) 
+                : combination.winning_conditions;
+            
+            console.log('🔍 [5D_EXPOSURE_DEBUG] Using database winning conditions:', {
+                combination: format5DResult(combination),
+                dbWinningConditions: winningConditions
+            });
         } catch (parseError) {
-            console.error('Error parsing winning_conditions JSON:', parseError);
-            console.error('Raw winning_conditions:', combination.winning_conditions);
-            // Fallback to empty object
-            winningConditions = {};
+            console.error('Error parsing database winning_conditions:', parseError);
+            // Fallback to cached calculation
+            winningConditions = getCached5DWinningConditions(combination);
         }
     } else {
-        winningConditions = combination.winning_conditions;
+        // Fallback to cached calculation if no database winning conditions
+        winningConditions = getCached5DWinningConditions(combination);
     }
-    // Check each bet type
+    
+    // Debug logging
+    console.log('🔍 [5D_EXPOSURE_DEBUG] calculate5DExposure called with:', {
+        combination: format5DResult(combination),
+        betExposuresKeys: Object.keys(betExposures),
+        usingDatabaseConditions: !!combination.winning_conditions
+    });
+    
+    // Check each bet type using winning conditions
     for (const [betKey, exposure] of Object.entries(betExposures)) {
         if (!betKey.startsWith('bet:')) continue;
 
         const actualBetKey = betKey.replace('bet:', '');
-
-        // Check if this combination wins for this bet
+        
+        // Check if this combination wins for this bet using winning conditions
         let wins = false;
-
+        
         // Check exact positions
         if (winningConditions.positions?.exact?.includes(actualBetKey)) {
             wins = true;
@@ -1467,18 +2319,50 @@ async function calculate5DExposure(combination, betExposures) {
         else if (winningConditions.positions?.parity?.includes(actualBetKey)) {
             wins = true;
         }
-        // Check sum conditions
+        // Check sum conditions (database format: "SUM:35", "SUM_SIZE:big", "SUM_PARITY:odd")
         else if (winningConditions.sum?.value === actualBetKey ||
-            winningConditions.sum?.size === actualBetKey ||
-            winningConditions.sum?.parity === actualBetKey) {
+                winningConditions.sum?.size === actualBetKey ||
+                winningConditions.sum?.parity === actualBetKey) {
             wins = true;
+        }
+        // Handle SUM_ prefixed bets (user format: "SUM_odd", "SUM_big")
+        else if (actualBetKey.startsWith('SUM_')) {
+            const [sumType, sumValue] = actualBetKey.split('_');
+            if (sumType === 'SUM') {
+                // Map user format to database format
+                if (sumValue === 'big' && winningConditions.sum?.size === 'SUM_SIZE:big') {
+                    wins = true;
+                } else if (sumValue === 'small' && winningConditions.sum?.size === 'SUM_SIZE:small') {
+                    wins = true;
+                } else if (sumValue === 'odd' && winningConditions.sum?.parity === 'SUM_PARITY:odd') {
+                    wins = true;
+                } else if (sumValue === 'even' && winningConditions.sum?.parity === 'SUM_PARITY:even') {
+                    wins = true;
+                }
+            }
+        }
+        // Handle direct sum value bets (user format: "SUM:35")
+        else if (actualBetKey.startsWith('SUM:') && !actualBetKey.includes('_')) {
+            if (winningConditions.sum?.value === actualBetKey) {
+                wins = true;
+            }
         }
 
         if (wins) {
             totalExposure += parseFloat(exposure);
+            winningBets.push({ bet: actualBetKey, exposure: parseFloat(exposure) });
+            console.log(`🔍 [5D_EXPOSURE_CHECK] Bet: ${actualBetKey} = WIN (exposure: ${exposure})`);
+        } else {
+            losingBets.push({ bet: actualBetKey, exposure: parseFloat(exposure) });
+            console.log(`🔍 [5D_EXPOSURE_CHECK] Bet: ${actualBetKey} = LOSS`);
         }
     }
 
+    // Enhanced logging for protection analysis
+    console.log(`🔍 [5D_EXPOSURE_TOTAL] Total exposure for combination: ${totalExposure}`);
+    console.log(`🔍 [5D_EXPOSURE_BREAKDOWN] Winning bets: ${winningBets.length}, Losing bets: ${losingBets.length}`);
+    console.log(`🔍 [5D_EXPOSURE_WINNERS] ${winningBets.map(w => `${w.bet}(${w.exposure})`).join(', ')}`);
+    
     return totalExposure;
 }
 
@@ -2596,7 +3480,7 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
 
             case 'fived':
             case '5d':
-                // 🛡️ ENHANCED 5D PROTECTION: Use exposure-based selection like Wingo/TRX
+                // 🛡️ ENHANCED 5D PROTECTION: Use intelligent bet analysis
                 console.log('🛡️ [5D_PROTECTION_START] 🎲 5D Protection Mode Analysis:', {
                     periodId, gameType, duration, timeline,
                     exposureKey
@@ -2605,6 +3489,18 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                 // Get exposure data from Redis
                 const betExposures = await redisClient.hgetall(exposureKey);
                 console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Exposure Data Breakdown:', betExposures);
+
+                // Extract user's actual bets for protection analysis
+                const userBets = [];
+                for (const [betKey, exposure] of Object.entries(betExposures)) {
+                    if (betKey.startsWith('bet:')) {
+                        const actualBetKey = betKey.replace('bet:', '');
+                        const [betType, betValue] = actualBetKey.split(':');
+                        userBets.push({ betType, betValue, exposure: parseFloat(exposure) });
+                    }
+                }
+
+                console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D User bets for protection analysis:', userBets);
 
                 // Find zero exposure combinations
                 const models = await ensureModelsInitialized();
@@ -2622,18 +3518,26 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
 
                 console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Loaded', allCombinations.length, 'combinations for analysis');
 
-                // Find combinations with zero exposure
+                // SIMPLE PROTECTION: Find zero exposure combinations first, then lowest exposure
                 const zeroExposureCombinations = [];
+                const allExposureData = [];
+
                 for (const combo of allCombinations) {
                     const exposure = await calculate5DExposure(combo, betExposures);
+                    
                     if (exposure === 0) {
                         zeroExposureCombinations.push(combo);
                     }
+                    
+                    allExposureData.push({ combo, exposure });
                 }
 
-                console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Zero exposure combinations found:', zeroExposureCombinations.length);
+                console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Protection analysis:', {
+                    zeroExposureCount: zeroExposureCombinations.length,
+                    totalCombinations: allCombinations.length
+                });
 
-                // Randomly select from zero-exposure combinations
+                // Priority 1: Use zero-exposure combinations (no bets win)
                 if (zeroExposureCombinations.length > 0) {
                     const randomIndex = Math.floor(Math.random() * zeroExposureCombinations.length);
                     const selectedCombo = zeroExposureCombinations[randomIndex];
@@ -2649,33 +3553,26 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                     return formattedResult;
                 }
 
-                // CRITICAL FIX: When no zero-exposure combinations exist, select lowest exposure
+                // Priority 2: Use lowest exposure combination (minimal payout)
                 console.log(`🛡️ [5D_PROTECTION_FALLBACK] 🎲 5D No zero-exposure combinations found, selecting lowest exposure combination`);
-
-                // Find combinations with lowest exposure
-                let min5DExposure = Infinity;
-                let lowest5DExposureCombinations = [];
-
-                for (const combo of allCombinations) {
-                    const exposure = await calculate5DExposure(combo, betExposures);
-                    if (exposure < min5DExposure) {
-                        min5DExposure = exposure;
-                        lowest5DExposureCombinations = [combo];
-                    } else if (exposure === min5DExposure) {
-                        lowest5DExposureCombinations.push(combo);
-                    }
-                }
+                
+                // Sort by exposure and find lowest
+                allExposureData.sort((a, b) => a.exposure - b.exposure);
+                const lowestExposure = allExposureData[0].exposure;
+                const lowestExposureCombinations = allExposureData
+                    .filter(item => item.exposure === lowestExposure)
+                    .map(item => item.combo);
 
                 // Select randomly from combinations with lowest exposure
-                const selectedLowestCombo = lowest5DExposureCombinations[Math.floor(Math.random() * lowest5DExposureCombinations.length)];
+                const selectedLowestCombo = lowestExposureCombinations[Math.floor(Math.random() * lowestExposureCombinations.length)];
                 const formattedLowestResult = format5DResult(selectedLowestCombo);
                 
                 console.log(`🛡️ [5D_PROTECTION_SUCCESS] 🎲 5D Selected lowest exposure combination:`, {
                     periodId, gameType, duration, timeline,
                     selectedResult: formattedLowestResult,
                     protectionMethod: 'lowest_exposure_selection',
-                    lowestExposure: min5DExposure,
-                    lowestExposureCount: lowest5DExposureCombinations.length
+                    lowestExposure: lowestExposure,
+                    lowestExposureCount: lowestExposureCombinations.length
                 });
 
                 return formattedLowestResult;
@@ -2919,13 +3816,8 @@ async function getEnhanced5DResult(gameType, duration, periodId, timeline) {
     try {
         console.log('⚡ [ENHANCED_5D] Attempting enhanced 5D result selection');
         
-        // Check if enhanced system is available
-        const isEnhancedAvailable = await fiveDProtectionService.isSystemReady();
-        
-        if (!isEnhancedAvailable) {
-            console.log('⚠️ [ENHANCED_5D] Enhanced system not ready, will use fallback');
-            return null;
-        }
+        // FORCE USE ENHANCED SYSTEM (SKIP HEALTH CHECK)
+        console.log('🎯 [ENHANCED_5D] Skipping health check - forcing enhanced system');
         
         // Use enhanced system
         const enhancedResult = await fiveDProtectionService.getProtectedResult(
@@ -3159,37 +4051,23 @@ async function shouldUseEnhancedSystem(gameType, duration, periodId) {
         return false;
     }
     
-    // Check if enhanced system is enabled (can be controlled via environment variable)
-    const enhancedEnabled = process.env.FIVE_D_ENHANCED_ENABLED !== 'false'; // Default to true
-    if (!enhancedEnabled) {
-        console.log('⚙️ [ENHANCED_CONFIG] Enhanced system disabled via config');
-        return false;
-    }
+    // FORCE ENABLE ENHANCED SYSTEM (IGNORE ENVIRONMENT VARIABLES)
+    const enhancedEnabled = true; // ALWAYS ENABLED
+    console.log('🎯 [ENHANCED_FORCE] Enhanced system FORCED enabled (ignoring config)');
     
-    // Check system health
-    try {
-        const isHealthy = await fiveDProtectionService.isSystemReady();
-        if (!isHealthy) {
-            console.log('⚠️ [ENHANCED_HEALTH] Enhanced system not healthy');
-            return false;
-        }
-    } catch (error) {
-        console.log('❌ [ENHANCED_HEALTH] Error checking enhanced system health:', error.message);
-        return false;
-    }
+    // SKIP HEALTH CHECK - FORCE ENABLE
+    console.log('🎯 [ENHANCED_FORCE] Skipping health check - forcing enhanced system');
     
-    // Gradual rollout based on period ID (start with 10% of periods)
-    const periodHash = crypto.createHash('md5').update(periodId).digest('hex');
-    const periodNumber = parseInt(periodHash.substring(0, 8), 16);
-    const rolloutPercentage = periodNumber % 100;
-    const migrationPercentage = parseInt(process.env.FIVE_D_MIGRATION_PERCENTAGE) || 10; // Start with 10%
+    // FORCE ENABLE ENHANCED SYSTEM FOR ALL PERIODS (100%)
+    const shouldUse = true; // ALWAYS USE ENHANCED SYSTEM
     
-    const shouldUse = rolloutPercentage < migrationPercentage;
+    // Log the decision
+    console.log(`🎯 [ENHANCED_FORCE] Period ${periodId} FORCED to use enhanced system (100%)`);
     
     if (shouldUse) {
-        console.log(`🎯 [ENHANCED_ROLLOUT] Period ${periodId} selected for enhanced system (${rolloutPercentage}% < ${migrationPercentage}%)`);
+        console.log(`🎯 [ENHANCED_ROLLOUT] Period ${periodId} selected for enhanced system (FORCED ENABLE)`);
     } else {
-        console.log(`🔄 [ENHANCED_ROLLOUT] Period ${periodId} using current system (${rolloutPercentage}% >= ${migrationPercentage}%)`);
+        console.log(`🔄 [ENHANCED_ROLLOUT] Period ${periodId} using current system (SHOULD NOT HAPPEN)`);
     }
     
     return shouldUse;
@@ -4302,9 +5180,9 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
             case 'SUM':
                 // Sum betting - 1.98x payout
                 const sum = result.sum || (result.A + result.B + result.C + result.D + result.E);
-                if (betValue === 'big' && sum >= 22) { // FIXED: Use >= 22 for consistency with database
+                if (betValue === 'big' && sum > 22) {
                     return betAmount * 1.98;
-                } else if (betValue === 'small' && sum < 22) { // FIXED: Use < 22 for consistency
+                } else if (betValue === 'small' && sum <= 22) {
                     return betAmount * 1.98;
                 } else if (betValue === 'odd' && sum % 2 === 1) {
                     return betAmount * 1.98;
@@ -4315,8 +5193,8 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
 
             case 'SUM_SIZE':
                 // Sum size betting - 2.0x payout
-                const sumForSize = result.sum || (result.A + result.B + result.C + result.D + result.E);
-                const isSumBig = sumForSize >= 22; // FIXED: Use >= 22 for consistency with database
+                const totalSum = result.sum || (result.A + result.B + result.C + result.D + result.E);
+                const isSumBig = totalSum >= 22; // FIXED: Use >= 22 for consistency with database
                 // Handle both formats: "small"/"big" and "SUM_small"/"SUM_big"
                 const sizeValue = betValue.startsWith('SUM_') ? betValue.split('_')[1] : betValue;
                 if ((sizeValue === 'big' && isSumBig) || (sizeValue === 'small' && !isSumBig)) {
@@ -4326,8 +5204,8 @@ const calculateFiveDWin = (bet, result, betType, betValue) => {
 
             case 'SUM_PARITY':
                 // Sum parity betting - 2.0x payout
-                const sumForParity = result.sum || (result.A + result.B + result.C + result.D + result.E);
-                const isSumEven = sumForParity % 2 === 0;
+                const sum2 = result.sum || (result.A + result.B + result.C + result.D + result.E);
+                const isSumEven = sum2 % 2 === 0;
                 // Handle both formats: "even"/"odd" and "SUM_even"/"SUM_odd"
                 const parityValue = betValue.startsWith('SUM_') ? betValue.split('_')[1] : betValue;
                 if ((parityValue === 'even' && isSumEven) || (parityValue === 'odd' && !isSumEven)) {
@@ -5745,7 +6623,9 @@ const generateRandomResult = async (gameType) => {
                     C: dice[2],
                     D: dice[3],
                     E: dice[4],
-                    sum: dice.reduce((a, b) => a + b, 0)
+                    sum: dice.reduce((a, b) => a + b, 0),
+                    sum_size: dice.reduce((a, b) => a + b, 0) >= 22 ? 'big' : 'small', // FIXED: Use >= 22 for consistency with database
+                    sum_parity: dice.reduce((a, b) => a + b, 0) % 2 === 0 ? 'even' : 'odd'
                 };
 
                 // Validate 5D result
@@ -6609,7 +7489,10 @@ const generateResultForTimeline = async (gameType, timeline) => {
                     C: dice[2],
                     D: dice[3],
                     E: dice[4],
-                    sum: dice.reduce((a, b) => a + b, 0)
+                    sum: dice.reduce((a, b) => a + b, 0),
+                    dice_value: parseInt(dice.join('')),
+                    sum_size: dice.reduce((a, b) => a + b, 0) >= 22 ? 'big' : 'small', // FIXED: Use >= 22 for consistency with database
+                    sum_parity: dice.reduce((a, b) => a + b, 0) % 2 === 0 ? 'even' : 'odd'
                 };
                 break;
 

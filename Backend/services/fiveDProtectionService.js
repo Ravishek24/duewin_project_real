@@ -5,7 +5,7 @@ const models = require('../models');
 
 class FiveDProtectionService {
     constructor() {
-        this.ENHANCED_USER_THRESHOLD = 3; // Same as gameLogicService
+        this.ENHANCED_USER_THRESHOLD = 2; // Same as gameLogicService
     }
 
     /**
@@ -117,19 +117,48 @@ class FiveDProtectionService {
             // Get all remaining zero-exposure combinations
             const zeroExposureCombinations = await redisClient.smembers(setKey);
             
-            if (zeroExposureCombinations.length === 0) {
+            if (!zeroExposureCombinations || zeroExposureCombinations.length === 0) {
                 console.log('⚠️ [5D_PROTECTION] No zero-exposure combinations left, falling back to lowest exposure');
                 return await this.getLowestExposureResult(gameType, duration, periodId, timeline, seed);
             }
 
+            // Filter out any invalid keys
+            const validCombinations = zeroExposureCombinations.filter(key => 
+                key && typeof key === 'string' && key.includes('_')
+            );
+            
+            if (validCombinations.length === 0) {
+                console.log('⚠️ [5D_PROTECTION] No valid zero-exposure combinations left, falling back to lowest exposure');
+                return await this.getLowestExposureResult(gameType, duration, periodId, timeline, seed);
+            }
+
             // Sort combinations for deterministic selection
-            zeroExposureCombinations.sort();
+            validCombinations.sort();
             
             // Select deterministic combination from zero-exposure set
-            const selectedIndex = seed % zeroExposureCombinations.length;
-            const selectedKey = zeroExposureCombinations[selectedIndex];
+            const selectedIndex = seed % validCombinations.length;
+            const selectedKey = validCombinations[selectedIndex];
             
-            const result = this.keyToCombination(selectedKey);
+            if (!selectedKey) {
+                console.log('⚠️ [5D_PROTECTION] Selected key is undefined, falling back to lowest exposure');
+                return await this.getLowestExposureResult(gameType, duration, periodId, timeline, seed);
+            }
+            
+            const combo = this.keyToCombination(selectedKey);
+            
+            // FIXED: Properly format the result for frontend consistency
+            const result = {
+                A: combo.dice_a,
+                B: combo.dice_b,
+                C: combo.dice_c,
+                D: combo.dice_d,
+                E: combo.dice_e,
+                sum: combo.sum_value,
+                dice_value: parseInt(`${combo.dice_a}${combo.dice_b}${combo.dice_c}${combo.dice_d}${combo.dice_e}`),
+                sum_size: combo.sum_size,
+                sum_parity: combo.sum_parity
+            };
+            
             console.log(`✅ [5D_PROTECTION] Selected zero-exposure result:`, result);
             
             return result;
@@ -156,18 +185,71 @@ class FiveDProtectionService {
                 return await this.getRandomResult(gameType, duration, periodId, timeline, seed);
             }
 
-            // Find lowest exposure
+            // Get all combinations from database to calculate exposure for each
+            const GameCombinations5D = models.GameCombinations5D;
+            const allCombinations = await GameCombinations5D.findAll({
+                attributes: ['dice_a', 'dice_b', 'dice_c', 'dice_d', 'dice_e', 'sum_value', 'sum_size', 'sum_parity', 'winning_conditions'],
+                raw: true
+                // REMOVED LIMIT - CHECK ALL 100,000 COMBINATIONS FOR OPTIMAL RESULT
+            });
+
+            console.log(`🔍 [5D_PROTECTION] Calculating exposure for ${allCombinations.length} combinations...`);
+
+            // Calculate exposure for each combination
             let lowestExposure = Infinity;
             let lowestExposureCombinations = [];
 
-            for (const [key, exposureStr] of Object.entries(allExposures)) {
-                const exposure = parseInt(exposureStr) || 0;
+            for (const combo of allCombinations) {
+                // Calculate total exposure for this combination
+                let totalExposure = 0;
                 
-                if (exposure < lowestExposure) {
-                    lowestExposure = exposure;
-                    lowestExposureCombinations = [key];
-                } else if (exposure === lowestExposure) {
-                    lowestExposureCombinations.push(key);
+                // Parse winning conditions
+                let winningConditions;
+                try {
+                    winningConditions = typeof combo.winning_conditions === 'string' 
+                        ? JSON.parse(combo.winning_conditions) 
+                        : combo.winning_conditions;
+                } catch (error) {
+                    console.log('⚠️ [5D_PROTECTION] Error parsing winning conditions, skipping combination');
+                    continue;
+                }
+
+                // Check each bet against this combination
+                for (const [betKey, exposureStr] of Object.entries(allExposures)) {
+                    if (!betKey.startsWith('bet:')) continue;
+                    
+                    const actualBetKey = betKey.replace('bet:', '');
+                    const [betType, betValue] = actualBetKey.split(':');
+                    
+                    // Check if this combination wins for this bet
+                    let wins = false;
+                    
+                    if (betType === 'POSITION') {
+                        const [position, value] = betValue.split('_');
+                        const numValue = parseInt(value);
+                        const comboValue = combo[`dice_${position.toLowerCase()}`];
+                        wins = comboValue === numValue;
+                    } else if (betType === 'SUM_PARITY') {
+                        const isEven = combo.sum_value % 2 === 0;
+                        wins = (betValue === 'even' && isEven) || (betValue === 'odd' && !isEven);
+                    } else if (betType === 'SUM_SIZE') {
+                        const isBig = combo.sum_value >= 22; // FIXED: Use >= 22 for consistency with database
+                        wins = (betValue === 'big' && isBig) || (betValue === 'small' && !isBig);
+                    } else if (betType === 'SUM') {
+                        wins = combo.sum_value === parseInt(betValue);
+                    }
+                    
+                    if (wins) {
+                        totalExposure += parseInt(exposureStr) || 0;
+                    }
+                }
+                
+                // Track lowest exposure combinations
+                if (totalExposure < lowestExposure) {
+                    lowestExposure = totalExposure;
+                    lowestExposureCombinations = [combo];
+                } else if (totalExposure === lowestExposure) {
+                    lowestExposureCombinations.push(combo);
                 }
             }
 
@@ -177,15 +259,30 @@ class FiveDProtectionService {
             }
 
             // Sort combinations for deterministic selection
-            lowestExposureCombinations.sort();
+            lowestExposureCombinations.sort((a, b) => {
+                const keyA = this.combinationToKey(a);
+                const keyB = this.combinationToKey(b);
+                return keyA.localeCompare(keyB);
+            });
             
             // Select deterministic from lowest exposure combinations
             const selectedIndex = seed % lowestExposureCombinations.length;
-            const selectedKey = lowestExposureCombinations[selectedIndex];
+            const selectedCombo = lowestExposureCombinations[selectedIndex];
             
-            // Convert bet key to combination (this is simplified - you might need more complex logic)
-            const result = this.betKeyToCombination(selectedKey);
-            console.log(`✅ [5D_PROTECTION] Selected lowest exposure result (${lowestExposure}):`, result);
+            // FIXED: Properly format the result for frontend consistency
+            const result = {
+                A: selectedCombo.dice_a,
+                B: selectedCombo.dice_b,
+                C: selectedCombo.dice_c,
+                D: selectedCombo.dice_d,
+                E: selectedCombo.dice_e,
+                sum: selectedCombo.sum_value,
+                dice_value: selectedCombo.dice_value || parseInt(`${selectedCombo.dice_a}${selectedCombo.dice_b}${selectedCombo.dice_c}${selectedCombo.dice_d}${selectedCombo.dice_e}`),
+                sum_size: selectedCombo.sum_size,
+                sum_parity: selectedCombo.sum_parity
+            };
+            
+            console.log(`✅ [5D_PROTECTION] Selected lowest exposure result (${lowestExposure} cents):`, result);
             
             return result;
         } catch (error) {
@@ -214,8 +311,21 @@ class FiveDProtectionService {
             const selectedIndex = seed % allCombinations.length;
             const randomCombination = allCombinations[selectedIndex];
 
-            console.log(`🎲 [5D_PROTECTION] Selected random result:`, randomCombination);
-            return randomCombination;
+            // FIXED: Properly format the result for frontend consistency
+            const result = {
+                A: randomCombination.dice_a,
+                B: randomCombination.dice_b,
+                C: randomCombination.dice_c,
+                D: randomCombination.dice_d,
+                E: randomCombination.dice_e,
+                sum: randomCombination.sum_value,
+                dice_value: parseInt(`${randomCombination.dice_a}${randomCombination.dice_b}${randomCombination.dice_c}${randomCombination.dice_d}${randomCombination.dice_e}`),
+                sum_size: randomCombination.sum_size,
+                sum_parity: randomCombination.sum_parity
+            };
+
+            console.log(`🎲 [5D_PROTECTION] Selected random result:`, result);
+            return result;
         } catch (error) {
             console.error('❌ [5D_PROTECTION] Error getting random result:', error);
             throw error;
@@ -240,9 +350,24 @@ class FiveDProtectionService {
      * Convert Redis key to combination
      */
     keyToCombination(key) {
-        const [dice_a, dice_b, dice_c, dice_d, dice_e] = key.split('_').map(Number);
+        if (!key || typeof key !== 'string') {
+            throw new Error(`Invalid key provided to keyToCombination: ${key}`);
+        }
+        
+        const parts = key.split('_');
+        if (parts.length !== 5) {
+            throw new Error(`Invalid key format: ${key}. Expected format: dice_a_dice_b_dice_c_dice_d_dice_e`);
+        }
+        
+        const [dice_a, dice_b, dice_c, dice_d, dice_e] = parts.map(Number);
+        
+        // Validate that all values are valid numbers
+        if ([dice_a, dice_b, dice_c, dice_d, dice_e].some(val => isNaN(val) || val < 0 || val > 9)) {
+            throw new Error(`Invalid dice values in key: ${key}`);
+        }
+        
         const sum_value = dice_a + dice_b + dice_c + dice_d + dice_e;
-        const sum_size = sum_value >= 23 ? 'big' : 'small';
+        const sum_size = sum_value >= 22 ? 'big' : 'small'; // FIXED: Use >= 22 for consistency with database
         const sum_parity = sum_value % 2 === 0 ? 'even' : 'odd';
         
         return {
@@ -303,6 +428,44 @@ class FiveDProtectionService {
                     }
                 }
             }
+        } else if (betType === 'SUM_PARITY') {
+            // For sum parity bets, generate all combinations with that parity
+            const isEven = betValue === 'even';
+            
+            for (let a = 0; a <= 9; a++) {
+                for (let b = 0; b <= 9; b++) {
+                    for (let c = 0; c <= 9; c++) {
+                        for (let d = 0; d <= 9; d++) {
+                            for (let e = 0; e <= 9; e++) {
+                                const sum = a + b + c + d + e;
+                                const comboIsEven = sum % 2 === 0;
+                                if (comboIsEven === isEven) {
+                                    combinations.push(`${a}_${b}_${c}_${d}_${e}`);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (betType === 'SUM_SIZE') {
+            // For sum size bets, generate all combinations with that size
+            const isBig = betValue === 'big';
+            
+            for (let a = 0; a <= 9; a++) {
+                for (let b = 0; b <= 9; b++) {
+                    for (let c = 0; c <= 9; c++) {
+                        for (let d = 0; d <= 9; d++) {
+                            for (let e = 0; e <= 9; e++) {
+                                const sum = a + b + c + d + e;
+                                const comboIsBig = sum >= 22; // FIXED: Use >= 22 for consistency with database
+                                if (comboIsBig === isBig) {
+                                    combinations.push(`${a}_${b}_${c}_${d}_${e}`);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         return combinations;
@@ -329,7 +492,7 @@ class FiveDProtectionService {
             const dice_e = pos === 'E' ? numValue : Math.floor(Math.random() * 10);
             
             const sum_value = dice_a + dice_b + dice_c + dice_d + dice_e;
-            const sum_size = sum_value >= 23 ? 'big' : 'small';
+            const sum_size = sum_value >= 22 ? 'big' : 'small'; // FIXED: Use >= 22 for consistency with database
             const sum_parity = sum_value % 2 === 0 ? 'even' : 'odd';
             
             return { dice_a, dice_b, dice_c, dice_d, dice_e, sum_value, sum_size, sum_parity };

@@ -1752,8 +1752,7 @@ const sendCurrentPeriodFromRedis = async (socket, gameType, duration, timeline =
  */
 const setupRedisSubscriptions = () => {
     try {
-        const unifiedRedis = require('../config/unifiedRedisManager');
-const subscriberRedis = unifiedRedis.getConnection('websocket');
+        const { redis: subscriberRedis } = require('../config/redisConfig');
         
         // Create separate Redis connection for subscriptions
         const subscriber = subscriberRedis.duplicate();

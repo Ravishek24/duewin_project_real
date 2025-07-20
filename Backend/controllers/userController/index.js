@@ -185,11 +185,51 @@ const getUserBetHistory = async (req, res) => {
         
         const offset = (page - 1) * limit;
         
+        // Get total count for pagination
+        const totalCountResult = await User.sequelize.query(`
+            SELECT COUNT(*) as total FROM (
+                (SELECT bet_id FROM bet_record_wingos 
+                 WHERE user_id = :userId 
+                 ${start_date ? 'AND created_at >= :startDate' : ''}
+                 ${end_date ? 'AND created_at <= :endDate' : ''})
+                
+                UNION ALL
+                
+                (SELECT bet_id FROM bet_record_5ds 
+                 WHERE user_id = :userId
+                 ${start_date ? 'AND created_at >= :startDate' : ''}
+                 ${end_date ? 'AND created_at <= :endDate' : ''})
+                
+                UNION ALL
+                
+                (SELECT bet_id FROM bet_record_k3s 
+                 WHERE user_id = :userId
+                 ${start_date ? 'AND created_at >= :startDate' : ''}
+                 ${end_date ? 'AND created_at <= :endDate' : ''})
+                
+                UNION ALL
+                
+                (SELECT bet_id FROM bet_record_trx_wix 
+                 WHERE user_id = :userId
+                 ${start_date ? 'AND created_at >= :startDate' : ''}
+                 ${end_date ? 'AND created_at <= :endDate' : ''})
+            ) as combined_bets
+        `, {
+            replacements: { 
+                userId: user_id, 
+                startDate: start_date,
+                endDate: end_date
+            },
+            type: User.sequelize.QueryTypes.SELECT
+        });
+        
+        const totalCount = totalCountResult[0]?.total || 0;
+        
         // 🚀 SINGLE OPTIMIZED QUERY (was 4-6 queries)
         const allBets = await User.sequelize.query(`
             (SELECT 
                 'wingo' as game_type, bet_id, created_at, bet_amount, 
-                win_amount, status, 'Internal' as type
+                win_amount, status, 'Internal' as type, wallet_balance_after
              FROM bet_record_wingos 
              WHERE user_id = :userId 
              ${start_date ? 'AND created_at >= :startDate' : ''}
@@ -199,7 +239,7 @@ const getUserBetHistory = async (req, res) => {
             
             (SELECT 
                 'fiveD' as game_type, bet_id, created_at, bet_amount,
-                win_amount, status, 'Internal' as type  
+                win_amount, status, 'Internal' as type, wallet_balance_after
              FROM bet_record_5ds 
              WHERE user_id = :userId
              ${start_date ? 'AND created_at >= :startDate' : ''}
@@ -209,7 +249,7 @@ const getUserBetHistory = async (req, res) => {
             
             (SELECT 
                 'k3' as game_type, bet_id, created_at, bet_amount,
-                win_amount, status, 'Internal' as type
+                win_amount, status, 'Internal' as type, wallet_balance_after
              FROM bet_record_k3s 
              WHERE user_id = :userId
              ${start_date ? 'AND created_at >= :startDate' : ''}
@@ -219,7 +259,7 @@ const getUserBetHistory = async (req, res) => {
             
             (SELECT 
                 'trxWix' as game_type, bet_id, created_at, bet_amount,
-                win_amount, status, 'Internal' as type
+                win_amount, status, 'Internal' as type, wallet_balance_after
              FROM bet_record_trx_wix 
              WHERE user_id = :userId
              ${start_date ? 'AND created_at >= :startDate' : ''}
@@ -240,7 +280,15 @@ const getUserBetHistory = async (req, res) => {
         
         res.status(200).json({
             success: true,
-            data: allBets
+            data: allBets,
+            pagination: {
+                total: totalCount,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages: Math.ceil(totalCount / limit),
+                hasNextPage: (parseInt(page) * parseInt(limit)) < totalCount,
+                hasPrevPage: parseInt(page) > 1
+            }
         });
     } catch (error) {
         console.error('Error in getUserBetHistory:', error);
@@ -254,7 +302,9 @@ const getUserBetHistory = async (req, res) => {
 const getUserDepositHistory = async (req, res) => {
     try {
         const { user_id } = req.params;
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, page = 1, limit = 50 } = req.query;
+        
+        const offset = (page - 1) * limit;
 
         // Validate user exists
         const user = await User.findByPk(user_id);
@@ -275,13 +325,23 @@ const getUserDepositHistory = async (req, res) => {
             };
         }
 
-        // Get deposit history
+        // Get total count for pagination
+        const totalCount = await WalletRecharge.count({
+            where: {
+                user_id,
+                ...dateFilter
+            }
+        });
+
+        // Get deposit history with pagination
         const deposits = await WalletRecharge.findAll({
             where: {
                 user_id,
                 ...dateFilter
             },
-            order: [['created_at', 'DESC']]
+            order: [['created_at', 'DESC']],
+            limit: parseInt(limit),
+            offset: parseInt(offset)
         });
 
         // Format deposits
@@ -295,7 +355,15 @@ const getUserDepositHistory = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: formattedDeposits
+            data: formattedDeposits,
+            pagination: {
+                total: totalCount,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages: Math.ceil(totalCount / limit),
+                hasNextPage: (parseInt(page) * parseInt(limit)) < totalCount,
+                hasPrevPage: parseInt(page) > 1
+            }
         });
     } catch (error) {
         console.error('Error in getUserDepositHistory:', error);
@@ -309,7 +377,9 @@ const getUserDepositHistory = async (req, res) => {
 const getUserWithdrawalHistory = async (req, res) => {
     try {
         const { user_id } = req.params;
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, page = 1, limit = 50 } = req.query;
+        
+        const offset = (page - 1) * limit;
 
         // Validate user exists
         const user = await User.findByPk(user_id);
@@ -330,13 +400,23 @@ const getUserWithdrawalHistory = async (req, res) => {
             };
         }
 
-        // Get withdrawal history
+        // Get total count for pagination
+        const totalCount = await WalletWithdrawal.count({
+            where: {
+                user_id,
+                ...dateFilter
+            }
+        });
+
+        // Get withdrawal history with pagination
         const withdrawals = await WalletWithdrawal.findAll({
             where: {
                 user_id,
                 ...dateFilter
             },
-            order: [['created_at', 'DESC']]
+            order: [['created_at', 'DESC']],
+            limit: parseInt(limit),
+            offset: parseInt(offset)
         });
 
         // Format withdrawals
@@ -363,7 +443,15 @@ const getUserWithdrawalHistory = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: formattedWithdrawals
+            data: formattedWithdrawals,
+            pagination: {
+                total: totalCount,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages: Math.ceil(totalCount / limit),
+                hasNextPage: (parseInt(page) * parseInt(limit)) < totalCount,
+                hasPrevPage: parseInt(page) > 1
+            }
         });
     } catch (error) {
         console.error('Error in getUserWithdrawalHistory:', error);
@@ -448,7 +536,9 @@ const getUserBankDetails = async (req, res) => {
 const getUserTransactionHistory = async (req, res) => {
     try {
         const { user_id } = req.params;
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, page = 1, limit = 50 } = req.query;
+        
+        const offset = (page - 1) * limit;
 
         // Validate user exists
         const user = await User.findByPk(user_id);
@@ -469,21 +559,23 @@ const getUserTransactionHistory = async (req, res) => {
             };
         }
 
-        // Get all transactions - using raw query to avoid model import issues
-        const transactions = await User.sequelize.query(`
-            SELECT id, created_at, type, amount, status, description, reference_id
-            FROM transactions 
-            WHERE user_id = :userId
-            ${start_date ? 'AND created_at >= :startDate' : ''}
-            ${end_date ? 'AND created_at <= :endDate' : ''}
-            ORDER BY created_at DESC
-        `, {
-            replacements: { 
-                userId: user_id,
-                startDate: start_date,
-                endDate: end_date
+        // Get total count for pagination
+        const totalCount = await Transaction.count({
+            where: {
+                user_id,
+                ...dateFilter
+            }
+        });
+
+        // Get transaction history with pagination
+        const transactions = await Transaction.findAll({
+            where: {
+                user_id,
+                ...dateFilter
             },
-            type: User.sequelize.QueryTypes.SELECT
+            order: [['created_at', 'DESC']],
+            limit: parseInt(limit),
+            offset: parseInt(offset)
         });
 
         // Format transactions
@@ -510,7 +602,15 @@ const getUserTransactionHistory = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            data: formattedTransactions
+            data: formattedTransactions,
+            pagination: {
+                total: totalCount,
+                page: parseInt(page),
+                limit: parseInt(limit),
+                totalPages: Math.ceil(totalCount / limit),
+                hasNextPage: (parseInt(page) * parseInt(limit)) < totalCount,
+                hasPrevPage: parseInt(page) > 1
+            }
         });
     } catch (error) {
         console.error('Error in getUserTransactionHistory:', error);

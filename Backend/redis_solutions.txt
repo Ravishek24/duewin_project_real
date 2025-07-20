@@ -1,0 +1,638 @@
+Looking at your Redis setup, you have **THREE different Redis configurations** which is causing the connection leak issue! Here's the analysis:
+
+## 🚨 **Current Issues:**
+
+### **1. Multiple Redis Configurations:**
+You have **3 separate Redis setups**:
+- `redis.js` (ioredis with TLS)
+- `redisConfig.js` (redis client with TLS) 
+- `redisConnectionManager.js` (ioredis connection manager)
+
+This creates **confusion and connection multiplication**.
+
+### **2. Connection Leak Sources:**
+```javascript
+// In redisConnectionManager.js - PROBLEMATIC:
+getConnection(purpose = 'default', options = {}) {
+    // Creates NEW connection for EVERY unique options object
+    const connectionKey = `${purpose}_${JSON.stringify(options)}`;
+    
+    // This can create infinite connections if options vary slightly!
+    if (!this.connections.has(connectionKey)) {
+        const connection = this.createConnection(purpose, options);
+    }
+}
+```
+
+### **3. Usage Problems:**
+Your services are likely using **different Redis configs**:
+- WebSocket: Uses `redisConfig.js` 
+- Scheduler: Uses `redis.js`
+- New code: Uses `redisConnectionManager.js`
+
+## 🎯 **Recommended Solution:**
+
+// Backend/config/unifiedRedisManager.js
+const Redis = require('ioredis');
+require('dotenv').config();
+
+/**
+ * UNIFIED Redis Manager - Single source of truth for all Redis connections
+ * Replaces redis.js, redisConfig.js, and redisConnectionManager.js
+ */
+class UnifiedRedisManager {
+    constructor() {
+        this.connections = new Map();
+        this.isInitialized = false;
+        this.baseConfig = this.createBaseConfig();
+        
+        // Fixed connection purposes - prevent dynamic connection creation
+        this.connectionPurposes = [
+            'main',           // Primary operations
+            'publisher',      // Publishing events
+            'subscriber',     // Subscribing to events
+            'websocket',      // WebSocket operations
+            'scheduler'       // Scheduler operations
+        ];
+        
+        // Stats tracking
+        this.stats = {
+            created: 0,
+            active: 0,
+            errors: 0
+        };
+        
+        this.setupGracefulShutdown();
+    }
+
+    /**
+     * Create base Redis configuration
+     */
+    createBaseConfig() {
+        return {
+            host: process.env.REDIS_HOST || 'localhost',
+            port: process.env.REDIS_PORT || 6379,
+            password: process.env.REDIS_PASSWORD || null,
+            db: process.env.REDIS_DB || 0,
+            
+            // TLS configuration for ElastiCache
+            tls: {
+                rejectUnauthorized: false,
+                requestCert: true,
+                agent: false
+            },
+            
+            // Connection optimization
+            family: 4,
+            keepAlive: 30000,
+            connectTimeout: 15000,
+            commandTimeout: 10000,
+            lazyConnect: false,
+            
+            // Critical: Prevent connection leaks
+            enableOfflineQueue: false,
+            maxRetriesPerRequest: 3,
+            
+            // Retry strategy
+            retryStrategy: (times) => {
+                const delay = Math.min(times * 50, 2000);
+                return delay;
+            }
+        };
+    }
+
+    /**
+     * Initialize all predefined connections
+     */
+    async initialize() {
+        if (this.isInitialized) {
+            console.log('⚠️ Redis manager already initialized');
+            return;
+        }
+
+        console.log('🔄 Initializing Unified Redis Manager...');
+        
+        // Create only predefined connections
+        for (const purpose of this.connectionPurposes) {
+            try {
+                await this.createConnection(purpose);
+                console.log(`✅ Created Redis connection: ${purpose}`);
+            } catch (error) {
+                console.error(`❌ Failed to create ${purpose} connection:`, error.message);
+                throw error;
+            }
+        }
+        
+        this.isInitialized = true;
+        console.log(`✅ Unified Redis Manager initialized with ${this.connections.size} connections`);
+        
+        // Start monitoring
+        this.startMonitoring();
+        
+        // Test connections
+        await this.healthCheck();
+    }
+
+    /**
+     * Create a single connection for a specific purpose
+     */
+    async createConnection(purpose) {
+        if (this.connections.has(purpose)) {
+            console.warn(`⚠️ Connection ${purpose} already exists`);
+            return this.connections.get(purpose);
+        }
+
+        const connection = new Redis(this.baseConfig);
+        
+        // Add event handlers
+        connection.on('connect', () => {
+            console.log(`🔌 Redis connected: ${purpose}`);
+        });
+
+        connection.on('ready', () => {
+            console.log(`✅ Redis ready: ${purpose}`);
+            this.stats.active++;
+        });
+
+        connection.on('error', (error) => {
+            console.error(`❌ Redis error (${purpose}):`, error.message);
+            this.stats.errors++;
+            
+            // Critical: Don't create new connections on error
+            if (error.message.includes('max number of clients')) {
+                console.error(`🚨 Redis connection limit reached for ${purpose}!`);
+            }
+        });
+
+        connection.on('close', () => {
+            console.log(`🔌 Redis closed: ${purpose}`);
+            this.stats.active--;
+        });
+
+        // Wait for connection to be ready
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error(`Connection timeout for ${purpose}`));
+            }, 20000);
+
+            if (connection.status === 'ready') {
+                clearTimeout(timeout);
+                resolve();
+                return;
+            }
+
+            connection.once('ready', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+
+            connection.once('error', (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            });
+        });
+
+        this.connections.set(purpose, connection);
+        this.stats.created++;
+        
+        return connection;
+    }
+
+    /**
+     * Get connection by purpose - ONLY predefined purposes allowed
+     */
+    getConnection(purpose = 'main') {
+        if (!this.connectionPurposes.includes(purpose)) {
+            console.error(`❌ Invalid connection purpose: ${purpose}`);
+            console.error(`📋 Valid purposes: ${this.connectionPurposes.join(', ')}`);
+            throw new Error(`Invalid connection purpose: ${purpose}`);
+        }
+
+        if (!this.isInitialized) {
+            throw new Error('Redis manager not initialized. Call initialize() first.');
+        }
+
+        const connection = this.connections.get(purpose);
+        if (!connection) {
+            throw new Error(`Connection ${purpose} not found`);
+        }
+
+        return connection;
+    }
+
+    /**
+     * Get helper methods for common operations (backward compatibility)
+     */
+    getHelper() {
+        const mainConnection = this.getConnection('main');
+        
+        return {
+            async set(key, value, option = null, ttl = null, nx = null) {
+                try {
+                    const stringValue = typeof value === 'object' ? JSON.stringify(value) : value;
+                    
+                    if (option === 'EX' && nx === 'NX') {
+                        const ttlSeconds = Math.floor(Number(ttl));
+                        const result = await mainConnection.set(key, stringValue, 'EX', ttlSeconds, 'NX');
+                        return result === 'OK';
+                    } else if (ttl) {
+                        const ttlSeconds = Math.floor(Number(ttl));
+                        await mainConnection.setex(key, ttlSeconds, stringValue);
+                        return true;
+                    } else {
+                        await mainConnection.set(key, stringValue);
+                        return true;
+                    }
+                } catch (error) {
+                    console.error('Redis set error:', error);
+                    throw error;
+                }
+            },
+
+            async get(key) {
+                try {
+                    const value = await mainConnection.get(key);
+                    if (!value) return null;
+                    try {
+                        return JSON.parse(value);
+                    } catch {
+                        return value;
+                    }
+                } catch (error) {
+                    console.error('Redis get error:', error);
+                    throw error;
+                }
+            },
+
+            async del(key) {
+                try {
+                    return await mainConnection.del(key);
+                } catch (error) {
+                    console.error('Redis del error:', error);
+                    throw error;
+                }
+            },
+
+            async exists(key) {
+                try {
+                    const result = await mainConnection.exists(key);
+                    return result === 1;
+                } catch (error) {
+                    console.error('Redis exists error:', error);
+                    throw error;
+                }
+            },
+
+            async expire(key, ttl) {
+                try {
+                    return await mainConnection.expire(key, ttl);
+                } catch (error) {
+                    console.error('Redis expire error:', error);
+                    throw error;
+                }
+            },
+
+            async hset(key, field, value) {
+                try {
+                    const stringValue = typeof value === 'object' ? JSON.stringify(value) : value;
+                    return await mainConnection.hset(key, field, stringValue);
+                } catch (error) {
+                    console.error('Redis hset error:', error);
+                    throw error;
+                }
+            },
+
+            async hget(key, field) {
+                try {
+                    const value = await mainConnection.hget(key, field);
+                    if (!value) return null;
+                    try {
+                        return JSON.parse(value);
+                    } catch {
+                        return value;
+                    }
+                } catch (error) {
+                    console.error('Redis hget error:', error);
+                    throw error;
+                }
+            },
+
+            async hgetall(key) {
+                try {
+                    return await mainConnection.hgetall(key);
+                } catch (error) {
+                    console.error('Redis hgetall error:', error);
+                    throw error;
+                }
+            },
+
+            // Direct access to main connection
+            getClient() {
+                return mainConnection;
+            }
+        };
+    }
+
+    /**
+     * Health check all connections
+     */
+    async healthCheck() {
+        console.log('🔍 Redis health check...');
+        
+        const results = [];
+        for (const [purpose, connection] of this.connections) {
+            try {
+                const start = Date.now();
+                await connection.ping();
+                const latency = Date.now() - start;
+                
+                results.push({
+                    purpose,
+                    status: 'healthy',
+                    latency: `${latency}ms`
+                });
+            } catch (error) {
+                results.push({
+                    purpose,
+                    status: 'unhealthy',
+                    error: error.message
+                });
+            }
+        }
+        
+        console.log('📊 Redis Health Results:', results);
+        return results;
+    }
+
+    /**
+     * Start connection monitoring
+     */
+    startMonitoring() {
+        setInterval(async () => {
+            try {
+                const mainConnection = this.getConnection('main');
+                const info = await mainConnection.info('clients');
+                const connectedClients = info.match(/connected_clients:(\d+)/)?.[1] || '0';
+                
+                console.log(`📊 Redis Monitor - Server: ${connectedClients} clients, Manager: ${this.stats.active} active`);
+                
+                // Alert on high connections
+                if (parseInt(connectedClients) > 100) {
+                    console.warn(`🚨 HIGH Redis connections: ${connectedClients}`);
+                }
+                
+                // Log our stats
+                console.log(`📈 Manager Stats:`, this.stats);
+                
+            } catch (error) {
+                console.error('❌ Redis monitoring failed:', error.message);
+            }
+        }, 60000); // Every minute
+    }
+
+    /**
+     * Get statistics
+     */
+    getStats() {
+        return {
+            ...this.stats,
+            initialized: this.isInitialized,
+            connectionCount: this.connections.size,
+            purposes: Array.from(this.connections.keys())
+        };
+    }
+
+    /**
+     * Setup graceful shutdown
+     */
+    setupGracefulShutdown() {
+        const cleanup = async (signal) => {
+            console.log(`🛑 Received ${signal}, shutting down Redis connections...`);
+            
+            const promises = [];
+            for (const [purpose, connection] of this.connections) {
+                console.log(`🔌 Closing connection: ${purpose}`);
+                promises.push(connection.quit().catch(err => {
+                    console.error(`❌ Error closing ${purpose}:`, err.message);
+                }));
+            }
+            
+            try {
+                await Promise.allSettled(promises);
+                console.log('✅ All Redis connections closed gracefully');
+            } catch (error) {
+                console.error('❌ Error during Redis cleanup:', error.message);
+            }
+            
+            process.exit(0);
+        };
+
+        process.on('SIGINT', () => cleanup('SIGINT'));
+        process.on('SIGTERM', () => cleanup('SIGTERM'));
+        process.on('SIGQUIT', () => cleanup('SIGQUIT'));
+    }
+
+    /**
+     * Manual cleanup (for testing/restart)
+     */
+    async cleanup() {
+        console.log('🧹 Manual Redis cleanup...');
+        
+        for (const [purpose, connection] of this.connections) {
+            try {
+                await connection.quit();
+                console.log(`✅ Closed: ${purpose}`);
+            } catch (error) {
+                console.error(`❌ Error closing ${purpose}:`, error.message);
+            }
+        }
+        
+        this.connections.clear();
+        this.isInitialized = false;
+        this.stats = { created: 0, active: 0, errors: 0 };
+        
+        console.log('✅ Redis cleanup completed');
+    }
+}
+
+// Create and export singleton
+const unifiedRedisManager = new UnifiedRedisManager();
+
+module.exports = unifiedRedisManager;
+🔧 **Migration Plan:**
+
+### **Step 1: Replace All Redis Configs**
+```javascript
+// In your main app.js or server.js:
+const unifiedRedisManager = require('./config/unifiedRedisManager');
+
+// Initialize at startup (BEFORE starting services)
+await unifiedRedisManager.initialize();
+```
+
+### **Step 2: Update Your Services**
+```javascript
+// In websocketService.js:
+const unifiedRedisManager = require('../config/unifiedRedisManager');
+
+// Replace:
+// const { redis } = require('../config/redisConfig');
+// With:
+const redis = unifiedRedisManager.getConnection('websocket');
+const redisHelper = unifiedRedisManager.getHelper();
+
+// In gameScheduler.js:
+const unifiedRedisManager = require('../config/unifiedRedisManager');
+
+// Replace:
+// const { redis } = require('../config/redisConfig');
+// With:
+const redis = unifiedRedisManager.getConnection('scheduler');
+const redisPublisher = unifiedRedisManager.getConnection('publisher');
+```
+
+### **Step 3: Clean Up Old Files**
+```bash
+# Backup first:
+mv Backend/config/redis.js Backend/config/redis.js.backup
+mv Backend/config/redisConfig.js Backend/config/redisConfig.js.backup  
+mv Backend/config/redisConnectionManager.js Backend/config/redisConnectionManager.js.backup
+```
+
+## 🎯 **Key Benefits:**
+
+1. **Fixed Connection Count**: Maximum 5 connections total
+2. **No Dynamic Creation**: Prevents connection leaks
+3. **Centralized Management**: Single source of truth
+4. **Backward Compatible**: Same helper methods
+5. **Proper Monitoring**: Built-in connection tracking
+6. **Graceful Shutdown**: Prevents orphaned connections
+
+## ⚠️ **Critical Points:**
+
+1. **Initialize ONCE** at startup before any Redis operations
+2. **Use predefined purposes only** - no dynamic connection creation
+3. **Replace ALL existing Redis imports** with unified manager
+4. **Test thoroughly** before production deployment
+
+This will solve your connection leak issue permanently!
+
+
+Looking at the explanation in your document, there are **several inaccuracies and misunderstandings** about how Redis connection management actually works. Let me clarify:
+
+## ❌ **Major Issues with the Document:**
+
+### **1. Incorrect Understanding of Connection Reuse**
+```javascript
+// The document claims this reuses connections - THIS IS WRONG:
+const redis1 = redisManager.getConnection('main');     // Creates once
+const redis2 = redisManager.getConnection('main');     // Claims "reuses same connection"
+```
+
+**Reality:** Each call to `getConnection()` returns the **same Redis instance**, but this is **NOT connection pooling**. It's just returning a reference to the same object. The underlying TCP connection to Redis is still **one connection per Redis instance**.
+
+### **2. Fundamental Misunderstanding of Redis Connections**
+```javascript
+// Document shows:
+Redis Connections:
+├── redis.js singleton (1 connection) ✅
+├── redisConfig.js singleton (1 connection) ✅
+├── Connection Manager (4-6 connections) ✅
+
+// But this means you have 6-8 total connections, not "managed" connections
+```
+
+**Reality:** You're **adding MORE connections**, not managing existing ones. Your `redisConnectionManager.js` creates **additional connections** on top of your existing ones.
+
+### **3. Wrong Solution for Connection Leaks**
+
+**Document claims:**
+> "Test scripts no longer leak connections"
+
+**Reality:** The connection manager doesn't fix test script leaks. Test scripts leak because they:
+1. Create Redis connections
+2. Exit without calling `redis.quit()`
+3. Leave connections open
+
+The manager doesn't solve this unless test scripts are rewritten to use it.
+
+### **4. Incorrect Architecture Diagram**
+
+The document shows a "non-disruptive" approach, but in reality:
+
+```javascript
+// You currently have:
+1. redis.js (ioredis) - 1 connection
+2. redisConfig.js (node-redis) - 1 connection  
+3. websocketService - creates subscriber - 1 connection
+4. redisConnectionManager - creates 4-6 more connections
+
+Total: 7-9 connections (INCREASED, not reduced)
+```
+
+## ✅ **What's Actually Happening:**
+
+### **Your Real Problem:**
+```javascript
+// In your current setup:
+const redisHelper = require('./config/redis');           // 1 connection
+const { redis } = require('./config/redisConfig');       // 1 connection
+const subscriber = new Redis(config);                    // 1 connection (WebSocket)
+const redisManager = require('./config/redisConnectionManager'); // +4-6 more
+
+// Total: 7-10 connections per instance
+// With scheduler + WebSocket instances: 14-20 connections
+```
+
+### **Why You Hit Connection Limits:**
+1. **Multiple Redis configurations** (3 different setups)
+2. **Each service uses different configs**
+3. **No connection sharing between services**
+4. **Test scripts create additional connections**
+5. **Connection manager adds more connections**
+
+## 🎯 **Correct Solution:**
+
+You need **ONE unified Redis manager** that **replaces** all existing configurations:
+
+```javascript
+// Instead of 3 separate configs + manager:
+// ❌ redis.js (1 conn) + redisConfig.js (1 conn) + manager (4 conn) = 6 connections
+
+// Use single unified manager:
+// ✅ unifiedRedisManager (5 predefined connections) = 5 connections total
+```
+
+## 📋 **Action Plan:**
+
+### **1. Immediate (Fix Connection Leak):**
+```bash
+# Stop creating more connections
+# Use my unified manager approach instead
+```
+
+### **2. Replace, Don't Add:**
+```javascript
+// Replace all existing Redis imports with unified manager:
+// const redis = require('./config/redis'); // ❌ Remove
+// const { redis } = require('./config/redisConfig'); // ❌ Remove
+const unifiedRedis = require('./config/unifiedRedisManager'); // ✅ Use this
+```
+
+### **3. Fix Test Scripts:**
+```javascript
+// In test scripts:
+process.on('beforeExit', async () => {
+    await redis.quit(); // Always cleanup
+});
+```
+
+## 🚨 **Bottom Line:**
+
+The document's approach is **fundamentally flawed** because it:
+- **Adds connections** instead of reducing them
+- **Misunderstands** how Redis connection pooling works
+- **Doesn't solve** the actual connection leak sources
+- **Creates more complexity** instead of simplifying
+
+**You need to replace your multiple Redis configs with a single unified manager, not add another layer on top.**
