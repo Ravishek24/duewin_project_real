@@ -17,7 +17,7 @@ async function testUnifiedRedisServices() {
         
         // Test 1: Basic Helper Operations (used by most services)
         console.log('\n2️⃣ Testing Helper Operations (redisHelper pattern)...');
-        const helper = unifiedRedis.getHelper();
+        const helper = redisHelper;
         
         // Test set/get with TTL
         await helper.set('test_service_key', { data: 'test_value', timestamp: Date.now() }, null, 60);
@@ -48,8 +48,8 @@ async function testUnifiedRedisServices() {
         
         // Test 2: Direct Redis Operations (used by some services)
         console.log('\n3️⃣ Testing Direct Redis Operations...');
-        const mainRedis = unifiedRedis.getConnection('main');
-        const websocketRedis = unifiedRedis.getConnection('websocket');
+        const mainRedis = redisHelper;
+        const websocketRedis = redisHelper;
         
         // Test direct set/get
         await mainRedis.set('direct_test_key', 'direct_value', 'EX', 60);
@@ -228,4 +228,5 @@ if (require.main === module) {
         });
 }
 
-module.exports = { testUnifiedRedisServices }; 
+module.exports = {
+    setRedisHelper, testUnifiedRedisServices }; 

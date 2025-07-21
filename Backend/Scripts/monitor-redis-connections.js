@@ -1,4 +1,8 @@
-const redisManager = require('../config/redisConnectionManager');
+const unifiedRedis = require('../config/unifiedRedisManager');
+function getRedisHelper() { return unifiedRedis.getHelper(); }
+
+
+
 
 /**
  * Redis Connection Monitor
@@ -84,7 +88,7 @@ class RedisConnectionMonitor {
             this.stats.checks++;
             
             // Get Redis server info
-            const mainConnection = redisManager.getConnection('monitoring');
+            const mainConnection = getRedisHelper().getConnection('monitoring');
             const info = await mainConnection.info('clients');
             
             // Parse connection info
@@ -93,7 +97,7 @@ class RedisConnectionMonitor {
             const blockedClients = parseInt(info.match(/blocked_clients:(\d+)/)?.[1] || '0');
             
             // Get manager stats
-            const managerStats = redisManager.getStats();
+            const managerStats = getRedisHelper().getStats();
             
             // Update stats
             this.stats.connectionHistory.push({
@@ -185,7 +189,7 @@ class RedisConnectionMonitor {
      */
     async showDetailedConnections() {
         try {
-            const mainConnection = redisManager.getConnection('monitoring');
+            const mainConnection = getRedisHelper().getConnection('monitoring');
             const clientList = await mainConnection.client('list');
             
             console.log('\n🔍 Detailed Connection Analysis:');

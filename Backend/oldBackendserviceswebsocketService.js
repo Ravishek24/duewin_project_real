@@ -1,11 +1,15 @@
+function getRedisClient() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return getRedisClient();
+}
 // Backend/services/websocketService.js - ENHANCED: Added bet placement with validation
 
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../config/constants');
-const redisHelper = require('../config/redis');
-const redisClient = redisHelper.getClient();
-const { redis: pubsubRedis, isConnected } = require('../config/redisConfig');
+
+
+
 const { logger } = require('../utils/logger');
 const moment = require('moment-timezone');
 const { getSequelizeInstance } = require('../config/db');
@@ -1753,7 +1757,7 @@ const sendCurrentPeriodFromRedis = async (socket, gameType, duration, timeline =
 const setupRedisSubscriptions = () => {
     try {
         const unifiedRedis = require('../config/unifiedRedisManager');
-const subscriberRedis = unifiedRedis.getConnection('websocket');
+const subscriberRedis = redisHelper;
         
         // Create separate Redis connection for subscriptions
         const subscriber = subscriberRedis.duplicate();
@@ -2035,6 +2039,7 @@ const mapK3Bet = (betData) => {
 
 // Export WebSocket service - DURATION-BASED ROOMS WITH BET PLACEMENT
 module.exports = {
+    setRedisHelper,
     initializeWebSocket,
     
     startGameTickSystem: () => {

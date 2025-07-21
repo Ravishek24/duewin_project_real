@@ -120,6 +120,13 @@ class WalletWithdrawal extends Model {
                 as: 'bankAccount'
             });
         }
+
+        if (models.WithdrawalAdmin) {
+            this.hasOne(models.WithdrawalAdmin, {
+                foreignKey: 'withdrawal_id',
+                as: 'WithdrawalAdmin'
+            });
+        }
     }
 }
 

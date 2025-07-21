@@ -1,4 +1,4 @@
-const redisClient = require('../config/redisConfig').redis;
+
 const { sequelize } = require('../config/db');
 const User = require('../models/User');
 const BetRecordTrxWix = require('../models/BetRecordTrxWix');
@@ -180,7 +180,7 @@ const storeResult = async (duration, periodId, result) => {
         
         // Store result in Redis for history
         const historyKey = `trx_wix:${durationKey}:history`;
-        await redisClient.lpush(historyKey, JSON.stringify({
+        await redisHelper.lpush(historyKey, JSON.stringify({
             periodId,
             result: result.result,
             verification: {
@@ -191,7 +191,7 @@ const storeResult = async (duration, periodId, result) => {
         }));
         
         // Keep only last 100 results in history
-        await redisClient.ltrim(historyKey, 0, 99);
+        await redisHelper.ltrim(historyKey, 0, 99);
         
     } catch (error) {
         logger.error('Error storing result:', error);

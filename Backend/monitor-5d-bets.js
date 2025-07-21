@@ -1,13 +1,13 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const { getSequelizeInstance } = require('./config/db');
 const moment = require('moment-timezone');
 
 // Initialize Redis client
-const redisClient = redis.createClient({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || null
-});
+const redisClient = 
 
 redisClient.on('error', (err) => console.error('Redis Client Error:', err));
 redisClient.on('connect', () => console.log('✅ Redis connected for 5D monitoring'));
@@ -480,3 +480,4 @@ process.on('SIGINT', async () => {
 
 // Start monitoring
 main(); 
+module.exports = { setRedisHelper };

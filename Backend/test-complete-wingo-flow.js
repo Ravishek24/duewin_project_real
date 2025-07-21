@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 // Complete Wingo Bet Processing Flow Test
 // Tests every single function in the real bet processing pipeline
 
@@ -7,15 +11,10 @@ const moment = require('moment-timezone');
 // Import all required modules
 const { sequelize } = require('./config/db');
 const gameLogicService = require('./services/gameLogicService');
-const Redis = require('ioredis');
+
 
 // Redis client
-const redisClient = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || '',
-    db: process.env.REDIS_DB || 0
-});
+const redisClient = 
 
 // Test configuration
 const TEST_CONFIG = {

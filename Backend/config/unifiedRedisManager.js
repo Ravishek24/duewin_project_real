@@ -341,6 +341,15 @@ class UnifiedRedisManager {
                 }
             },
 
+            async hincrby(key, field, increment = 1) {
+                try {
+                    return await mainConnection.hincrby(key, field, increment);
+                } catch (error) {
+                    console.error('Redis hincrby error:', error);
+                    throw error;
+                }
+            },
+
             // Direct access to main connection (backward compatible)
             getClient() {
                 return mainConnection;

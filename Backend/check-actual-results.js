@@ -1,14 +1,13 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { sequelize } = require('./config/db');
 const { DataTypes } = require('sequelize');
-const Redis = require('ioredis');
+
 
 // Redis configuration
-const redisClient = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || '',
-    db: process.env.REDIS_DB || 0
-});
+const redisClient = 
 
 // Define models
 const WingoResult = sequelize.define('WingoResult', {
@@ -357,3 +356,4 @@ async function checkActualResults() {
 }
 
 checkActualResults(); 
+module.exports = { setRedisHelper };

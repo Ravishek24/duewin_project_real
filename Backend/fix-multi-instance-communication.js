@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 #!/usr/bin/env node
 
 /**
@@ -5,7 +9,7 @@
  * This script helps diagnose and fix communication issues between scheduler and WebSocket instances
  */
 
-const Redis = require('ioredis');
+
 require('dotenv').config();
 
 console.log('🔧 Multi-Instance Communication Fix Script');
@@ -42,7 +46,7 @@ let tempRedis = null;
 const createTestConnection = () => {
     if (!tempRedis) {
         console.log('🔄 Creating test Redis connection...');
-        tempRedis = new Redis(redisConfig);
+        tempRedis = 
         
         tempRedis.on('connect', () => {
             console.log('✅ Test Redis client connected');
@@ -445,3 +449,4 @@ const main = async () => {
 
 // Run the script
 main(); 
+module.exports = { setRedisHelper };

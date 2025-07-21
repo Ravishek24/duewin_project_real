@@ -1,6 +1,10 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 // scripts/test-cache-only.js
 const { cacheService } = require('../services/cacheService');
-const { redis } = require('../config/redisConfig');
+
 
 const HOT_GAMES_CACHE_KEY = 'seamless:hot:games';
 

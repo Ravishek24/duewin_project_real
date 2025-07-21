@@ -1,5 +1,5 @@
 // Backend/services/periodService.js - FIXED VERSION
-const redisClient = require('../config/redisConfig').redis;
+
 const { sequelize } = require('../config/db');
 const { Op } = require('sequelize');
 const moment = require('moment-timezone');
@@ -86,7 +86,7 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
         const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
         
         // Get current sequence number (atomic increment)
-        let sequenceNumber = await redisClient.incr(sequenceKey);
+        let sequenceNumber = await redisHelper.incr(sequenceKey);
         
         // Set expiry for sequence key (expires at 2 AM next day)
         const tomorrow2AM = moment.tz('Asia/Kolkata')
@@ -96,7 +96,7 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
             .second(0)
             .millisecond(0);
         const expirySeconds = Math.max(3600, tomorrow2AM.diff(istMoment, 'seconds'));
-        await redisClient.expire(sequenceKey, expirySeconds);
+        await redisHelper.expire(sequenceKey, expirySeconds);
         
         // Convert sequence to 0-based (Redis INCR starts from 1)
         sequenceNumber = sequenceNumber - 1;
@@ -129,7 +129,7 @@ const generatePeriodId = async (gameType, duration, timestamp) => {
 const getCurrentSequence = async (gameType, duration, dateStr) => {
     try {
         const sequenceKey = `${gameType}:${duration}:daily_sequence:${dateStr}`;
-        const currentSequence = await redisClient.get(sequenceKey);
+        const currentSequence = await redisHelper.get(sequenceKey);
         return parseInt(currentSequence || '0', 10);
     } catch (error) {
         logger.error('Error getting current sequence:', {
@@ -244,7 +244,7 @@ const getPeriodStatus = async (gameType, duration, periodId) => {
                             duration === 300 ? '5m' : '10m';
         
         const resultKey = `${gameType}:${durationKey}:${periodId}:result`;
-        const resultString = await redisClient.get(resultKey);
+        const resultString = await redisHelper.get(resultKey);
         const result = resultString ? JSON.parse(resultString) : null;
         
         return {
@@ -319,21 +319,21 @@ const initializePeriod = async (gameType, duration, periodId) => {
         };
         
         // Store period data in Redis
-        await redisClient.set(periodKey, JSON.stringify(periodData));
+        await redisHelper.set(periodKey, JSON.stringify(periodData));
         
         // Initialize empty bets array
-        await redisClient.set(betsKey, JSON.stringify([]));
+        await redisHelper.set(betsKey, JSON.stringify([]));
         
         // Set expiry for period keys (24 hours)
         const EXPIRY_SECONDS = 24 * 60 * 60;
-        await redisClient.expire(periodKey, EXPIRY_SECONDS);
-        await redisClient.expire(betsKey, EXPIRY_SECONDS);
-        await redisClient.expire(resultKey, EXPIRY_SECONDS);
+        await redisHelper.expire(periodKey, EXPIRY_SECONDS);
+        await redisHelper.expire(betsKey, EXPIRY_SECONDS);
+        await redisHelper.expire(resultKey, EXPIRY_SECONDS);
         
         // Store this as the current period for this game/duration
         const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
-        await redisClient.set(currentPeriodKey, periodId);
-        await redisClient.expire(currentPeriodKey, EXPIRY_SECONDS);
+        await redisHelper.set(currentPeriodKey, periodId);
+        await redisHelper.expire(currentPeriodKey, EXPIRY_SECONDS);
         
         console.log('Period initialized:', {
             gameType,
@@ -676,12 +676,12 @@ const generateNextPeriodId = async (currentPeriodId, gameType, duration) => {
                            duration === 300 ? '5m' : '10m';
         
         const sequenceKey = `${gameType}:${durationKey}:daily_sequence:${dateStr}`;
-        await redisClient.set(sequenceKey, nextSequence + 1); // +1 because Redis INCR will be used next
+        await redisHelper.set(sequenceKey, nextSequence + 1); // +1 because Redis INCR will be used next
         
         // Update current period cache
         const currentPeriodKey = `${gameType}:${durationKey}:current_period`;
-        await redisClient.set(currentPeriodKey, nextPeriodId);
-        await redisClient.expire(currentPeriodKey, 3600);
+        await redisHelper.set(currentPeriodKey, nextPeriodId);
+        await redisHelper.expire(currentPeriodKey, 3600);
         
         // Initialize the new period
         await initializePeriod(gameType, duration, nextPeriodId);

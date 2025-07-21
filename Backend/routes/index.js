@@ -242,6 +242,37 @@ router.get('/debug/seamless-test', auth, (req, res) => {
   });
 });
 
+// Debug route to list all available routes
+router.get('/debug/routes', (req, res) => {
+  const routes = [];
+  router.stack.forEach((middleware) => {
+    if (middleware.route) {
+      // Routes registered directly on the router
+      routes.push({
+        path: middleware.route.path,
+        methods: Object.keys(middleware.route.methods)
+      });
+    } else if (middleware.name === 'router') {
+      // Router middleware
+      middleware.handle.stack.forEach((handler) => {
+        if (handler.route) {
+          routes.push({
+            path: handler.route.path,
+            methods: Object.keys(handler.route.methods)
+          });
+        }
+      });
+    }
+  });
+  res.json({
+    success: true,
+    message: 'Available routes',
+    routes: routes,
+    baseUrl: req.baseUrl,
+    originalUrl: req.originalUrl
+  });
+});
+
 // CATCH-ALL: 404 handler for unmatched routes
 router.use('*', (req, res) => {
   res.status(404).json({

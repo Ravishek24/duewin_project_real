@@ -1,7 +1,11 @@
 const axios = require('axios');
-const redisClient = require('../config/redisConfig').redis;
+
 const winston = require('winston');
 const path = require('path');
+const unifiedRedis = require('../config/unifiedRedisManager');
+function getRedisHelper() {
+  return unifiedRedis.getHelper();
+}
 
 // Configure Winston logger
 const logger = winston.createLogger({
@@ -202,7 +206,7 @@ const updateHashCollection = async (hashes, duration = null) => {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
         
         // Get current collection
-        let collection = await redisClient.get(collectionKey);
+        let collection = await getRedisHelper().get(collectionKey);
         collection = collection ? JSON.parse(collection) : {};
 
         // Initialize collection for all digits if not present
@@ -229,10 +233,10 @@ const updateHashCollection = async (hashes, duration = null) => {
         }
 
         // Store updated collection
-        await redisClient.set(collectionKey, JSON.stringify(collection));
+        await getRedisHelper().set(collectionKey, JSON.stringify(collection));
         
         // Set expiry time on the hash collection to prevent memory leaks (7 days)
-        await redisClient.expire(collectionKey, 7 * 24 * 60 * 60);
+        await getRedisHelper().expire(collectionKey, 7 * 24 * 60 * 60);
         
         // Log collection status
         const status = Object.keys(collection).map(digit => ({
@@ -264,7 +268,7 @@ const hasEnoughHashes = async (duration = null) => {
     try {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
         console.log(`DEBUG: hasEnoughHashes - getting key ${collectionKey}`);
-        const collection = await withTimeout(redisClient.get(collectionKey), 3000); // 3 second timeout
+        const collection = await withTimeout(getRedisHelper().get(collectionKey), 3000); // 3 second timeout
         console.log(`DEBUG: hasEnoughHashes - got value for ${collectionKey}:`, collection ? 'exists' : 'null');
         if (!collection) return false;
 
@@ -298,7 +302,7 @@ const hasEnoughHashes = async (duration = null) => {
 const getHashForResult = async (result, duration = null) => {
     try {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
-        const collection = await redisClient.get(collectionKey);
+        const collection = await getRedisHelper().get(collectionKey);
         if (!collection) {
             throw new Error(`No hash collection available for duration ${duration}`);
         }
@@ -310,7 +314,7 @@ const getHashForResult = async (result, duration = null) => {
 
         // Get and remove the first hash for this result
         const hash = parsed[result].shift();
-        await redisClient.set(collectionKey, JSON.stringify(parsed));
+        await getRedisHelper().set(collectionKey, JSON.stringify(parsed));
 
         return {
             hash,
@@ -327,6 +331,12 @@ const getHashForResult = async (result, duration = null) => {
  */
 const startHashCollection = async () => {
     try {
+        try {
+            await getRedisHelper().ping();
+        } catch (err) {
+            console.error('❌ Redis is not reachable:', err);
+            return;
+        }
         console.log('DEBUG: tronHashService.startHashCollection - start');
         const durations = getTrxWixDurations();
         for (const duration of durations) {

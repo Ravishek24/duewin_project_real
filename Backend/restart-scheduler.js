@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
@@ -21,8 +25,8 @@ async function restartScheduler() {
         
         // Clear any stuck locks
         console.log('🧹 [SCHEDULER_RESTART] Clearing stuck locks...');
-        const redis = require('redis');
-        const client = redis.createClient({ url: 'redis://localhost:6379' });
+        
+        const client = 
         await client.connect();
         
         const locks = await client.keys('scheduler_result_lock_*');
@@ -74,3 +78,4 @@ async function restartScheduler() {
 
 // Run the restart
 restartScheduler().catch(console.error); 
+module.exports = { setRedisHelper };

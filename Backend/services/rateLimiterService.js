@@ -1,4 +1,8 @@
-const { redis } = require('../config/redisConfig');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const securityConfig = require('../config/securityConfig');
 const { logger } = require('../utils/logger');
 
@@ -84,3 +88,4 @@ class RateLimiterService {
 }
 
 module.exports = new RateLimiterService(); 
+module.exports.setRedisHelper = setRedisHelper;

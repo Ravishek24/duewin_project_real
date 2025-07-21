@@ -1,10 +1,11 @@
-const Redis = require('ioredis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 // TODO: Replace with your actual Redis endpoint
-const redis = new Redis({
-  host: 'strike-game-6c6utip.serverless.apse1.cache.amazonaws.com',
-  port: 6379,
-  // Uncomment the next line if your Redis requires TLS (encryption in transit)
+const redis = 
   // tls: {}
 });
 
@@ -17,3 +18,4 @@ redis.ping()
     console.error('Redis connection error:', err);
     process.exit(1);
   }); 
+module.exports = { setRedisHelper };

@@ -721,7 +721,39 @@ const getUserTeamSummary = async (req, res) => {
 const getUserTeamLevelStats = async (req, res) => {
     try {
         const { user_id } = req.params;
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, period } = req.query;
+        
+        console.log(`📊 Getting team level stats for user ${user_id} with period:`, period, 'and dates:', { start_date, end_date });
+        
+        // Handle default periods
+        let finalStartDate = start_date;
+        let finalEndDate = end_date;
+        
+        if (period) {
+            const now = new Date();
+            
+            switch (period.toLowerCase()) {
+                case 'today':
+                    finalStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().slice(0, 19).replace('T', ' ');
+                    finalEndDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString().slice(0, 19).replace('T', ' ');
+                    break;
+                case 'yesterday':
+                    finalStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).toISOString().slice(0, 19).replace('T', ' ');
+                    finalEndDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().slice(0, 19).replace('T', ' ');
+                    break;
+                case 'all':
+                    finalStartDate = null;
+                    finalEndDate = null;
+                    break;
+                default:
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid period. Use "today", "yesterday", or "all"'
+                    });
+            }
+            
+            console.log(`📅 Period "${period}" resolved to:`, { finalStartDate, finalEndDate });
+        }
 
         // Get user's referral tree
         const userTree = await User.sequelize.query(`
@@ -755,12 +787,12 @@ const getUserTeamLevelStats = async (req, res) => {
                 if (userIds.length > 0) {
                     // Build date filter for transactions
                     let dateFilter = '';
-                    if (start_date && end_date) {
-                        dateFilter = `AND created_at BETWEEN '${start_date}' AND '${end_date}'`;
-                    } else if (start_date) {
-                        dateFilter = `AND created_at >= '${start_date}'`;
-                    } else if (end_date) {
-                        dateFilter = `AND created_at <= '${end_date}'`;
+                    if (finalStartDate && finalEndDate) {
+                        dateFilter = `AND created_at BETWEEN '${finalStartDate}' AND '${finalEndDate}'`;
+                    } else if (finalStartDate) {
+                        dateFilter = `AND created_at >= '${finalStartDate}'`;
+                    } else if (finalEndDate) {
+                        dateFilter = `AND created_at <= '${finalEndDate}'`;
                     }
 
                     // Get deposit statistics for this level
@@ -817,15 +849,72 @@ const getUserTeamLevelStats = async (req, res) => {
 const getUserRebateEarnings = async (req, res) => {
     try {
         const { user_id } = req.params;
+        const { start_date, end_date, period } = req.query;
+        
+        console.log(`💰 Getting rebate earnings for user ${user_id} with period:`, period, 'and dates:', { start_date, end_date });
+        
+        // Handle default periods
+        let finalStartDate = start_date;
+        let finalEndDate = end_date;
+        
+        if (period) {
+            const now = new Date();
+            
+            switch (period.toLowerCase()) {
+                case 'today':
+                    finalStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().slice(0, 19).replace('T', ' ');
+                    finalEndDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString().slice(0, 19).replace('T', ' ');
+                    break;
+                case 'yesterday':
+                    finalStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).toISOString().slice(0, 19).replace('T', ' ');
+                    finalEndDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().slice(0, 19).replace('T', ' ');
+                    break;
+                case 'all':
+                    finalStartDate = null;
+                    finalEndDate = null;
+                    break;
+                default:
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid period. Use "today", "yesterday", or "all"'
+                    });
+            }
+            
+            console.log(`📅 Period "${period}" resolved to:`, { finalStartDate, finalEndDate });
+        }
+        
         const user = await User.findByPk(user_id);
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
+        
+        // Build where clause with date filtering
+        const whereClause = { user_id };
+        
+        if (finalStartDate && finalEndDate) {
+            whereClause.created_at = {
+                [Op.between]: [new Date(finalStartDate), new Date(finalEndDate)]
+            };
+        } else if (finalStartDate) {
+            whereClause.created_at = {
+                [Op.gte]: new Date(finalStartDate)
+            };
+        } else if (finalEndDate) {
+            whereClause.created_at = {
+                [Op.lte]: new Date(finalEndDate)
+            };
+        }
+        
+        console.log('🔍 Querying commissions with where clause:', whereClause);
+        
         const commissions = await ReferralCommission.findAll({
-            where: { user_id },
+            where: whereClause,
             attributes: ['id', 'amount', 'level', 'rebate_type', 'created_at'],
             order: [['created_at', 'DESC']]
         });
+        
+        console.log(`📊 Found ${commissions.length} commission records for user ${user_id}`);
+        
         let total_earnings = 0;
         const level_wise_earnings = {};
         for (let i = 1; i <= 6; i++) {
@@ -841,6 +930,8 @@ const getUserRebateEarnings = async (req, res) => {
                 else if (type === 'casino') level_wise_earnings[lvl].casino += parseFloat(c.amount);
             }
         });
+        
+        console.log(`💰 Total earnings: ${total_earnings}, Level-wise:`, level_wise_earnings);
         res.json({
             success: true,
             data: {

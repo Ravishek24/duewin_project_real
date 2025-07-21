@@ -14,6 +14,9 @@ const { processMxPayTransfer } = require('./mxPayService');
 const { createPpayProWithdrawalOrder } = require('./ppayProService');
 const { createLPayTransferOrder } = require('./lPayService'); // <-- Add this import
 const { Op } = require('sequelize');
+const Transaction = require('../models/Transaction'); // Added this import for processRechargeAdminAction
+const SpribeTransaction = require('../models/SpribeTransaction');
+const SeamlessTransaction = require('../models/SeamlessTransaction');
 
 /**
  * Creates a PayIn order (deposit)
@@ -301,7 +304,11 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
         status: 'approved',
         payment_gateway_id: gatewayRecord.gateway_id
       }, { transaction: t });
-      // After updating, process the actual transfer (do NOT commit yet)
+      
+      // Commit the transaction first to avoid nested transaction issues
+      await t.commit();
+      
+      // After committing, process the actual transfer (outside of transaction)
       let transferResult;
       const host = process.env.API_BASE_URL || 'http://localhost:8000';
       let notifyUrl = '';
@@ -461,8 +468,6 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
           transferResult = await processOkPayTransfer(withdrawalId, notifyUrl);
           break;
       }
-      // Only commit after all above code has succeeded
-      await t.commit();
       return transferResult;
     } else {
       // Rejection - refund the user's wallet
@@ -515,146 +520,345 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
 };
 
 /**
- * Process a transfer via OKPAY after admin approval
- * @param {number} withdrawalId - Withdrawal ID
- * @param {string} notifyUrl - Notification URL for callbacks
+ * Process admin approval/rejection for a deposit/recharge
+ * @param {number} adminId - Admin user ID
+ * @param {number} rechargeId - Recharge ID
+ * @param {string} action - 'approve' or 'reject'
+ * @param {string} notes - Admin notes or rejection reason
  * @returns {Object} - Processing result
  */
-const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
+const processRechargeAdminAction = async (adminId, rechargeId, action, notes = '') => {
   const t = await sequelize.transaction();
   
   try {
-    // Get withdrawal
-    const withdrawal = await WalletWithdrawal.findByPk(withdrawalId, {
+    // Get recharge
+    const recharge = await WalletRecharge.findByPk(rechargeId, {
       transaction: t
     });
     
-    if (!withdrawal) {
+    if (!recharge) {
       await t.rollback();
       return {
         success: false,
-        message: "Withdrawal not found"
+        message: "Recharge not found"
       };
     }
     
-    // Check if withdrawal is already processed
-    if (withdrawal.status === 'completed' || withdrawal.status === 'failed') {
+    // Check if recharge can be processed
+    if (recharge.status !== 'pending') {
       await t.rollback();
       return {
         success: false,
-        message: "Withdrawal already processed"
+        message: `This recharge has already been ${recharge.status}`
       };
     }
     
-    // Get bank account details
-    console.log('[DEBUG] Looking for bank account:', withdrawal.bank_account_id, withdrawal.user_id);
-    let bankAccount;
-    if (withdrawal.bank_account_id) {
-      bankAccount = await BankAccount.findOne({
-        where: {
-          id: withdrawal.bank_account_id,
-          user_id: withdrawal.user_id
-        },
-        transaction: t
-      });
-      console.log('[DEBUG] Bank account found:', bankAccount);
-    } else {
-      bankAccount = await BankAccount.findOne({
-        where: {
-          user_id: withdrawal.user_id,
-          is_primary: true
-        },
-        transaction: t
-      });
-      console.log('[DEBUG] Fallback to primary bank account:', bankAccount);
-    }
-    
-    if (!bankAccount) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "Bank account not found for withdrawal"
-      };
-    }
-    
-    // Prepare request data for payment gateway
-    const requestData = {
-      mchId: paymentConfig.mchId,
-      currency: "INR",
-      out_trade_no: withdrawal.transaction_id,
-      pay_type: withdrawal.withdrawal_type, // BANK or UPI
-      account: bankAccount.account_number,
-      userName: bankAccount.account_holder,
-      money: parseInt(withdrawal.amount), // Must be integer
-      attach: "Withdrawal for user " + withdrawal.user_id,
-      notify_url: notifyUrl,
-      reserve1: withdrawal.withdrawal_type === 'BANK' ? bankAccount.ifsc_code : '' // IFSC for BANK type
-    };
-    
-    // Log all request data for callback testing
-    console.log('[OKPAY][Withdrawal] Request Data:', JSON.stringify(requestData, null, 2));
-
-    // Log the string to be signed and the generated signature
-    const signatureString = (() => {
-      const qs = require('querystring');
-      const params = Object.keys(requestData)
-        .filter((key) => key !== 'sign' && requestData[key] !== '' && requestData[key] !== undefined)
-        .sort()
-        .reduce((acc, key) => {
-          acc[key] = requestData[key];
-          return acc;
-        }, {});
-      const queryString = qs.stringify(params);
-      return `${queryString}&key=${paymentConfig.key}`;
-    })();
-    const generatedSignature = generateSignature(requestData);
-    console.log('[OKPAY][Signature] String to sign:', signatureString);
-    console.log('[OKPAY][Signature] Generated signature:', generatedSignature);
-
-    // Generate signature
-    requestData.sign = generatedSignature;
-    
-    // Call the payment gateway API
-    const response = await axios.post(`${paymentConfig.host}/v1/Payout`, requestData, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    // Get the user
+    const user = await User.findByPk(recharge.user_id, {
+      transaction: t
     });
     
-    // Log the full response from the gateway
-    console.log('[OKPAY][Withdrawal] Gateway Response:', JSON.stringify(response.data, null, 2));
+    if (!user) {
+      await t.rollback();
+      return {
+        success: false,
+        message: "User not found"
+      };
+    }
     
-    // Check API response
-    if (response.data.code === 0) {
-      // Update withdrawal with transaction ID
-      await withdrawal.update({
-        transaction_id: response.data.data.transaction_Id
+    // Process based on admin action
+    if (action === 'approve') {
+      // Calculate bonus amount if this is first deposit
+      let bonusAmount = 0;
+      const isFirstDeposit = parseFloat(user.actual_deposit_amount) === 0;
+      const isEligibleForFirstBonus = isFirstDeposit && !user.has_received_first_bonus;
+      
+      if (isEligibleForFirstBonus) {
+        // Define bonus tiers
+        const bonusTiers = [
+          { amount: 100, bonus: 20 },
+          { amount: 300, bonus: 60 },
+          { amount: 1000, bonus: 150 },
+          { amount: 3000, bonus: 300 },
+          { amount: 10000, bonus: 600 },
+          { amount: 30000, bonus: 2000 },
+          { amount: 100000, bonus: 7000 },
+          { amount: 200000, bonus: 15000 }
+        ];
+
+        // Find applicable bonus tier
+        for (let i = bonusTiers.length - 1; i >= 0; i--) {
+          if (parseFloat(recharge.amount) >= bonusTiers[i].amount) {
+            bonusAmount = bonusTiers[i].bonus;
+            break;
+          }
+        }
+      }
+      
+      // Update recharge status
+      await recharge.update({
+        status: 'completed',
+        bonus_amount: bonusAmount,
+        updated_at: new Date()
+      }, { transaction: t });
+      
+      // Update user wallet balance
+      const depositAmount = parseFloat(recharge.amount);
+      const totalAmount = depositAmount + bonusAmount;
+      const newBalance = parseFloat(user.wallet_balance) + totalAmount;
+      
+      await user.update({
+        wallet_balance: newBalance,
+        actual_deposit_amount: parseFloat(user.actual_deposit_amount) + depositAmount,
+        has_received_first_bonus: isEligibleForFirstBonus ? true : user.has_received_first_bonus,
+        updated_at: new Date()
+      }, { transaction: t });
+      
+      // Create transaction record
+      await Transaction.create({
+        user_id: recharge.user_id,
+        type: 'deposit',
+        amount: totalAmount,
+        status: 'completed',
+        description: `Deposit approved by admin - ${notes}`,
+        reference_id: recharge.order_id,
+        metadata: {
+          recharge_id: recharge.id,
+          deposit_amount: depositAmount,
+          bonus_amount: bonusAmount,
+          admin_approved: true
+        }
       }, { transaction: t });
       
       await t.commit();
       
       return {
         success: true,
-        message: "Withdrawal approved and payment processing initiated",
-        transactionId: response.data.data.transaction_Id
+        message: "Deposit approved and wallet credited",
+        data: {
+          rechargeId: recharge.id,
+          depositAmount: depositAmount,
+          bonusAmount: bonusAmount,
+          totalAmount: totalAmount,
+          newBalance: newBalance
+        }
       };
-    } else {
-      // Payment gateway error
-      await t.rollback();
+      
+    } else if (action === 'reject') {
+      // Update recharge status to failed
+      await recharge.update({
+        status: 'failed',
+        updated_at: new Date()
+      }, { transaction: t });
+      
+      // Create transaction record for rejected deposit
+      await Transaction.create({
+        user_id: recharge.user_id,
+        type: 'deposit_rejected',
+        amount: 0,
+        status: 'failed',
+        description: `Deposit rejected by admin - ${notes}`,
+        reference_id: recharge.order_id,
+        metadata: {
+          recharge_id: recharge.id,
+          admin_rejected: true,
+          rejection_reason: notes
+        }
+      }, { transaction: t });
+      
+      await t.commit();
       
       return {
-        success: false,
-        message: `Payment gateway error: ${response.data.msg}`,
-        errorCode: response.data.code
+        success: true,
+        message: "Deposit rejected",
+        data: {
+          rechargeId: recharge.id,
+          rejectionReason: notes
+        }
       };
     }
+    
   } catch (error) {
     await t.rollback();
-    console.error("Payment gateway API error:", error);
+    console.error("Error processing recharge admin action:", error);
     
     return {
       success: false,
-      message: "Error calling payment gateway"
+      message: "Failed to process admin action"
     };
   }
+};
+
+/**
+ * Process a transfer via OKPAY after admin approval
+ * @param {number} withdrawalId - Withdrawal ID
+ * @param {string} notifyUrl - Notification URL for callbacks
+ * @returns {Object} - Processing result
+ */
+const processOkPayTransfer = async (withdrawalId, notifyUrl) => {
+  const maxRetries = 3;
+  let retryCount = 0;
+  
+  while (retryCount < maxRetries) {
+    const t = await sequelize.transaction();
+    
+    try {
+      // Get withdrawal with lock to prevent concurrent updates
+      const withdrawal = await WalletWithdrawal.findByPk(withdrawalId, {
+        lock: true,
+        transaction: t
+      });
+      
+      if (!withdrawal) {
+        await t.rollback();
+        return {
+          success: false,
+          message: "Withdrawal not found"
+        };
+      }
+      
+      // Check if withdrawal is already processed
+      if (withdrawal.status === 'completed' || withdrawal.status === 'failed') {
+        await t.rollback();
+        return {
+          success: false,
+          message: "Withdrawal already processed"
+        };
+      }
+      
+      // Get bank account details
+      console.log('[DEBUG] Looking for bank account:', withdrawal.bank_account_id, withdrawal.user_id);
+      let bankAccount;
+      if (withdrawal.bank_account_id) {
+        bankAccount = await BankAccount.findOne({
+          where: {
+            id: withdrawal.bank_account_id,
+            user_id: withdrawal.user_id
+          },
+          transaction: t
+        });
+        console.log('[DEBUG] Bank account found:', bankAccount);
+      } else {
+        bankAccount = await BankAccount.findOne({
+          where: {
+            user_id: withdrawal.user_id,
+            is_primary: true
+          },
+          transaction: t
+        });
+        console.log('[DEBUG] Fallback to primary bank account:', bankAccount);
+      }
+      
+      if (!bankAccount) {
+        await t.rollback();
+        return {
+          success: false,
+          message: "Bank account not found for withdrawal"
+        };
+      }
+      
+      // Prepare request data for payment gateway
+      const requestData = {
+        mchId: paymentConfig.mchId,
+        currency: "INR",
+        out_trade_no: withdrawal.transaction_id,
+        pay_type: withdrawal.withdrawal_type, // BANK or UPI
+        account: bankAccount.account_number,
+        userName: bankAccount.account_holder,
+        money: parseInt(withdrawal.amount), // Must be integer
+        attach: "Withdrawal for user " + withdrawal.user_id,
+        notify_url: notifyUrl,
+        reserve1: withdrawal.withdrawal_type === 'BANK' ? bankAccount.ifsc_code : '' // IFSC for BANK type
+      };
+      
+      // Log all request data for callback testing
+      console.log('[OKPAY][Withdrawal] Request Data:', JSON.stringify(requestData, null, 2));
+
+      // Log the string to be signed and the generated signature
+      const signatureString = (() => {
+        const qs = require('querystring');
+        const params = Object.keys(requestData)
+          .filter((key) => key !== 'sign' && requestData[key] !== '' && requestData[key] !== undefined)
+          .sort()
+          .reduce((acc, key) => {
+            acc[key] = requestData[key];
+            return acc;
+          }, {});
+        const queryString = qs.stringify(params);
+        return `${queryString}&key=${paymentConfig.key}`;
+      })();
+      const generatedSignature = generateSignature(requestData);
+      console.log('[OKPAY][Signature] String to sign:', signatureString);
+      console.log('[OKPAY][Signature] Generated signature:', generatedSignature);
+
+      // Generate signature
+      requestData.sign = generatedSignature;
+      
+      // Call the payment gateway API
+      const response = await axios.post(`${paymentConfig.host}/v1/Payout`, requestData, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      });
+      
+      // Log the full response from the gateway
+      console.log('[OKPAY][Withdrawal] Gateway Response:', JSON.stringify(response.data, null, 2));
+      
+      // Check API response
+      if (response.data.code === 0) {
+        // Update withdrawal with transaction ID
+        await withdrawal.update({
+          transaction_id: response.data.data.transaction_Id
+        }, { transaction: t });
+        
+        await t.commit();
+        
+        return {
+          success: true,
+          message: "Withdrawal approved and payment processing initiated",
+          transactionId: response.data.data.transaction_Id
+        };
+      } else {
+        // Payment gateway error
+        await t.rollback();
+        
+        return {
+          success: false,
+          message: `Payment gateway error: ${response.data.msg}`,
+          errorCode: response.data.code
+        };
+      }
+    } catch (error) {
+      await t.rollback();
+      
+      // Check if error is a lock timeout
+      if (error.name === 'SequelizeDatabaseError' && 
+          error.parent && 
+          error.parent.code === 'ER_LOCK_WAIT_TIMEOUT') {
+        
+        retryCount++;
+        console.warn(`Lock timeout detected for withdrawal ${withdrawalId}, retrying (${retryCount}/${maxRetries})`);
+        
+        if (retryCount < maxRetries) {
+          // Wait for a random time between 100-500ms before retrying
+          const delay = 100 + Math.floor(Math.random() * 400);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+      }
+      
+      console.error("Payment gateway API error:", error);
+      
+      return {
+        success: false,
+        message: "Error calling payment gateway"
+      };
+    }
+  }
+  
+  // If we get here, all retries failed
+  return {
+    success: false,
+    message: "Failed to process withdrawal after multiple attempts due to lock timeout"
+  };
 };
 
 /**
@@ -845,98 +1049,127 @@ const processPayOutCallback = async (callbackData) => {
     };
   }
   
-  // Start a transaction
-  const t = await sequelize.transaction();
+  const maxRetries = 3;
+  let retryCount = 0;
   
-  try {
-    // 3. Find the withdrawal record
-    const withdrawalRecord = await WalletWithdrawal.findOne({
-      where: { transaction_id: out_trade_no },
-      transaction: t
-    });
+  while (retryCount < maxRetries) {
+    const t = await sequelize.transaction();
     
-    if (!withdrawalRecord) {
-      await t.rollback();
-      return {
-        success: false,
-        message: "Order not found"
-      };
-    }
-    
-    // 4. Check if already processed
-    if (withdrawalRecord.status === 'completed' || withdrawalRecord.status === 'failed') {
-      await t.rollback();
-      return {
-        success: true,
-        message: "Withdrawal already processed"
-      };
-    }
-    
-    // 5. Process withdrawal based on status
-    if (status === "1") { // Withdrawal successful
-      // Update withdrawal record
-      await WalletWithdrawal.update({
-        status: 'completed',
-        transaction_id: transaction_Id
-      }, {
+    try {
+      // 3. Find the withdrawal record with lock to prevent concurrent updates
+      const withdrawalRecord = await WalletWithdrawal.findOne({
         where: { transaction_id: out_trade_no },
+        lock: true,
         transaction: t
       });
       
-      await t.commit();
-      
-      return {
-        success: true,
-        message: "Withdrawal processed successfully"
-      };
-    } else { // Withdrawal failed
-      // Get user to refund
-      const user = await User.findByPk(withdrawalRecord.user_id, {
-        transaction: t
-      });
-      
-      if (!user) {
+      if (!withdrawalRecord) {
         await t.rollback();
         return {
           success: false,
-          message: "User not found"
+          message: "Order not found"
         };
       }
       
-      // Refund wallet balance
-      const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawalRecord.amount);
+      // 4. Check if already processed
+      if (withdrawalRecord.status === 'completed' || withdrawalRecord.status === 'failed') {
+        await t.rollback();
+        return {
+          success: true,
+          message: "Withdrawal already processed"
+        };
+      }
       
-      await User.update({
-        wallet_balance: newBalance
-      }, {
-        where: { user_id: withdrawalRecord.user_id },
-        transaction: t
-      });
+      // 5. Process withdrawal based on status
+      if (status === "1") { // Withdrawal successful
+        // Update withdrawal record
+        await WalletWithdrawal.update({
+          status: 'completed',
+          transaction_id: transaction_Id
+        }, {
+          where: { transaction_id: out_trade_no },
+          transaction: t
+        });
+        
+        await t.commit();
+        
+        return {
+          success: true,
+          message: "Withdrawal processed successfully"
+        };
+      } else { // Withdrawal failed
+        // Get user to refund
+        const user = await User.findByPk(withdrawalRecord.user_id, {
+          lock: true,
+          transaction: t
+        });
+        
+        if (!user) {
+          await t.rollback();
+          return {
+            success: false,
+            message: "User not found"
+          };
+        }
+        
+        // Refund wallet balance
+        const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawalRecord.amount);
+        
+        await User.update({
+          wallet_balance: newBalance
+        }, {
+          where: { user_id: withdrawalRecord.user_id },
+          transaction: t
+        });
+        
+        // Update withdrawal record
+        await WalletWithdrawal.update({
+          status: 'failed'
+        }, {
+          where: { transaction_id: out_trade_no },
+          transaction: t
+        });
+        
+        await t.commit();
+        
+        return {
+          success: true,
+          message: "Withdrawal failure recorded and funds returned to wallet"
+        };
+      }
+    } catch (error) {
+      await t.rollback();
       
-      // Update withdrawal record
-      await WalletWithdrawal.update({
-        status: 'failed'
-      }, {
-        where: { transaction_id: out_trade_no },
-        transaction: t
-      });
+      // Check if error is a lock timeout
+      if (error.name === 'SequelizeDatabaseError' && 
+          error.parent && 
+          error.parent.code === 'ER_LOCK_WAIT_TIMEOUT') {
+        
+        retryCount++;
+        console.warn(`Lock timeout detected for withdrawal callback ${out_trade_no}, retrying (${retryCount}/${maxRetries})`);
+        
+        if (retryCount < maxRetries) {
+          // Wait for a random time between 100-500ms before retrying
+          const delay = 100 + Math.floor(Math.random() * 400);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+      }
       
-      await t.commit();
+      console.error("Error processing withdrawal callback:", error);
       
       return {
-        success: true,
-        message: "Withdrawal failure recorded and funds returned to wallet"
+        success: false,
+        message: "Error processing withdrawal callback"
       };
     }
-  } catch (error) {
-    await t.rollback();
-    console.error("Error processing withdrawal callback:", error);
-    
-    return {
-      success: false,
-      message: "Error processing withdrawal callback"
-    };
   }
+  
+  // If we get here, all retries failed
+  return {
+    success: false,
+    message: "Failed to process withdrawal callback after multiple attempts due to lock timeout"
+  };
 };
 
 /**
@@ -1148,7 +1381,8 @@ const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
         },
         {
           model: WithdrawalAdmin,
-          required: false
+          required: false,
+          as: 'WithdrawalAdmin'
         }
       ],
       order: [['created_at', 'DESC']],
@@ -1171,6 +1405,221 @@ const getWithdrawalsAdmin = async (filters = {}, page = 1, limit = 10) => {
     return {
       success: false,
       message: 'Error fetching withdrawals'
+    };
+  }
+};
+
+/**
+ * Get successful withdrawals for admin
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @param {Object} filters - Additional filters
+ * @returns {Object} - List of successful withdrawals with pagination
+ */
+const getSuccessfulWithdrawals = async (page = 1, limit = 10, filters = {}) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Build where clause for successful withdrawals
+    const whereClause = {
+      status: 'completed'
+    };
+    
+    // Add additional filters
+    if (filters.user_id) {
+      whereClause.user_id = filters.user_id;
+    }
+    
+    // Date filters
+    if (filters.start_date && filters.end_date) {
+      whereClause.updated_at = {
+        [Op.between]: [new Date(filters.start_date), new Date(filters.end_date)]
+      };
+    } else if (filters.start_date) {
+      whereClause.updated_at = {
+        [Op.gte]: new Date(filters.start_date)
+      };
+    } else if (filters.end_date) {
+      whereClause.updated_at = {
+        [Op.lte]: new Date(filters.end_date)
+      };
+    }
+    
+    // Get total count
+    const total = await WalletWithdrawal.count({ where: whereClause });
+    
+    // Get successful withdrawals with pagination
+    const successfulWithdrawals = await WalletWithdrawal.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance']
+        },
+        {
+          model: BankAccount,
+          as: 'bankAccount',
+          attributes: ['bank_name', 'account_number', 'ifsc_code', 'account_holder']
+        },
+        {
+          model: WithdrawalAdmin,
+          required: false,
+          attributes: ['admin_id', 'notes', 'created_at'],
+          as: 'WithdrawalAdmin'
+        }
+      ],
+      order: [['updated_at', 'DESC']],
+      limit,
+      offset
+    });
+
+    // Transform the data to match required format
+    const formattedWithdrawals = successfulWithdrawals.map(withdrawal => ({
+      withdrawal_id: withdrawal.id,
+      user_id: withdrawal.user.user_id,
+      user_name: withdrawal.user.user_name,
+      email: withdrawal.user.email,
+      phone_no: withdrawal.user.phone_no,
+      wallet_balance: withdrawal.user.wallet_balance,
+      order_id: withdrawal.transaction_id,
+      withdrawal_type: withdrawal.withdrawal_type,
+      amount: withdrawal.amount,
+      status: withdrawal.status,
+      created_at: withdrawal.created_at,
+      completed_at: withdrawal.updated_at,
+      bank_name: withdrawal.bankAccount?.bank_name || null,
+      account_number: withdrawal.bankAccount?.account_number || null,
+      ifsc_code: withdrawal.bankAccount?.ifsc_code || null,
+      account_holder: withdrawal.bankAccount?.account_holder || null,
+      admin_notes: withdrawal.WithdrawalAdmin?.notes || null,
+      processed_by_admin: withdrawal.WithdrawalAdmin?.admin_id || null,
+      admin_processed_at: withdrawal.WithdrawalAdmin?.created_at || null
+    }));
+    
+    return {
+      success: true,
+      withdrawals: formattedWithdrawals,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting successful withdrawals:', error);
+    return {
+      success: false,
+      message: 'Error fetching successful withdrawals'
+    };
+  }
+};
+
+/**
+ * Get failed withdrawals for admin
+ * @param {number} page - Page number
+ * @param {number} limit - Items per page
+ * @param {Object} filters - Additional filters
+ * @returns {Object} - List of failed withdrawals with pagination
+ */
+const getFailedWithdrawals = async (page = 1, limit = 10, filters = {}) => {
+  try {
+    const offset = (page - 1) * limit;
+    
+    // Build where clause for failed withdrawals
+    const whereClause = {
+      status: 'failed'
+    };
+    
+    // Add additional filters
+    if (filters.user_id) {
+      whereClause.user_id = filters.user_id;
+    }
+    
+    // Date filters
+    if (filters.start_date && filters.end_date) {
+      whereClause.updated_at = {
+        [Op.between]: [new Date(filters.start_date), new Date(filters.end_date)]
+      };
+    } else if (filters.start_date) {
+      whereClause.updated_at = {
+        [Op.gte]: new Date(filters.start_date)
+      };
+    } else if (filters.end_date) {
+      whereClause.updated_at = {
+        [Op.lte]: new Date(filters.end_date)
+      };
+    }
+    
+    // Get total count
+    const total = await WalletWithdrawal.count({ where: whereClause });
+    
+    // Get failed withdrawals with pagination
+    const failedWithdrawals = await WalletWithdrawal.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['user_id', 'user_name', 'email', 'phone_no', 'wallet_balance']
+        },
+        {
+          model: BankAccount,
+          as: 'bankAccount',
+          attributes: ['bank_name', 'account_number', 'ifsc_code', 'account_holder']
+        },
+        {
+          model: WithdrawalAdmin,
+          required: false,
+          attributes: ['admin_id', 'notes', 'created_at'],
+          as: 'WithdrawalAdmin'
+        }
+      ],
+      order: [['updated_at', 'DESC']],
+      limit,
+      offset
+    });
+
+    // Transform the data to match required format
+    const formattedWithdrawals = failedWithdrawals.map(withdrawal => ({
+      withdrawal_id: withdrawal.id,
+      user_id: withdrawal.user.user_id,
+      user_name: withdrawal.user.user_name,
+      email: withdrawal.user.email,
+      phone_no: withdrawal.user.phone_no,
+      wallet_balance: withdrawal.user.wallet_balance,
+      order_id: withdrawal.transaction_id,
+      withdrawal_type: withdrawal.withdrawal_type,
+      amount: withdrawal.amount,
+      status: withdrawal.status,
+      created_at: withdrawal.created_at,
+      failed_at: withdrawal.updated_at,
+      bank_name: withdrawal.bankAccount?.bank_name || null,
+      account_number: withdrawal.bankAccount?.account_number || null,
+      ifsc_code: withdrawal.bankAccount?.ifsc_code || null,
+      account_holder: withdrawal.bankAccount?.account_holder || null,
+      admin_notes: withdrawal.WithdrawalAdmin?.notes || null,
+      processed_by_admin: withdrawal.WithdrawalAdmin?.admin_id || null,
+      admin_processed_at: withdrawal.WithdrawalAdmin?.created_at || null,
+      failure_reason: withdrawal.failure_reason || 'Payment gateway failure'
+    }));
+    
+    return {
+      success: true,
+      withdrawals: formattedWithdrawals,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit)
+      }
+    };
+  } catch (error) {
+    console.error('Error getting failed withdrawals:', error);
+    return {
+      success: false,
+      message: 'Error fetching failed withdrawals'
     };
   }
 };
@@ -1548,19 +1997,304 @@ const getTodayTopWithdrawals = async (page = 1, limit = 10) => {
   }
 };
 
+/**
+ * Get Spribe transaction statistics by provider for different time periods
+ * @param {string} period - 'today', 'week', or 'month'
+ * @returns {Object} - Statistics grouped by provider
+ */
+const getSpribeTransactionStats = async (period = 'today') => {
+  try {
+    let startDate, endDate;
+    const now = new Date();
+    
+    // Calculate date range based on period
+    switch (period) {
+      case 'today':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        break;
+      case 'week':
+        const dayOfWeek = now.getDay();
+        const daysToSubtract = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Monday is start of week
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToSubtract);
+        endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        break;
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    }
+
+    // Get bet transactions
+    const betTransactions = await SpribeTransaction.findAll({
+      where: {
+        type: 'bet',
+        status: 'completed',
+        created_at: {
+          [Op.between]: [startDate, endDate]
+        }
+      },
+      attributes: [
+        'provider',
+        [sequelize.fn('SUM', sequelize.col('amount')), 'total_bet_amount'],
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total_bet_count']
+      ],
+      group: ['provider'],
+      raw: true
+    });
+
+    // Get win transactions
+    const winTransactions = await SpribeTransaction.findAll({
+      where: {
+        type: 'win',
+        status: 'completed',
+        created_at: {
+          [Op.between]: [startDate, endDate]
+        }
+      },
+      attributes: [
+        'provider',
+        [sequelize.fn('SUM', sequelize.col('amount')), 'total_win_amount'],
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total_win_count']
+      ],
+      group: ['provider'],
+      raw: true
+    });
+
+    // Combine and format results
+    const providerStats = {};
+    
+    // Process bet transactions
+    betTransactions.forEach(bet => {
+      providerStats[bet.provider] = {
+        provider: bet.provider,
+        total_bet_amount: parseInt(bet.total_bet_amount) / 100, // Convert from cents
+        total_bet_count: parseInt(bet.total_bet_count),
+        total_win_amount: 0,
+        total_win_count: 0,
+        net_profit: 0
+      };
+    });
+
+    // Process win transactions
+    winTransactions.forEach(win => {
+      if (providerStats[win.provider]) {
+        providerStats[win.provider].total_win_amount = parseInt(win.total_win_amount) / 100;
+        providerStats[win.provider].total_win_count = parseInt(win.total_win_count);
+      } else {
+        providerStats[win.provider] = {
+          provider: win.provider,
+          total_bet_amount: 0,
+          total_bet_count: 0,
+          total_win_amount: parseInt(win.total_win_amount) / 100,
+          total_win_count: parseInt(win.total_win_count),
+          net_profit: 0
+        };
+      }
+    });
+
+    // Calculate net profit for each provider
+    Object.values(providerStats).forEach(stat => {
+      stat.net_profit = stat.total_win_amount - stat.total_bet_amount;
+    });
+
+    // Convert to array and sort by total bet amount
+    const statsArray = Object.values(providerStats).sort((a, b) => b.total_bet_amount - a.total_bet_amount);
+
+    // Calculate totals
+    const totals = statsArray.reduce((acc, stat) => {
+      acc.total_bet_amount += stat.total_bet_amount;
+      acc.total_bet_count += stat.total_bet_count;
+      acc.total_win_amount += stat.total_win_amount;
+      acc.total_win_count += stat.total_win_count;
+      acc.net_profit += stat.net_profit;
+      return acc;
+    }, {
+      total_bet_amount: 0,
+      total_bet_count: 0,
+      total_win_amount: 0,
+      total_win_count: 0,
+      net_profit: 0
+    });
+
+    return {
+      success: true,
+      period,
+      start_date: startDate,
+      end_date: endDate,
+      providers: statsArray,
+      totals
+    };
+  } catch (error) {
+    console.error('Error getting Spribe transaction stats:', error);
+    return {
+      success: false,
+      message: 'Error fetching Spribe transaction statistics'
+    };
+  }
+};
+
+/**
+ * Get Seamless transaction statistics by provider for different time periods
+ * @param {string} period - 'today', 'week', or 'month'
+ * @returns {Object} - Statistics grouped by provider
+ */
+const getSeamlessTransactionStats = async (period = 'today') => {
+  try {
+    let startDate, endDate;
+    const now = new Date();
+    
+    // Calculate date range based on period
+    switch (period) {
+      case 'today':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        break;
+      case 'week':
+        const dayOfWeek = now.getDay();
+        const daysToSubtract = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Monday is start of week
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysToSubtract);
+        endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        break;
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    }
+
+    // Get debit transactions (bets)
+    const debitTransactions = await SeamlessTransaction.findAll({
+      where: {
+        type: 'debit',
+        status: 'success',
+        created_at: {
+          [Op.between]: [startDate, endDate]
+        }
+      },
+      attributes: [
+        'provider',
+        [sequelize.fn('SUM', sequelize.col('amount')), 'total_bet_amount'],
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total_bet_count']
+      ],
+      group: ['provider'],
+      raw: true
+    });
+
+    // Get credit transactions (wins)
+    const creditTransactions = await SeamlessTransaction.findAll({
+      where: {
+        type: 'credit',
+        status: 'success',
+        created_at: {
+          [Op.between]: [startDate, endDate]
+        }
+      },
+      attributes: [
+        'provider',
+        [sequelize.fn('SUM', sequelize.col('amount')), 'total_win_amount'],
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total_win_count']
+      ],
+      group: ['provider'],
+      raw: true
+    });
+
+    // Combine and format results
+    const providerStats = {};
+    
+    // Process debit transactions (bets)
+    debitTransactions.forEach(debit => {
+      providerStats[debit.provider] = {
+        provider: debit.provider,
+        total_bet_amount: parseFloat(debit.total_bet_amount),
+        total_bet_count: parseInt(debit.total_bet_count),
+        total_win_amount: 0,
+        total_win_count: 0,
+        net_profit: 0
+      };
+    });
+
+    // Process credit transactions (wins)
+    creditTransactions.forEach(credit => {
+      if (providerStats[credit.provider]) {
+        providerStats[credit.provider].total_win_amount = parseFloat(credit.total_win_amount);
+        providerStats[credit.provider].total_win_count = parseInt(credit.total_win_count);
+      } else {
+        providerStats[credit.provider] = {
+          provider: credit.provider,
+          total_bet_amount: 0,
+          total_bet_count: 0,
+          total_win_amount: parseFloat(credit.total_win_amount),
+          total_win_count: parseInt(credit.total_win_count),
+          net_profit: 0
+        };
+      }
+    });
+
+    // Calculate net profit for each provider
+    Object.values(providerStats).forEach(stat => {
+      stat.net_profit = stat.total_win_amount - stat.total_bet_amount;
+    });
+
+    // Convert to array and sort by total bet amount
+    const statsArray = Object.values(providerStats).sort((a, b) => b.total_bet_amount - a.total_bet_amount);
+
+    // Calculate totals
+    const totals = statsArray.reduce((acc, stat) => {
+      acc.total_bet_amount += stat.total_bet_amount;
+      acc.total_bet_count += stat.total_bet_count;
+      acc.total_win_amount += stat.total_win_amount;
+      acc.total_win_count += stat.total_win_count;
+      acc.net_profit += stat.net_profit;
+      return acc;
+    }, {
+      total_bet_amount: 0,
+      total_bet_count: 0,
+      total_win_amount: 0,
+      total_win_count: 0,
+      net_profit: 0
+    });
+
+    return {
+      success: true,
+      period,
+      start_date: startDate,
+      end_date: endDate,
+      providers: statsArray,
+      totals
+    };
+  } catch (error) {
+    console.error('Error getting Seamless transaction stats:', error);
+    return {
+      success: false,
+      message: 'Error fetching Seamless transaction statistics'
+    };
+  }
+};
+
 module.exports = {
   createPayInOrder,
   initiateWithdrawal,
   processWithdrawalAdminAction,
+  processRechargeAdminAction, // Added this line
   processOkPayTransfer,
   processPayInCallback,
   processPayOutCallback,
   getPaymentStatus,
   getPendingWithdrawals,
   getWithdrawalsAdmin,
+  getSuccessfulWithdrawals,
+  getFailedWithdrawals,
   getAllPendingRecharges,
   getAllSuccessfulRecharges,
   getFirstRecharges,
   getTodayTopDeposits,
-  getTodayTopWithdrawals
+  getTodayTopWithdrawals,
+  getSpribeTransactionStats,
+  getSeamlessTransactionStats
 };

@@ -1,5 +1,9 @@
+function getRedisClient() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return getRedisClient();
+}
 const redisHelper = require('./config/redis');
-const redisClient = redisHelper.getClient();
+
 const { updateBetExposure, ensureModelsInitialized } = require('./services/gameLogicService');
 
 async function debugProductionFailure() {

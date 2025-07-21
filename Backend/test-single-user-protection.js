@@ -1,10 +1,9 @@
-const Redis = require('ioredis');
-const redisClient = new Redis({
-    host: 'localhost',
-    port: 6379,
-    password: null,
-    db: 0
-});
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
+const redisClient = 
 
 async function testSingleUserProtection() {
     console.log('🧪 Testing Single User Protection (Should NEVER Win)');
@@ -252,3 +251,4 @@ async function testSingleUserProtection() {
 }
 
 testSingleUserProtection(); 
+module.exports = { setRedisHelper };

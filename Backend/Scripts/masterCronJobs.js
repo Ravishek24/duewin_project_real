@@ -88,7 +88,7 @@ const autoRecordDailyAttendance = async () => {
         
         // Try to acquire lock (expires in 30 minutes)
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -187,7 +187,7 @@ const redis = unifiedRedis.getConnection('websocket');
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -213,7 +213,7 @@ const processAttendanceBonuses = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -333,7 +333,7 @@ const redis = unifiedRedis.getConnection('websocket');
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -359,7 +359,7 @@ const processDailyRebates = async () => {
         await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -385,7 +385,7 @@ const redis = unifiedRedis.getConnection('websocket');
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -516,7 +516,7 @@ const processRebateCommissionType = async (gameType) => {
                 if (level1Commission > 0) {
                     // Add deduplication key to prevent conflicts
                     const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
                     const deduplicationKey = `rebate_commission:${referrer.user_id}:${batchId}:${userId}`;
                     const isAlreadyProcessed = await redis.get(deduplicationKey);
                     
@@ -602,7 +602,7 @@ const processVipLevelUpRewards = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -714,7 +714,7 @@ const redis = unifiedRedis.getConnection('websocket');
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -740,7 +740,7 @@ const processMonthlyVipRewards = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -884,7 +884,7 @@ const redis = unifiedRedis.getConnection('websocket');
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = unifiedRedis.getConnection('websocket');
+const redis = redisHelper;
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);

@@ -1,6 +1,10 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 // Backend/services/schedulerService.js
 const cron = require('node-cron');
-const { redis } = require('../config/redisConfig');
+
 const { logger } = require('../utils/logger');
 
 /**

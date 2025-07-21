@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 #!/usr/bin/env node
 
 /**
@@ -5,31 +9,14 @@
  * This script helps clear Redis connections and restart the application properly
  */
 
-const Redis = require('ioredis');
+
 require('dotenv').config();
 
 console.log('🧹 Redis Connection Cleanup Script');
 console.log('==================================');
 
 // Create a temporary Redis client to clear connections
-const tempRedis = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || '',
-    db: process.env.REDIS_DB || 0,
-    
-    tls: {
-        rejectUnauthorized: false,
-        requestCert: true,
-        agent: false
-    },
-    
-    connectTimeout: 10000,
-    commandTimeout: 5000,
-    lazyConnect: false,
-    enableOfflineQueue: false,
-    maxRetriesPerRequest: 1
-});
+const tempRedis = 
 
 const cleanupRedisConnections = async () => {
     try {
@@ -159,3 +146,4 @@ const main = async () => {
 
 // Run the script
 main(); 
+module.exports = { setRedisHelper };

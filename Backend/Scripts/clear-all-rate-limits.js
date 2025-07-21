@@ -1,6 +1,10 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { RateLimitViolation } = require('../models');
 const { Op } = require('sequelize');
-const redis = require('redis');
+
 const logger = require('../utils/logger');
 
 async function clearAllRateLimits(ipAddress) {
@@ -18,9 +22,7 @@ async function clearAllRateLimits(ipAddress) {
 
         // 2. Clear Redis records
         console.log('Clearing Redis records...');
-        redisClient = redis.createClient({
-            url: process.env.REDIS_URL || 'redis://localhost:6379'
-        });
+        redisClient = 
 
         await redisClient.connect();
         
@@ -82,3 +84,4 @@ if (!ipAddress) {
 clearAllRateLimits(ipAddress)
     .then(() => process.exit(0))
     .catch(() => process.exit(1)); 
+module.exports = { setRedisHelper };

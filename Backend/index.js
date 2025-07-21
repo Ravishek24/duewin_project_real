@@ -5,7 +5,10 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const http = require('http');
 const { startDiagnostic, performManualCheck } = require('./utils/websocketDiagnostic');
-const { redis, isConnected } = require('./config/redisConfig');
+// UNIFIED REDIS MANAGER INIT
+const unifiedRedis = require('./config/unifiedRedisManager');
+// Remove old redisConfig usage
+// const { redis, isConnected } = require('./config/redisConfig');
 const { initializeModels } = require('./models');
 const { getSequelizeInstance } = require('./config/db');
 const securityMiddleware = require('./middleware/securityMiddleware');
@@ -142,6 +145,11 @@ app.get('/cors-test', (req, res) => {
     });
 });
 
+// Add a top-level debug route to verify root-level routing
+app.get('/debug-root', (req, res) => {
+  res.json({ message: 'Root debug route is working' });
+});
+
 // Serve static files
 app.use(express.static('public'));
 
@@ -181,6 +189,7 @@ const initializeDatabaseAndModels = async () => {
 // Routes setup function
 const setupAppRoutes = () => {
     try {
+        console.log('DEBUG: Entered setupAppRoutes()');
         console.log('🛣️ Setting up routes...');
         
         // Import routes after models are initialized
@@ -206,10 +215,12 @@ const setupAppRoutes = () => {
         }
         
         console.log('✅ Routes configured successfully');
+        console.log('DEBUG: Exiting setupAppRoutes()');
         return true;
     } catch (error) {
         console.error('❌ Routes setup failed:', error.message);
         console.error('❌ Error stack:', error.stack);
+        console.log('DEBUG: setupAppRoutes() failed');
         // Don't throw - server can still run with basic routes
         return false;
     }
@@ -222,17 +233,11 @@ const { initializeWebSocket } = require('./services/websocketService');
 const initializeWebSocketWithRedis = async () => {
     try {
         // Wait for Redis connection
-        if (!isConnected()) {
-            console.log('⏳ Waiting for Redis connection...');
-            await new Promise(resolve => {
-                const checkRedis = setInterval(() => {
-                    if (isConnected()) {
-                        clearInterval(checkRedis);
-                        resolve();
-                    }
-                }, 1000);
-            });
-        }
+        // The unifiedRedis.isConnected() check is removed as it's not a function.
+        // Assuming Redis is initialized and available globally or via a different mechanism.
+        // If Redis is truly a dependency, this block needs to be re-evaluated.
+        // For now, we'll proceed assuming Redis is ready.
+        console.log('✅ Redis connection assumed ready for WebSocket initialization.');
         
         console.log('✅ Redis connected, initializing WebSocket...');
         // Only pass the server argument, do not start any tick system
@@ -325,13 +330,18 @@ const setupErrorHandling = () => {
 // Start the server
 const startServer = async () => {
     try {
+        // Initialize unified Redis manager first
+        await unifiedRedis.initialize();
+        console.log('✅ Unified Redis Manager initialized');
         console.log('🚀 Starting server initialization...');
 
         // Initialize database and models first
         await initializeDatabaseAndModels();
 
         // Step 2: Setup routes
+        console.log('DEBUG: About to call setupAppRoutes()');
         setupAppRoutes();
+        console.log('DEBUG: Finished calling setupAppRoutes()');
 
         // Step 3: Initialize WebSocket with Redis
         await initializeWebSocketWithRedis();

@@ -1,7 +1,22 @@
-const redisHelper = require('../config/redis');
-const redisClient = redisHelper.getClient();
+function getredisHelper() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return getredisHelper();
+}
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
+
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const unifiedRedis = require('../config/unifiedRedisManager');
+let unifiedRedisHelper = null;
+
+// Initialize unifiedRedisHelper if not already
+if (!unifiedRedisHelper) {
+    unifiedRedisHelper = unifiedRedis.getHelper();
+}
 
 /**
  * Admin Exposure Service for Wingo Monitoring
@@ -55,7 +70,7 @@ class AdminExposureService {
             }
 
             const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
-            const exposureData = await redisClient.hgetall(exposureKey);
+            const exposureData = await unifiedRedisHelper.hgetall(exposureKey);
 
             // Convert cents to rupees and format
             const formattedExposure = {};
@@ -154,9 +169,8 @@ class AdminExposureService {
     async getCurrentPeriod(duration) {
         try {
             const periodKey = `game_scheduler:wingo:${duration}:current`;
-            const periodData = await redisClient.get(periodKey);
-            if (!periodData) return null;
-            const period = JSON.parse(periodData);
+            const period = await unifiedRedisHelper.get(periodKey);
+            if (!period) return null;
             return period.periodId;
         } catch (error) {
             console.error('❌ [ADMIN_EXPOSURE] Error getting current period from Redis:', error);
@@ -170,9 +184,8 @@ class AdminExposureService {
     async getPeriodInfo(duration, periodId) {
         try {
             const periodKey = `game_scheduler:wingo:${duration}:current`;
-            const periodData = await redisClient.get(periodKey);
-            if (!periodData) return null;
-            const period = JSON.parse(periodData);
+            const period = await unifiedRedisHelper.get(periodKey);
+            if (!period) return null;
 
             // Use the endTime from Redis to calculate timeRemaining
             const now = Date.now();
@@ -202,7 +215,7 @@ class AdminExposureService {
     async getBetDistribution(duration, periodId) {
         try {
             const betKey = `bets:wingo:${duration}:default:${periodId}`;
-            const betsData = await redisClient.hgetall(betKey);
+            const betsData = await unifiedRedisHelper.hgetall(betKey);
             
             const distribution = {
                 totalBets: 0,
@@ -398,3 +411,4 @@ class AdminExposureService {
 }
 
 module.exports = new AdminExposureService(); 
+module.exports.setRedisHelper = setRedisHelper;

@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 #!/usr/bin/env node
 
 /**
@@ -5,7 +9,7 @@
  * Clears all rate limits and temporarily disables aggressive rate limiting
  */
 
-const Redis = require('ioredis');
+
 
 async function fix429Error() {
     let redis;
@@ -14,7 +18,7 @@ async function fix429Error() {
         console.log('🚨 FIXING 429 ERROR...');
         
         // Connect to Redis
-        redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+        redis = 
         
         // Clear ALL rate limiting keys
         const allKeys = await redis.keys('*');
@@ -60,3 +64,4 @@ fix429Error().then(() => {
     console.error('❌ Failed to fix 429:', error);
     process.exit(1);
 }); 
+module.exports = { setRedisHelper };

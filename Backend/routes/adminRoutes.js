@@ -3,7 +3,9 @@ const express = require('express');
 const { 
   getPendingWithdrawalsController,
   getWithdrawalsController,
-  processWithdrawalActionController
+  processWithdrawalActionController,
+  getSuccessfulWithdrawalsController,
+  getFailedWithdrawalsController
 } = require('../controllers/adminController/withdrawalController');
 const {
   createAdminController,
@@ -48,6 +50,7 @@ const { getTodayFinancialStats, getTotalFinancialStats, getCompleteFinancialStat
 const { getActivePeriods, getCurrentPeriod, getRecentPeriods, getWingoStats, setWingoResult, getPeriodStatusForOverride } = require('../controllers/adminController/wingoGameController');
 const { 
   getAllPendingRechargesController,
+  processRechargeActionController,
   getAllSuccessfulRechargesController,
   getFirstRechargesController,
   getTodayTopDepositsController,
@@ -64,6 +67,11 @@ const {
 } = require('../controllers/adminController/paymentGatewayController');
 const { getBlockedEntities, unblockEntity, getViolationHistory } = require('../controllers/adminController/blockedEntitiesController');
 const { createGiftCode, getGiftCodeByCode, getGiftCodeStatus, getAllGiftCodes, getGiftCodeStats } = require('../controllers/adminController/giftCodeController');
+const { 
+  getSpribeTransactionStatsController,
+  getSeamlessTransactionStatsController,
+  getCombinedTransactionStatsController
+} = require('../controllers/adminController/gameTransactionStatsController');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
@@ -157,11 +165,14 @@ router.delete('/admins/:admin_id', removeAdminController);
 
 // Withdrawal management routes
 router.get('/withdrawals/pending', getPendingWithdrawalsController);
+router.get('/withdrawals/successful', getSuccessfulWithdrawalsController);
+router.get('/withdrawals/failed', getFailedWithdrawalsController);
 router.get('/withdrawals', getWithdrawalsController);
 router.post('/withdrawals/process', processWithdrawalActionController);
 
 // Recharge management routes
 router.get('/recharges/pending', getAllPendingRechargesController);
+router.post('/recharges/process', processRechargeActionController);
 router.get('/recharges/successful', getAllSuccessfulRechargesController);
 router.get('/recharges/first-time', getFirstRechargesController);
 router.get('/recharges/top-today', getTodayTopDepositsController);
@@ -221,5 +232,10 @@ router.get('/gift-codes/stats', getGiftCodeStats);
 router.get('/gift-codes', getAllGiftCodes);
 router.get('/gift-codes/:code', getGiftCodeByCode);
 router.get('/gift-codes/:code/status', getGiftCodeStatus);
+
+// Game Transaction Statistics Routes
+router.get('/stats/games/spribe', getSpribeTransactionStatsController);
+router.get('/stats/games/seamless', getSeamlessTransactionStatsController);
+router.get('/stats/games/combined', getCombinedTransactionStatsController);
 
 module.exports = router;

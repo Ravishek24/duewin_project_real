@@ -1,10 +1,15 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+function getRedisClient() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return redisHelper.getClient();
+}
+
 const rateLimit = require('express-rate-limit');
 const { RedisStore } = require('rate-limit-redis');
-const redisHelper = require('../config/redis');
 const { isWhitelisted } = require('../config/whitelist');
 
-// Get Redis client from our helper
-const redis = redisHelper.getClient();
+// No top-level redis usage!
 
 // Create a bypass middleware that does nothing
 const bypassMiddleware = (req, res, next) => {
@@ -94,6 +99,7 @@ const gameHistory = bypassMiddleware;
 const globalLimiter = bypassMiddleware;
 
 module.exports = {
+    setRedisHelper,
     ...rateLimiters,
     gameHistory,
     globalLimiter

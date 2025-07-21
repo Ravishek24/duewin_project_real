@@ -1,7 +1,11 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 require('dotenv').config();
 const os = require('os');
 const dns = require('dns');
-const Redis = require('ioredis');
+
 
 const REDIS_HOST = process.env.REDIS_HOST || 'strike-game-66utip.serverless.apse1.cache.amazonaws.com';
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
@@ -18,13 +22,7 @@ dns.lookup(REDIS_HOST, async (err, address, family) => {
     console.log('Node.js DNS lookup result:', address, 'Family:', family);
   }
 
-  const redis = new Redis({
-    host: REDIS_HOST,
-    port: REDIS_PORT,
-    tls: {},
-    connectTimeout: 5000,
-    lazyConnect: false,
-  });
+  const redis = 
 
   redis.on('error', (e) => {
     console.error('Redis client error:', e.message);
@@ -47,3 +45,4 @@ dns.lookup(REDIS_HOST, async (err, address, family) => {
   }
   process.exit(0);
 });
+module.exports = { setRedisHelper };

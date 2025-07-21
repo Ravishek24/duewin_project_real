@@ -2,7 +2,9 @@
 const {
     getPendingWithdrawals,
     getWithdrawalsAdmin,
-    processWithdrawalAdminAction
+    processWithdrawalAdminAction,
+    getSuccessfulWithdrawals,
+    getFailedWithdrawals
   } = require('../../services/paymentService');
   
   /**
@@ -132,9 +134,85 @@ const {
       });
     }
   };
+
+  /**
+   * Get successful withdrawals for admin
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  const getSuccessfulWithdrawalsController = async (req, res) => {
+    try {
+      const { 
+        page = 1, 
+        limit = 10, 
+        user_id, 
+        start_date, 
+        end_date 
+      } = req.query;
+      
+      const filters = {};
+      
+      if (user_id) filters.user_id = user_id;
+      if (start_date) filters.start_date = start_date;
+      if (end_date) filters.end_date = end_date;
+      
+      const result = await getSuccessfulWithdrawals(parseInt(page), parseInt(limit), filters);
+      
+      if (result.success) {
+        return res.status(200).json(result);
+      } else {
+        return res.status(400).json(result);
+      }
+    } catch (error) {
+      console.error('Error fetching successful withdrawals:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Server error fetching successful withdrawals'
+      });
+    }
+  };
+
+  /**
+   * Get failed withdrawals for admin
+   * @param {Object} req - Express request object
+   * @param {Object} res - Express response object
+   */
+  const getFailedWithdrawalsController = async (req, res) => {
+    try {
+      const { 
+        page = 1, 
+        limit = 10, 
+        user_id, 
+        start_date, 
+        end_date 
+      } = req.query;
+      
+      const filters = {};
+      
+      if (user_id) filters.user_id = user_id;
+      if (start_date) filters.start_date = start_date;
+      if (end_date) filters.end_date = end_date;
+      
+      const result = await getFailedWithdrawals(parseInt(page), parseInt(limit), filters);
+      
+      if (result.success) {
+        return res.status(200).json(result);
+      } else {
+        return res.status(400).json(result);
+      }
+    } catch (error) {
+      console.error('Error fetching failed withdrawals:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Server error fetching failed withdrawals'
+      });
+    }
+  };
   
   module.exports = {
     getPendingWithdrawalsController,
     getWithdrawalsController,
-    processWithdrawalActionController
+    processWithdrawalActionController,
+    getSuccessfulWithdrawalsController,
+    getFailedWithdrawalsController
   };

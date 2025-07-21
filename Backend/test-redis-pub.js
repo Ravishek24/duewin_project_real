@@ -1,11 +1,11 @@
-const Redis = require('ioredis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 require('dotenv').config();
 
-const redis = new Redis({
-  host: process.env.REDIS_HOST || 'YOUR_ELASTICACHE_ENDPOINT',
-  port: 6379,
-  tls: {}
-});
+const redis = 
 
 redis.on('connect', () => console.log('Publisher connected'));
 redis.on('error', err => console.error('Publisher error:', err));
@@ -16,3 +16,4 @@ setInterval(() => {
     console.log(`Published: "${msg}" to ${count} subscribers`);
   });
 }, 2000); 
+module.exports = { setRedisHelper };

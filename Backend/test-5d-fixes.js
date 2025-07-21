@@ -1,6 +1,10 @@
+function getRedisClient() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return getRedisClient();
+}
 const gameLogicService = require('./services/gameLogicService');
 const redisHelper = require('./config/redis');
-const redisClient = redisHelper.getClient();
+
 
 async function test5DFixes() {
     try {

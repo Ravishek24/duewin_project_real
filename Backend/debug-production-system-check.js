@@ -1,15 +1,12 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { getSequelizeInstance, initializeDatabase } = require('./config/db');
-const Redis = require('ioredis');
+
 
 // Connect to Redis
-const redisClient = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || '',
-    db: process.env.REDIS_DB || 0,
-    retryDelayOnFailover: 100,
-    maxRetriesPerRequest: 3
-});
+const redisClient = 
 
 async function checkProductionSystem() {
     console.log('🔍 CHECKING PRODUCTION SYSTEM');
@@ -128,3 +125,4 @@ async function checkProductionSystem() {
 }
 
 checkProductionSystem(); 
+module.exports = { setRedisHelper };

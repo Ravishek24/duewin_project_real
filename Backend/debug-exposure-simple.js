@@ -1,4 +1,8 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const gameLogicService = require('./services/gameLogicService');
 
 async function simpleExposureTest() {
@@ -10,13 +14,7 @@ async function simpleExposureTest() {
     try {
         // Step 1: Initialize Redis properly
         console.log('🔌 Step 1: Initializing Redis...');
-        redisClient = redis.createClient({
-            host: 'localhost',
-            port: 6379,
-            retryDelayOnFailover: 100,
-            enableReadyCheck: true,
-            maxRetriesPerRequest: 3,
-        });
+        redisClient = 
 
         await redisClient.connect();
         console.log('✅ Redis connected successfully');
@@ -168,3 +166,4 @@ async function simpleExposureTest() {
 
 // Run the test
 simpleExposureTest().catch(console.error); 
+module.exports = { setRedisHelper };

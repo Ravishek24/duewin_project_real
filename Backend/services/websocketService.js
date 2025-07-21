@@ -1,16 +1,24 @@
+const unifiedRedis = require('../config/unifiedRedisManager');
+function getRedisHelper() { return unifiedRedis.getHelper(); }
+
+
 // Backend/services/websocketService.js - ENHANCED: Added bet placement with validation
 
 const { Server } = require('socket.io');
 const jwt = require('jsonwebtoken');
 const { JWT_SECRET } = require('../config/constants');
-const redisHelper = require('../config/redis');
-const redisClient = redisHelper.getClient();
-const { redis: pubsubRedis, isConnected } = require('../config/redisConfig');
+
+
+
 const { logger } = require('../utils/logger');
 const moment = require('moment-timezone');
 const { getSequelizeInstance } = require('../config/db');
 const { initializeModels } = require('../models');
 const { recordVipExperience } = require('./autoVipService');
+
+function getPublisherRedis() {
+  return unifiedRedis.getConnection('publisher');
+}
 
 const gameIntervals = new Map();
 let gameTicksStarted = false;
@@ -37,12 +45,13 @@ const {
 // CRITICAL FIX: Create proper Redis subscriber for ElastiCache
 let redisSubscriber = null;
 
+const Redis = require('ioredis');
 
 const createRedisSubscriber = async () => {
     try {
-        console.log('🔄 [REDIS_SUBSCRIBER] Creating dedicated Redis subscriber for ElastiCache...');
+        //console.log('🔄 [REDIS_SUBSCRIBER] Creating dedicated Redis subscriber for ElastiCache...');
 
-        const Redis = require('ioredis');
+        
 
         // Use the same config as your main Redis connection but create a separate instance
         const subscriberConfig = {
@@ -60,7 +69,7 @@ const createRedisSubscriber = async () => {
 
             retryStrategy: function (times) {
                 const delay = Math.min(times * 50, 2000);
-                console.log(`🔄 [REDIS_SUBSCRIBER] Retrying in ${delay}ms (attempt ${times})`);
+                //console.log(`🔄 [REDIS_SUBSCRIBER] Retrying in ${delay}ms (attempt ${times})`);
                 return delay;
             },
 
@@ -76,11 +85,11 @@ const createRedisSubscriber = async () => {
 
         // Enhanced event handlers
         redisSubscriber.on('connect', () => {
-            console.log('✅ [REDIS_SUBSCRIBER] Connected to ElastiCache');
+            //console.log('✅ [REDIS_SUBSCRIBER] Connected to ElastiCache');
         });
 
         redisSubscriber.on('ready', () => {
-            console.log('✅ [REDIS_SUBSCRIBER] Ready for subscriptions');
+            //console.log('✅ [REDIS_SUBSCRIBER] Ready for subscriptions');
             redisSubscriber.options.enableOfflineQueue = false;
         });
 
@@ -89,7 +98,7 @@ const createRedisSubscriber = async () => {
         });
 
         redisSubscriber.on('reconnecting', (ms) => {
-            console.log(`🔄 [REDIS_SUBSCRIBER] Reconnecting in ${ms}ms...`);
+            //console.log(`🔄 [REDIS_SUBSCRIBER] Reconnecting in ${ms}ms...`);
         });
 
         // Wait for connection
@@ -115,7 +124,7 @@ const createRedisSubscriber = async () => {
             });
         });
 
-        console.log('✅ [REDIS_SUBSCRIBER] Subscriber created successfully');
+        //console.log('✅ [REDIS_SUBSCRIBER] Subscriber created successfully');
         return redisSubscriber;
 
     } catch (error) {
@@ -215,14 +224,14 @@ const calculatePeriodEndTime = (periodId, duration) => {
 // Initialize models before starting WebSocket server
 const initializeWebSocketModels = async () => {
     try {
-        console.log('🔄 Initializing WebSocket models...');
+        //console.log('🔄 Initializing WebSocket models...');
         const sequelize = await getSequelizeInstance();
         models = await initializeModels();
         models.sequelize = sequelize;
         if (!models.GameCombinations5D || !models.Game5DSummaryStats) {
             throw new Error('GameCombinations5D or Game5DSummaryStats model not initialized');
         }
-        console.log('✅ WebSocket models initialized successfully');
+        //console.log('✅ WebSocket models initialized successfully');
         return models;
     } catch (error) {
         console.error('❌ Failed to initialize WebSocket models:', error);
@@ -236,30 +245,24 @@ const initializeWebSocketModels = async () => {
  */
 const getPeriodInfoFromRedis = async (gameType, duration) => {
     try {
-        // Try multiple Redis key patterns that the scheduler might use
-        const possibleKeys = [
-            `game_scheduler:${gameType}:${duration}:current`,
-            `period:${gameType}:${duration}:current`,
-            `current_period:${gameType}:${duration}`,
-            `game:${gameType}:${duration}:current_period`
-        ];
-
-        for (const key of possibleKeys) {
-            try {
-                const periodData = await pubsubRedis.get(key);
-                if (periodData) {
-                    const parsed = JSON.parse(periodData);
-                    if (parsed.periodId && parsed.endTime) {
-                        console.log(`✅ [PERIOD_INFO] Found period data with key: ${key}`);
-                        return parsed;
-                    }
+        // Only use the correct key written by the scheduler
+        const key = `game_scheduler:${gameType}:${duration}:current`;
+        try {
+            //console.log('[WEBSOCKET] Reading period from Redis:', key);
+            const periodData = await getRedisHelper().get(key);
+            //console.log('[WEBSOCKET] Got period data:', periodData);
+            if (periodData) {
+                const parsed = JSON.parse(periodData);
+                //console.log('[WEBSOCKET] Parsed period data:', parsed);
+                if (parsed.periodId && parsed.endTime) {
+                    return parsed;
+                } else {
+                    console.warn('[WEBSOCKET] Period data missing periodId or endTime:', parsed);
                 }
-            } catch (keyError) {
-                // Continue to next key
-                continue;
             }
+        } catch (keyError) {
+            // Continue to next key (no fallback for now)
         }
-
         console.warn(`⚠️ [PERIOD_INFO] No valid period data found for ${gameType}_${duration}`);
         return null;
     } catch (error) {
@@ -274,7 +277,7 @@ const getPeriodInfoFromRedis = async (gameType, duration) => {
  */
 const startBroadcastTicks = () => {
     try {
-        console.log('🕐 Starting broadcast tick system for multi-instance setup...');
+        //console.log('🕐 Starting broadcast tick system for multi-instance setup...');
 
         Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
             durations.forEach(duration => {
@@ -283,7 +286,7 @@ const startBroadcastTicks = () => {
         });
 
         gameTicksStarted = true;
-        console.log('✅ Broadcast tick system started');
+        //console.log('✅ Broadcast tick system started');
 
     } catch (error) {
         console.error('❌ Error starting broadcast ticks:', error);
@@ -307,7 +310,7 @@ const startBroadcastTicksForGame = (gameType, duration) => {
     }, 1000);
 
     gameIntervals.set(key, intervalId);
-    console.log(`⏰ Started broadcast ticks for ${gameType} ${duration}s`);
+    //console.log(`⏰ Started broadcast ticks for ${gameType} ${duration}s`);
 };
 
 /**
@@ -324,8 +327,8 @@ const requestPeriodFromScheduler = async (gameType, duration) => {
         };
 
         // Publish request to scheduler
-        await pubsubRedis.publish('scheduler:period_request', JSON.stringify(requestData));
-        console.log(`📤 [PERIOD_REQUEST] Requested period for ${gameType}_${duration}`);
+        await getPublisherRedis().publish('scheduler:period_request', JSON.stringify(requestData));
+        //console.log(`📤 [PERIOD_REQUEST] Requested period for ${gameType}_${duration}`);
 
     } catch (error) {
         console.error('❌ [PERIOD_REQUEST] Error requesting period:', error);
@@ -338,8 +341,8 @@ const requestPeriodFromScheduler = async (gameType, duration) => {
 const logRoomStatus = () => {
     if (!io) return;
 
-    console.log(`\n👥 [ROOM_STATUS] ==========================================`);
-    console.log(`👥 [ROOM_STATUS] Connected clients: ${io.sockets.sockets.size}`);
+    //console.log(`\n👥 [ROOM_STATUS] ==========================================`);
+    //console.log(`👥 [ROOM_STATUS] Connected clients: ${io.sockets.sockets.size}`);
 
     Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
         durations.forEach(duration => {
@@ -348,18 +351,18 @@ const logRoomStatus = () => {
             const clientCount = room ? room.size : 0;
 
             if (clientCount > 0) {
-                console.log(`👥 [ROOM_STATUS] ${roomId}: ${clientCount} clients`);
+                //console.log(`👥 [ROOM_STATUS] ${roomId}: ${clientCount} clients`);
 
                 // List socket IDs in room (for debugging)
                 if (room) {
                     const socketIds = Array.from(room).slice(0, 3); // Show first 3
-                    console.log(`   - Sockets: ${socketIds.join(', ')}${room.size > 3 ? ` +${room.size - 3} more` : ''}`);
+                    //console.log(`   - Sockets: ${socketIds.join(', ')}${room.size > 3 ? ` +${room.size - 3} more` : ''}`);
                 }
             }
         });
     });
 
-    console.log(`👥 [ROOM_STATUS] ==========================================\n`);
+    //console.log(`👥 [ROOM_STATUS] ==========================================\n`);
 };
 
 // Add room status logging every 30 seconds
@@ -375,7 +378,7 @@ const testClientBroadcasting = () => {
         return;
     }
 
-    console.log('🧪 [BROADCAST_TEST] Testing client broadcasting...');
+    //console.log('🧪 [BROADCAST_TEST] Testing client broadcasting...');
 
     // Test broadcast to all rooms
     Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
@@ -396,7 +399,7 @@ const testClientBroadcasting = () => {
                 };
 
                 io.to(roomId).emit('broadcastTest', testData);
-                console.log(`🧪 [BROADCAST_TEST] Sent test to ${roomId} (${clientCount} clients)`);
+                //console.log(`🧪 [BROADCAST_TEST] Sent test to ${roomId} (${clientCount} clients)`);
             }
         });
     });
@@ -408,7 +411,7 @@ const testClientBroadcasting = () => {
  */
 const broadcastTick = async (gameType, duration) => {
     try {
-        if (!isConnected() || !io) return;
+        if (!io) return;
 
         const roomId = `${gameType}_${duration}`;
 
@@ -465,7 +468,7 @@ const broadcastTick = async (gameType, duration) => {
 
         // Log every 10 seconds to avoid spam
         if (actualTimeRemaining % 10 === 0 || actualTimeRemaining <= 10) {
-            console.log(`⏰ [TIME_BROADCAST] ${roomId}: ${actualTimeRemaining}s remaining, ${clientCount} clients, betting: ${bettingOpen ? 'OPEN' : 'CLOSED'}`);
+            //console.log(`⏰ [TIME_BROADCAST] ${roomId}: ${actualTimeRemaining}s remaining, ${clientCount} clients, betting: ${bettingOpen ? 'OPEN' : 'CLOSED'}`);
         }
 
         // Handle betting closure notification
@@ -483,7 +486,7 @@ const broadcastTick = async (gameType, duration) => {
             };
 
             io.to(roomId).emit('bettingClosed', bettingClosedData);
-            console.log(`🔒 [BETTING_CLOSED] ${roomId}: Betting closed, notified ${clientCount} clients`);
+            //console.log(`🔒 [BETTING_CLOSED] ${roomId}: Betting closed, notified ${clientCount} clients`);
         }
 
     } catch (error) {
@@ -566,7 +569,7 @@ const sendCurrentPeriodFromRedisEnhanced = async (socket, gameType, duration) =>
             timestamp: now.toISOString()
         });
 
-        console.log(`📤 WebSocket: Sent enhanced period info [${gameType}|${duration}s]: ${periodInfo.periodId} (${timeRemaining}s, betting: ${bettingOpen})`);
+        //console.log(`📤 WebSocket: Sent enhanced period info [${gameType}|${duration}s]: ${periodInfo.periodId} (${timeRemaining}s, betting: ${bettingOpen})`);
 
     } catch (error) {
         console.error('❌ WebSocket: Error sending period info:', error);
@@ -1082,7 +1085,7 @@ const calculateOddsForBet = (clientType, clientSelection, betData = {}) => {
 const getTotalBetsForPeriod = async (gameType, duration, periodId, timeline = 'default') => {
     try {
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const betsData = await redisClient.hgetall(betHashKey);
+        const betsData = await getRedisHelper().hgetall(betHashKey);
 
         let totalAmount = 0;
         let totalGross = 0;
@@ -1160,7 +1163,7 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
 
         // Check if user has already placed maximum bets using new hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const allBets = await redisClient.hgetall(betHashKey);
+        const allBets = await getRedisHelper().hgetall(betHashKey);
 
         let userBetCount = 0;
         let userTotalAmount = 0;
@@ -1204,21 +1207,6 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
 const initializeWebSocket = async (server) => {
     try {
         console.log('🔄 Initializing WebSocket server for MULTI-INSTANCE setup...');
-
-        // Wait for Redis connection
-        if (!isConnected()) {
-            console.log('⏳ Waiting for Redis connection...');
-            await new Promise(resolve => {
-                const checkRedis = setInterval(() => {
-                    if (isConnected()) {
-                        clearInterval(checkRedis);
-                        resolve();
-                    }
-                }, 1000);
-            });
-        }
-
-        console.log('✅ Redis connected, creating WebSocket server...');
 
         // Initialize models
         await ensureModelsInitialized();
@@ -1404,6 +1392,7 @@ const initializeWebSocket = async (server) => {
 
             // NEW: Handle bet placement with comprehensive validation + DEBUG MODE
             socket.on('placeBet', async (betData) => {
+                let transformedBetData; // Ensure this is always defined
                 try {
                     const userId = socket.user.userId || socket.user.id;
                     const timestamp = new Date().toISOString();
@@ -1414,9 +1403,6 @@ const initializeWebSocket = async (server) => {
                     console.log(`🎯 [WEBSOCKET_BET_START] Raw bet received:`, JSON.stringify(betData, null, 2));
 
                     // Transform client data format to expected format
-                    let transformedBetData;
-
-                    // Use room-specific mapping for different games
                     if (betData.gameType === 'fiveD' || betData.gameType === '5d') {
                         // 5D Room mapping
                         const fiveDMapping = mapFiveDBet(betData);
@@ -1491,9 +1477,10 @@ const initializeWebSocket = async (server) => {
                     console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Validation passed for user ${userId}`);
 
                     // Process bet using WebSocket-specific processing
+                    console.log('[DEBUG] About to call processWebSocketBet with:', transformedBetData, 'Type:', typeof transformedBetData);
                     const result = await processWebSocketBet(socket, transformedBetData);
-
-                    if (result.success) {
+                    console.log('[DEBUG] processWebSocketBet result:', result, 'Type:', typeof result);
+                    if (result && result.success) {
                         console.log(`✅ [WEBSOCKET_BET_SUCCESS] Bet processed successfully for user ${userId}`);
 
                         // Store user as having placed bet in this period for result notifications
@@ -1523,6 +1510,7 @@ const initializeWebSocket = async (server) => {
                         console.log(`✅ [WEBSOCKET_BET_COMPLETE] Bet flow completed successfully for user ${userId}`);
 
                     } else {
+                        console.log('[DEBUG] processWebSocketBet result was not successful or undefined:', result);
                         console.log(`❌ [WEBSOCKET_BET_PROCESSING_FAILED] Bet processing failed for user ${userId}:`, result.message);
                         socket.emit('betError', {
                             message: result.message,
@@ -1531,7 +1519,12 @@ const initializeWebSocket = async (server) => {
                     }
 
                 } catch (error) {
-                    console.log(`💥 [WEBSOCKET_BET_ERROR] Error processing bet:`, error.message);
+                    try {
+                        console.log('[DEBUG] transformedBetData at error:', typeof transformedBetData, transformedBetData);
+                    } catch (e) {
+                        console.log('[DEBUG] transformedBetData not available');
+                    }
+                    console.log('[DEBUG] Error stack:', error.stack);
                     socket.emit('betError', {
                         message: 'Failed to process bet due to server error',
                         code: 'PROCESSING_ERROR',
@@ -1733,12 +1726,12 @@ const setupRedisSubscriptions = async () => {
             'period:betting_closed'
         ];
 
-        console.log('🔔 [REDIS_PUBSUB] Subscribing to scheduler channels...');
+        //console.log('🔔 [REDIS_PUBSUB] Subscribing to scheduler channels...');
 
         for (const channel of channels) {
             try {
                 await redisSubscriber.subscribe(channel);
-                console.log(`✅ [REDIS_PUBSUB] Subscribed to: ${channel}`);
+                //console.log(`✅ [REDIS_PUBSUB] Subscribed to: ${channel}`);
             } catch (subError) {
                 console.error(`❌ [REDIS_PUBSUB] Failed to subscribe to ${channel}:`, subError);
             }
@@ -1747,13 +1740,13 @@ const setupRedisSubscriptions = async () => {
         // Enhanced message handler
         redisSubscriber.on('message', (channel, message) => {
             const timestamp = new Date().toISOString();
-            console.log(`\n📨 [SCHEDULER_EVENT] ==========================================`);
-            console.log(`📨 [SCHEDULER_EVENT] Channel: ${channel} at ${timestamp}`);
-            console.log(`📨 [SCHEDULER_EVENT] Message: ${message}`);
+            //console.log(`\n📨 [SCHEDULER_EVENT] ==========================================`);
+            //console.log(`📨 [SCHEDULER_EVENT] Channel: ${channel} at ${timestamp}`);
+            //console.log(`📨 [SCHEDULER_EVENT] Message: ${message}`);
 
             try {
                 const data = JSON.parse(message);
-                console.log(`📨 [SCHEDULER_EVENT] Parsed data:`, JSON.stringify(data, null, 2));
+                //console.log(`📨 [SCHEDULER_EVENT] Parsed data:`, JSON.stringify(data, null, 2));
 
                 // Validate required fields
                 if (!data.gameType || !data.duration) {
@@ -1771,10 +1764,10 @@ const setupRedisSubscriptions = async () => {
 
         // Subscription confirmation handler
         redisSubscriber.on('subscribe', (channel, count) => {
-            console.log(`✅ [REDIS_SUBSCRIPTION] Subscribed to ${channel} (total: ${count})`);
+            //console.log(`✅ [REDIS_SUBSCRIPTION] Subscribed to ${channel} (total: ${count})`);
         });
 
-        console.log('✅ [REDIS_PUBSUB] Redis subscriptions setup completed');
+        //console.log('✅ [REDIS_PUBSUB] Redis subscriptions setup completed');
 
     } catch (error) {
         console.error('❌ [REDIS_PUBSUB] Critical error setting up subscriptions:', error);
@@ -1789,7 +1782,7 @@ const stopRedisSubscriptions = () => {
     try {
         if (global.strikeGameSubscriber) {
             global.strikeGameSubscriber.disconnect();
-            console.log('🛑 [REDIS_PUBSUB] Strike Game subscriptions stopped');
+            //console.log('🛑 [REDIS_PUBSUB] Strike Game subscriptions stopped');
         }
     } catch (error) {
         console.error('❌ [REDIS_PUBSUB] Error stopping subscriptions:', error);
@@ -1809,10 +1802,10 @@ const handleGameSchedulerEvent = (channel, data) => {
         const { gameType, duration, periodId } = data;
         const timestamp = new Date().toISOString();
         
-        console.log(`\n📢 [WEBSOCKET_BROADCAST_START] ==========================================`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Broadcasting scheduler event: ${channel}`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Game: ${gameType} ${duration}s`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Period: ${periodId}`);
+        //console.log(`\n📢 [WEBSOCKET_BROADCAST_START] ==========================================`);
+        //console.log(`📢 [WEBSOCKET_BROADCAST_START] Broadcasting scheduler event: ${channel}`);
+        //console.log(`📢 [WEBSOCKET_BROADCAST_START] Game: ${gameType} ${duration}s`);
+        //console.log(`📢 [WEBSOCKET_BROADCAST_START] Period: ${periodId}`);
 
         // CRITICAL FIX: Check if io is available
         if (!io) {
@@ -1827,7 +1820,7 @@ const handleGameSchedulerEvent = (channel, data) => {
         // Get room info for debugging (less verbose)
         const room = io.sockets.adapter.rooms.get(finalRoomId);
         const clientCount = room ? room.size : 0;
-        console.log(`👥 [WEBSOCKET_BROADCAST] Room ${finalRoomId}: ${clientCount} clients`);
+        //console.log(`👥 [WEBSOCKET_BROADCAST] Room ${finalRoomId}: ${clientCount} clients`);
 
         // FIXED: Normalize channel name with proper mapping
         let eventType = channel.split(':').pop();
@@ -1842,13 +1835,13 @@ const handleGameSchedulerEvent = (channel, data) => {
         
         // Apply mapping if needed
         if (eventTypeMapping[eventType]) {
-            console.log(`🔄 [EVENT_MAPPING] Mapped '${eventType}' to '${eventTypeMapping[eventType]}'`);
+            //console.log(`🔄 [EVENT_MAPPING] Mapped '${eventType}' to '${eventTypeMapping[eventType]}'`);
             eventType = eventTypeMapping[eventType];
         }
         
         switch (eventType) {
             case 'period_start':
-                console.log(`📢 [PERIOD_START_BROADCAST] Broadcasting to room: ${finalRoomId}`);
+                //console.log(`📢 [PERIOD_START_BROADCAST] Broadcasting to room: ${finalRoomId}`);
                 
                 let timeRemaining = duration;
                 if (data.endTime) {
@@ -1891,11 +1884,11 @@ const handleGameSchedulerEvent = (channel, data) => {
                     source: 'scheduler_period_start'
                 });
                 
-                console.log(`✅ [PERIOD_START_BROADCAST] Broadcasted to ${clientCount} clients`);
+                //console.log(`✅ [PERIOD_START_BROADCAST] Broadcasted to ${clientCount} clients`);
                 break;
                 
             case 'period_result':
-                console.log(`📢 [PERIOD_RESULT_BROADCAST] Broadcasting to room: ${finalRoomId}`);
+                //console.log(`📢 [PERIOD_RESULT_BROADCAST] Broadcasting to room: ${finalRoomId}`);
                 
                 const periodResultData = {
                     gameType,
@@ -1916,11 +1909,11 @@ const handleGameSchedulerEvent = (channel, data) => {
                 };
                 
                 io.to(finalRoomId).emit('periodResult', periodResultData);
-                console.log(`✅ [PERIOD_RESULT_BROADCAST] Broadcasted to ${clientCount} clients`);
+                //console.log(`✅ [PERIOD_RESULT_BROADCAST] Broadcasted to ${clientCount} clients`);
                 break;
                 
             case 'betting_closed':
-                console.log(`📢 [BETTING_CLOSED_BROADCAST] Broadcasting to room: ${finalRoomId}`);
+                //console.log(`📢 [BETTING_CLOSED_BROADCAST] Broadcasting to room: ${finalRoomId}`);
                 
                 const bettingClosedData = {
                     gameType,
@@ -1937,11 +1930,11 @@ const handleGameSchedulerEvent = (channel, data) => {
                 };
                 
                 io.to(finalRoomId).emit('bettingClosed', bettingClosedData);
-                console.log(`✅ [BETTING_CLOSED_BROADCAST] Broadcasted to ${clientCount} clients`);
+                //console.log(`✅ [BETTING_CLOSED_BROADCAST] Broadcasted to ${clientCount} clients`);
                 break;
                 
             case 'period_error':
-                console.log(`📢 [PERIOD_ERROR_BROADCAST] Broadcasting to room: ${finalRoomId}`);
+                //console.log(`📢 [PERIOD_ERROR_BROADCAST] Broadcasting to room: ${finalRoomId}`);
                 
                 const periodErrorData = {
                     gameType,
@@ -1956,13 +1949,13 @@ const handleGameSchedulerEvent = (channel, data) => {
                 };
                 
                 io.to(finalRoomId).emit('periodError', periodErrorData);
-                console.log(`✅ [PERIOD_ERROR_BROADCAST] Broadcasted to ${clientCount} clients`);
+                //console.log(`✅ [PERIOD_ERROR_BROADCAST] Broadcasted to ${clientCount} clients`);
                 break;
                 
             default:
-                console.log(`⚠️ [UNKNOWN_EVENT] Unhandled event type: '${eventType}' from channel '${channel}'`);
-                console.log(`⚠️ [UNKNOWN_EVENT] Available types: period_start, period_result, betting_closed, period_error`);
-                console.log(`⚠️ [UNKNOWN_EVENT] Raw data:`, JSON.stringify(data, null, 2));
+                //console.log(`⚠️ [UNKNOWN_EVENT] Unhandled event type: '${eventType}' from channel '${channel}'`);
+                //console.log(`⚠️ [UNKNOWN_EVENT] Available types: period_start, period_result, betting_closed, period_error`);
+                //console.log(`⚠️ [UNKNOWN_EVENT] Raw data:`, JSON.stringify(data, null, 2));
                 
                 // Try to handle as generic event anyway
                 io.to(finalRoomId).emit('schedulerEvent', {
@@ -1978,12 +1971,12 @@ const handleGameSchedulerEvent = (channel, data) => {
                 break;
         }
         
-        console.log(`✅ [WEBSOCKET_BROADCAST_COMPLETE] Event '${eventType}' processed for ${finalRoomId}`);
+        //console.log(`✅ [WEBSOCKET_BROADCAST_COMPLETE] Event '${eventType}' processed for ${finalRoomId}`);
         
     } catch (error) {
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error broadcasting event: ${channel}`);
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error:`, error.message);
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Data:`, JSON.stringify(data, null, 2));
+        //console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error broadcasting event: ${channel}`);
+        //console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error:`, error.message);
+        //console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Data:`, JSON.stringify(data, null, 2));
     }
 };
 
@@ -1996,13 +1989,13 @@ const mapK3Bet = (betData) => {
     const clientSelection = String(selection || '').toLowerCase();
     const clientExtra = String(extra || '').toLowerCase();
 
-    console.log(`🎲 [K3_MAPPING] Mapping K3 bet:`, { type: clientType, selection: clientSelection, extra: clientExtra });
+    //console.log(`🎲 [K3_MAPPING] Mapping K3 bet:`, { type: clientType, selection: clientSelection, extra: clientExtra });
 
     // SUM bet - Handle both single and multiple values
     if (clientType === 'sum') {
         // Check if this is a multiple sum bet (comma-separated values)
         if (clientSelection.includes(',')) {
-            console.log(`🎲 [K3_MAPPING] Multiple sum bet detected: ${clientSelection}`);
+            //console.log(`🎲 [K3_MAPPING] Multiple sum bet detected: ${clientSelection}`);
             return {
                 betType: 'SUM_MULTIPLE',
                 betValue: clientSelection,
@@ -2011,7 +2004,7 @@ const mapK3Bet = (betData) => {
         }
         // Single sum bet
         else if (!isNaN(clientSelection)) {
-            console.log(`🎲 [K3_MAPPING] Single sum bet detected: ${clientSelection}`);
+            //console.log(`🎲 [K3_MAPPING] Single sum bet detected: ${clientSelection}`);
             return {
                 betType: 'SUM',
                 betValue: clientSelection,
@@ -2080,7 +2073,7 @@ const mapK3Bet = (betData) => {
     }
 
     // Fallback: return as-is
-    console.log(`⚠️ [K3_MAPPING] Unknown bet type: ${clientType}, returning as-is`);
+    //console.log(`⚠️ [K3_MAPPING] Unknown bet type: ${clientType}, returning as-is`);
     return { betType: clientType.toUpperCase(), betValue: clientSelection, odds: 0 };
 };
 
@@ -2112,7 +2105,7 @@ module.exports = {
                 validated: true
             });
 
-            console.log(`📢 WebSocket: External broadcast ${event} to ${roomId}`);
+            //console.log(`📢 WebSocket: External broadcast ${event} to ${roomId}`);
         } catch (error) {
             console.error('❌ WebSocket: Error broadcasting to game:', error);
         }
@@ -2143,23 +2136,23 @@ module.exports = {
             const periodKey = `${gameType}_${duration}_${periodId}`;
             const timestamp = new Date().toISOString();
 
-            console.log(`\n🎯 [BET_RESULTS_START] ==========================================`);
-            console.log(`🎯 [BET_RESULTS_START] Broadcasting results for ${periodKey} at ${timestamp}`);
-            console.log(`🎯 [BET_RESULTS_START] Game: ${gameType} ${duration}s`);
-            console.log(`🎯 [BET_RESULTS_START] Period: ${periodId}`);
-            console.log(`🎯 [BET_RESULTS_START] Result:`, JSON.stringify(periodResult, null, 2));
-            console.log(`🎯 [BET_RESULTS_START] Winning bets count: ${winningBets.length}`);
-            console.log(`🎯 [BET_RESULTS_START] Winning bets details:`, JSON.stringify(winningBets, null, 2));
+            //console.log(`\n🎯 [BET_RESULTS_START] ==========================================`);
+            //console.log(`🎯 [BET_RESULTS_START] Broadcasting results for ${periodKey} at ${timestamp}`);
+            //console.log(`🎯 [BET_RESULTS_START] Game: ${gameType} ${duration}s`);
+            //console.log(`🎯 [BET_RESULTS_START] Period: ${periodId}`);
+            //console.log(`🎯 [BET_RESULTS_START] Result:`, JSON.stringify(periodResult, null, 2));
+            //console.log(`🎯 [BET_RESULTS_START] Winning bets count: ${winningBets.length}`);
+            //console.log(`🎯 [BET_RESULTS_START] Winning bets details:`, JSON.stringify(winningBets, null, 2));
 
             // Get all sockets in the room
             const room = io.sockets.adapter.rooms.get(roomId);
             if (!room) {
-                console.log(`⚠️ [BET_RESULTS] No room found: ${roomId}`);
+                //console.log(`⚠️ [BET_RESULTS] No room found: ${roomId}`);
                 return;
             }
 
-            console.log(`👥 [BET_RESULTS_ROOM] ==========================================`);
-            console.log(`👥 [BET_RESULTS_ROOM] Room ${roomId} has ${room.size} connected users`);
+            //console.log(`👥 [BET_RESULTS_ROOM] ==========================================`);
+            //console.log(`👥 [BET_RESULTS_ROOM] Room ${roomId} has ${room.size} connected users`);
 
             let notificationsSent = 0;
             let bettingUsersFound = 0;
@@ -2170,30 +2163,30 @@ module.exports = {
                 const socket = io.sockets.sockets.get(socketId);
 
                 if (!socket || !socket.user) {
-                    console.log(`👤 [BET_RESULTS] Socket ${socketId} has no user, skipping`);
+                    //console.log(`👤 [BET_RESULTS] Socket ${socketId} has no user, skipping`);
                     continue;
                 }
 
                 const userId = socket.user.userId || socket.user.id;
 
                 if (!socket.activeBets) {
-                    console.log(`👁️ [BET_RESULTS] User ${userId} has no active bets, watching only`);
+                    //console.log(`👁️ [BET_RESULTS] User ${userId} has no active bets, watching only`);
                     watchingUsersFound++;
                     continue;
                 }
 
                 // Check if this user placed a bet in this period
                 if (!socket.activeBets.has(periodKey)) {
-                    console.log(`👁️ [BET_RESULTS] User ${userId} was only watching period ${periodId}, no notification sent`);
+                    //console.log(`👁️ [BET_RESULTS] User ${userId} was only watching period ${periodId}, no notification sent`);
                     watchingUsersFound++;
                     continue;
                 }
 
                 bettingUsersFound++;
-                console.log(`🎯 [BET_RESULTS_USER] ==========================================`);
-                console.log(`🎯 [BET_RESULTS_USER] Processing results for betting user: ${userId}`);
-                console.log(`🎯 [BET_RESULTS_USER] Socket ID: ${socket.id}`);
-                console.log(`🎯 [BET_RESULTS_USER] Active bets:`, Array.from(socket.activeBets));
+                //console.log(`🎯 [BET_RESULTS_USER] ==========================================`);
+                //console.log(`🎯 [BET_RESULTS_USER] Processing results for betting user: ${userId}`);
+                //console.log(`🎯 [BET_RESULTS_USER] Socket ID: ${socket.id}`);
+                //console.log(`🎯 [BET_RESULTS_USER] Active bets:`, Array.from(socket.activeBets));
 
                 // Find if this user won
                 const userWinnings = winningBets.filter(bet =>
@@ -2203,11 +2196,11 @@ module.exports = {
                 const hasWon = userWinnings.length > 0;
                 const totalWinnings = userWinnings.reduce((sum, bet) => sum + (bet.winnings || 0), 0);
 
-                console.log(`💰 [BET_RESULTS_WINNINGS] ==========================================`);
-                console.log(`💰 [BET_RESULTS_WINNINGS] User ${userId} win status: ${hasWon ? 'WON' : 'LOST'}`);
-                console.log(`💰 [BET_RESULTS_WINNINGS] Winning bets found: ${userWinnings.length}`);
-                console.log(`💰 [BET_RESULTS_WINNINGS] Total winnings: ₹${totalWinnings}`);
-                console.log(`💰 [BET_RESULTS_WINNINGS] Winning bet details:`, JSON.stringify(userWinnings, null, 2));
+                //console.log(`💰 [BET_RESULTS_WINNINGS] ==========================================`);
+                //console.log(`💰 [BET_RESULTS_WINNINGS] User ${userId} win status: ${hasWon ? 'WON' : 'LOST'}`);
+                //console.log(`💰 [BET_RESULTS_WINNINGS] Winning bets found: ${userWinnings.length}`);
+                //console.log(`💰 [BET_RESULTS_WINNINGS] Total winnings: ₹${totalWinnings}`);
+                //console.log(`💰 [BET_RESULTS_WINNINGS] Winning bet details:`, JSON.stringify(userWinnings, null, 2));
 
                 // Prepare personalized result data
                 const personalizedResult = {
@@ -2232,39 +2225,39 @@ module.exports = {
                     source: 'bet_result_notification'
                 };
 
-                console.log(`📤 [BET_RESULTS_SEND] ==========================================`);
-                console.log(`📤 [BET_RESULTS_SEND] Sending personalized result to user ${userId}:`);
-                console.log(`📤 [BET_RESULTS_SEND] Result data:`, JSON.stringify(personalizedResult, null, 2));
+                //console.log(`📤 [BET_RESULTS_SEND] ==========================================`);
+                //console.log(`📤 [BET_RESULTS_SEND] Sending personalized result to user ${userId}:`);
+                //console.log(`📤 [BET_RESULTS_SEND] Result data:`, JSON.stringify(personalizedResult, null, 2));
 
                 // Send personalized result to this betting user
                 socket.emit('betResult', personalizedResult);
 
                 notificationsSent++;
 
-                console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] ==========================================`);
-                console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Result sent to user ${userId}: ${hasWon ? `WON ₹${totalWinnings}` : 'LOST'}`);
-                console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Notification #${notificationsSent} sent successfully`);
+                //console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] ==========================================`);
+                //console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Result sent to user ${userId}: ${hasWon ? `WON ₹${totalWinnings}` : 'LOST'}`);
+                //console.log(`${hasWon ? '🎉' : '😔'} [BET_RESULTS_SENT] Notification #${notificationsSent} sent successfully`);
 
                 // Remove this period from user's active bets
                 socket.activeBets.delete(periodKey);
-                console.log(`🗑️ [BET_RESULTS_CLEANUP] Removed period ${periodKey} from user ${userId} active bets`);
+                //console.log(`🗑️ [BET_RESULTS_CLEANUP] Removed period ${periodKey} from user ${userId} active bets`);
             }
 
-            console.log(`✅ [BET_RESULTS_COMPLETE] ==========================================`);
-            console.log(`✅ [BET_RESULTS_COMPLETE] Results broadcast completed for ${periodKey}`);
-            console.log(`✅ [BET_RESULTS_COMPLETE] Total users in room: ${room.size}`);
-            console.log(`✅ [BET_RESULTS_COMPLETE] Betting users found: ${bettingUsersFound}`);
-            console.log(`✅ [BET_RESULTS_COMPLETE] Watching users found: ${watchingUsersFound}`);
-            console.log(`✅ [BET_RESULTS_COMPLETE] Notifications sent: ${notificationsSent}`);
-            console.log(`✅ [BET_RESULTS_COMPLETE] Winning bets total: ${winningBets.length}`);
+            //console.log(`✅ [BET_RESULTS_COMPLETE] ==========================================`);
+            //console.log(`✅ [BET_RESULTS_COMPLETE] Results broadcast completed for ${periodKey}`);
+            //console.log(`✅ [BET_RESULTS_COMPLETE] Total users in room: ${room.size}`);
+            //console.log(`✅ [BET_RESULTS_COMPLETE] Betting users found: ${bettingUsersFound}`);
+            //console.log(`✅ [BET_RESULTS_COMPLETE] Watching users found: ${watchingUsersFound}`);
+            //console.log(`✅ [BET_RESULTS_COMPLETE] Notifications sent: ${notificationsSent}`);
+            //console.log(`✅ [BET_RESULTS_COMPLETE] Winning bets total: ${winningBets.length}`);
 
         } catch (error) {
-            console.log(`💥 [BET_RESULTS_ERROR] ==========================================`);
-            console.log(`💥 [BET_RESULTS_ERROR] Error broadcasting bet results for ${gameType}_${duration}_${periodId}:`);
-            console.log(`💥 [BET_RESULTS_ERROR] Error:`, error.message);
-            console.log(`💥 [BET_RESULTS_ERROR] Stack:`, error.stack);
-            console.log(`💥 [BET_RESULTS_ERROR] Result data:`, JSON.stringify(periodResult, null, 2));
-            console.log(`💥 [BET_RESULTS_ERROR] Winning bets:`, JSON.stringify(winningBets, null, 2));
+            //console.log(`💥 [BET_RESULTS_ERROR] ==========================================`);
+            //console.log(`💥 [BET_RESULTS_ERROR] Error broadcasting bet results for ${gameType}_${duration}_${periodId}:`);
+            //console.log(`💥 [BET_RESULTS_ERROR] Error:`, error.message);
+            //console.log(`💥 [BET_RESULTS_ERROR] Stack:`, error.stack);
+            //console.log(`💥 [BET_RESULTS_ERROR] Result data:`, JSON.stringify(periodResult, null, 2));
+            //console.log(`💥 [BET_RESULTS_ERROR] Winning bets:`, JSON.stringify(winningBets, null, 2));
         }
     },
 
@@ -2294,7 +2287,7 @@ module.exports = {
                 source: 'period_result_general'
             });
 
-            console.log(`📢 [PERIOD_RESULT] Broadcasted general result for ${gameType}_${duration}_${periodId} to all users in room`);
+            //console.log(`📢 [PERIOD_RESULT] Broadcasted general result for ${gameType}_${duration}_${periodId} to all users in room`);
 
         } catch (error) {
             console.error('❌ Error broadcasting period result:', error);
@@ -2339,36 +2332,36 @@ module.exports = {
     stopGameTicks: () => {
         gameIntervals.forEach((intervalId, key) => {
             clearInterval(intervalId);
-            console.log(`⏹️ WebSocket: Stopped broadcast ticks for ${key}`);
+            //console.log(`⏹️ WebSocket: Stopped broadcast ticks for ${key}`);
         });
         gameIntervals.clear();
         gameTicksStarted = false;
-        console.log('🛑 WebSocket: All broadcast ticks stopped');
+        //console.log('🛑 WebSocket: All broadcast ticks stopped');
     },
 
     // Debug functions
     verifyGameTicks: () => {
-        console.log('🔍 Verifying DURATION-BASED broadcast system with BETTING...');
+        //console.log('🔍 Verifying DURATION-BASED broadcast system with BETTING...');
 
         const expectedIntervals = Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0);
         const activeIntervals = gameIntervals.size;
 
-        console.log(`📊 WebSocket broadcast system status:`);
-        console.log(`   - Active intervals: ${activeIntervals}`);
-        console.log(`   - Expected intervals: ${expectedIntervals}`);
-        console.log(`   - System started: ${gameTicksStarted}`);
-        console.log(`   - Connected clients: ${io ? io.sockets.sockets.size : 0}`);
-        console.log(`   - Betting enabled: ✅`);
+        //console.log(`📊 WebSocket broadcast system status:`);
+        //console.log(`   - Active intervals: ${activeIntervals}`);
+        //console.log(`   - Expected intervals: ${expectedIntervals}`);
+        //console.log(`   - System started: ${gameTicksStarted}`);
+        //console.log(`   - Connected clients: ${io ? io.sockets.sockets.size : 0}`);
+        //console.log(`   - Betting enabled: ✅`);
 
         // Show detailed status
         Object.keys(GAME_CONFIGS).forEach(gameType => {
-            console.log(`\n📋 ${gameType.toUpperCase()} rooms:`);
+            //console.log(`\n📋 ${gameType.toUpperCase()} rooms:`);
             GAME_CONFIGS[gameType].forEach(duration => {
                 const key = `${gameType}_${duration}`;
                 const hasInterval = gameIntervals.has(key);
                 const roomId = `${gameType}_${duration}`;
                 const clientCount = io ? (io.sockets.adapter.rooms.get(roomId)?.size || 0) : 0;
-                console.log(`   - ${key}: ${hasInterval ? '✅ Active' : '❌ Inactive'} | ${clientCount} clients | Betting: ✅`);
+                //console.log(`   - ${key}: ${hasInterval ? '✅ Active' : '❌ Inactive'} | ${clientCount} clients | Betting: ✅`);
             });
         });
 
@@ -2457,13 +2450,13 @@ module.exports = {
                     validationActive: true
                 },
                 redis: {
-                    status: isConnected() ? 'connected' : 'disconnected'
+                    status: 'connected'
                 }
             };
 
             // Test Redis connectivity
             try {
-                await pubsubRedis.ping();
+                await getRedisHelper().ping();
                 health.redis.latency = 'low';
             } catch (redisError) {
                 health.redis.status = 'error';
@@ -2488,9 +2481,7 @@ module.exports = {
 
     // Additional utility functions
     getRoomId,
-    isConnected,
     calculatePeriodStartTime,
-    calculatePeriodEndTime,
     initializeWebSocketModels,
     processWebSocketBet,
     requestPeriodFromScheduler,

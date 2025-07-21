@@ -15,7 +15,7 @@ const { sequelize } = require('../config/db');
 const { v4: uuidv4 } = require('uuid');
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
-const redis = require('../config/redis');
+
 
 // Import models - these will be loaded after models are initialized
 let User, SpribeGameSession, SpribeTransaction, Transaction;

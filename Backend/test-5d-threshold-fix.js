@@ -1,13 +1,12 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { Sequelize } = require('sequelize');
-const redis = require('redis');
+
 
 // Initialize Redis client
-const redisClient = redis.createClient({
-    host: 'master.strike-game-redis.66utip.apse1.cache.amazonaws.com',
-    port: '6379',
-    db: '0',
-    tls: 'enabled'
-});
+const redisClient = 
 
 // Initialize Sequelize
 const sequelize = new Sequelize({
@@ -157,3 +156,4 @@ async function testThresholdFix() {
 
 // Run the test
 testThresholdFix(); 
+module.exports = { setRedisHelper };

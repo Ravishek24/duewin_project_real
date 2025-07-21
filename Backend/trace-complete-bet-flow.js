@@ -1,5 +1,9 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const gameLogicService = require('./services/gameLogicService');
-const redis = require('redis');
+
 
 // Enhanced logging wrapper
 const createTracer = (functionName, originalFunction) => {
@@ -70,13 +74,7 @@ async function traceCompleteBetFlow() {
     console.log('==================================\n');
     
     // Create Redis client for this trace
-    const redisClient = redis.createClient({
-        host: 'localhost',
-        port: 6379,
-        retryDelayOnFailover: 100,
-        enableReadyCheck: true,
-        maxRetriesPerRequest: 3,
-    });
+    const redisClient = 
     
     await redisClient.connect();
     console.log('✅ Redis connected for tracing');
@@ -236,3 +234,4 @@ async function initializeTracer() {
 
 // Run the tracer
 initializeTracer().catch(console.error); 
+module.exports = { setRedisHelper };

@@ -2,7 +2,8 @@ const { BetRecordWingo, BetResultWingo, User } = require('../../models');
 const GamePeriod = require('../../models/GamePeriod');const { Op } = require('sequelize');
 const moment = require('moment-timezone');
 const WebSocket = require('ws');
-const redis = require('../../config/redis');
+const unifiedRedis = require('../../config/unifiedRedisManager');
+function getRedisHelper() { return unifiedRedis.getHelper(); }
 const gameLogicService = require('../../services/gameLogicService');
 
 // WebSocket server instance
@@ -499,7 +500,7 @@ const setWingoResult = async (req, res) => {
                           period.duration === 300 ? '5m' : '10m';
         
         const overrideKey = `wingo:${durationKey}:${periodId}:result:override`;
-        await redis.set(overrideKey, JSON.stringify(result));
+        await getRedisHelper().set(overrideKey, JSON.stringify(result));
 
         // Create result record
         const betResult = await BetResultWingo.create({

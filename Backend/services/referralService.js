@@ -355,7 +355,7 @@ const getDirectReferrals = async (userId, dateFilter = null) => {
 
             // Add commission data to user object
             const referralWithCommission = {
-                ...referral.toJSON(),
+                ...(typeof referral.toJSON === 'function' ? referral.toJSON() : referral),
                 commission_earned: userCommission
             };
             
@@ -467,7 +467,7 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
 
                                 // Add commission data to user object
                                 const userWithCommission = {
-                                    ...user.toJSON(),
+                                    ...(typeof user.toJSON === 'function' ? user.toJSON() : user),
                                     commission_earned: userCommission
                                 };
                                 
@@ -513,7 +513,7 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
 
                         // Add commission data to user object
                         const userWithCommission = {
-                            ...user.toJSON(),
+                            ...(typeof user.toJSON === 'function' ? user.toJSON() : user),
                             commission_earned: userCommission
                         };
                         
@@ -552,7 +552,7 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
 
                     // Add commission data to user object
                     const userWithCommission = {
-                        ...user.toJSON(),
+                        ...(typeof user.toJSON === 'function' ? user.toJSON() : user),
                         commission_earned: userCommission
                     };
                     
@@ -1468,7 +1468,8 @@ const processRechargeForAttendance = async (userId, rechargeAmount) => {
                 bonus_amount: 0,
                 bonus_claimed: false,
                 claim_eligible: false,
-                created_at: new Date()
+                created_at: new Date(),
+                updated_at: new Date()
             }, { transaction: t });
         } else {
             await attendanceRecord.update({

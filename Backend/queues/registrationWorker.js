@@ -14,10 +14,14 @@ const worker = new Worker('registration', async job => {
         console.log(`[BullMQ] Registration bonus applied for user ${data.userId}`);
         break;
         
-      case 'recordReferral':
-        await recordReferralWithRetry(data.userId, data.referredBy, models);
-        console.log(`[BullMQ] Referral recorded for user ${data.userId} with code: ${data.referredBy}`);
+      case 'recordReferral': {
+        // Import referralService here to avoid circular dependency at top
+        const referralService = require('../services/referralService');
+        // Use the correct multi-level referral tree logic
+        await referralService.autoRecordReferral(data.userId, data.referredBy);
+        console.log(`[BullMQ] Referral tree (multi-level) processed for user ${data.userId} with code: ${data.referredBy}`);
         break;
+      }
         
       default:
         throw new Error(`Unknown job type: ${type}`);
@@ -65,6 +69,7 @@ async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const transaction = await models.User.sequelize.transaction();
+    let finished = false;
     
     try {
       // Check if bonus already applied
@@ -78,7 +83,8 @@ async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
       
       if (existingBonus) {
         console.log(`Registration bonus already applied for user ${userId}`);
-        await transaction.rollback();
+        finished = true;
+        // No rollback needed here, just return
         return { success: true, message: 'Bonus already applied' };
       }
       
@@ -109,19 +115,22 @@ async function applyRegistrationBonusWithRetry(userId, models, maxRetries = 3) {
         }, { transaction });
         
         await transaction.commit();
+        finished = true;
         
         // Set deduplication flag (expires in 30 days)
-        await redis.setex(deduplicationKey, 2592000, '1');
+        await redis.set(deduplicationKey, '1', 'EX', 2592000);
         
         console.log(`✅ Registration bonus applied for user ${userId}`);
         return { success: true, amount: BONUS_AMOUNT };
       }
       
-      await transaction.rollback();
+      // No commit or rollback needed here, just return
+      finished = true;
       return { success: true, message: 'No bonus applicable' };
-      
     } catch (error) {
-      await transaction.rollback();
+      if (!finished) {
+        await transaction.rollback();
+      }
       
       if (error.name === 'SequelizeDeadlockError' && attempt < maxRetries) {
         console.warn(`Deadlock detected for registration bonus ${userId}, retrying (${attempt}/${maxRetries})`);

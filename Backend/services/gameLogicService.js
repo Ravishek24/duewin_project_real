@@ -1,7 +1,12 @@
+const unifiedRedis = require('../config/unifiedRedisManager');
+function getRedisHelper() {
+  return unifiedRedis.getHelper();
+}
+
 // Backend/services/gameLogicService.js
 const { sequelize, DataTypes, Op } = require('../config/db');
-const redisHelper = require('../config/redis');
-const redisClient = redisHelper.getClient();
+
+
 const periodService = require('./periodService');
 const tronHashService = require('./tronHashService');
 const winston = require('winston');
@@ -12,6 +17,7 @@ const { recordVipExperience } = require('../services/autoVipService');
 const { processSelfRebate } = require('../services/selfRebateService');
 const { processBetForActivityReward } = require('../services/activityRewardsService');
 const fiveDProtectionService = require('./fiveDProtectionService');
+const moment = require('moment');
 // CONSTANTS - Add to top of file
 const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
 const ENHANCED_USER_THRESHOLD = 2; // Threshold for protection system
@@ -345,7 +351,7 @@ const shouldUseMinimumBetResult = async (gameType, duration, periodId) => {
                     duration === 300 ? '5m' : '10m';
 
         const minBetPeriodsKey = `${gameType}:${durationKey}:${hourKey}:min_bet_periods`;
-        let minBetPeriods = await redisClient.get(minBetPeriodsKey);
+        let minBetPeriods = await getRedisHelper().get(minBetPeriodsKey);
 
         if (!minBetPeriods) {
             // Generate 3 random periods for this hour if not exists
@@ -358,8 +364,8 @@ const shouldUseMinimumBetResult = async (gameType, duration, periodId) => {
             }
 
             minBetPeriods = JSON.stringify(Array.from(periods));
-            await redisClient.set(minBetPeriodsKey, minBetPeriods);
-            await redisClient.expire(minBetPeriodsKey, 3600); // Expire after 1 hour
+            await getRedisHelper().set(minBetPeriodsKey, minBetPeriods);
+            await getRedisHelper().expire(minBetPeriodsKey, 3600); // Expire after 1 hour
         }
 
         // Calculate current period number within the hour
@@ -400,13 +406,13 @@ const getPreCalculatedResults = async (gameType, duration, periodId) => {
                     duration === 300 ? '5m' : '10m';
 
         // Get lowest combinations
-        const lowestCombinationsStr = await redisClient.get(
+        const lowestCombinationsStr = await getRedisHelper().get(
             `${gameType}:${durationKey}:${periodId}:lowest_combinations`
         );
         const lowestCombinations = lowestCombinationsStr ? JSON.parse(lowestCombinationsStr) : [];
 
         // Get optimized result
-        const optimizedResultStr = await redisClient.get(
+        const optimizedResultStr = await getRedisHelper().get(
             `${gameType}:${durationKey}:${periodId}:optimized_result`
         );
         const optimizedResult = optimizedResultStr ? JSON.parse(optimizedResultStr) : null;
@@ -453,7 +459,7 @@ const logSuspiciousActivity = async (gameType, duration, periodId, validations) 
 
         // Store suspicious activity in Redis
         const suspiciousKey = `${gameType}:${durationKey}:${periodId}:suspicious`;
-        await redisClient.set(suspiciousKey, JSON.stringify({
+        await getRedisHelper().set(suspiciousKey, JSON.stringify({
             timestamp: new Date().toISOString(),
             validations,
             action: 'result_override'
@@ -461,7 +467,7 @@ const logSuspiciousActivity = async (gameType, duration, periodId, validations) 
 
         // Set expiry for suspicious activity log (7 days)
         const EXPIRY_SECONDS = 7 * 24 * 60 * 60;
-        await redisClient.expire(suspiciousKey, EXPIRY_SECONDS);
+        await getRedisHelper().expire(suspiciousKey, EXPIRY_SECONDS);
 
         // Log to file
         logger.error('Suspicious activity detected', {
@@ -558,7 +564,7 @@ const getSystemHealthCheck = async () => {
 
         // Check Redis connection
         try {
-            await redisClient.ping();
+            await getRedisHelper().ping();
             health.redis.status = 'healthy';
             health.redis.connected = true;
         } catch (redisError) {
@@ -706,7 +712,7 @@ async function lazy5DLoader(diceValue) {
     try {
         // Check Redis cache first
         const cacheKey = `5d:combo:${diceValue}`;
-        const cached = await redisClient.get(cacheKey);
+        const cached = await getRedisHelper().get(cacheKey);
 
         if (cached) {
             return JSON.parse(cached);
@@ -747,7 +753,7 @@ async function lazy5DLoader(diceValue) {
         };
 
         // Cache for 1 hour
-        await redisClient.setex(cacheKey, 3600, JSON.stringify(result));
+        await getRedisHelper().setex(cacheKey, 3600, JSON.stringify(result));
 
         return result;
     } catch (error) {
@@ -763,7 +769,7 @@ async function get5DCombinationsBatch(diceValues) {
 
         // Check cache for each value
         for (const diceValue of diceValues) {
-            const cached = await redisClient.get(`5d:combo:${diceValue}`);
+            const cached = await getRedisHelper().get(`5d:combo:${diceValue}`);
             if (cached) {
                 results.push(JSON.parse(cached));
             } else {
@@ -803,7 +809,7 @@ async function get5DCombinationsBatch(diceValues) {
                     })() : combo.winning_conditions
                 };
 
-                await redisClient.setex(`5d:combo:${combo.dice_value}`, 3600, JSON.stringify(result));
+                await getRedisHelper().setex(`5d:combo:${combo.dice_value}`, 3600, JSON.stringify(result));
                 results.push(result);
             }
         }
@@ -851,7 +857,7 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                 if (betType === 'NUMBER') {
                     const numberOdds = 9.0; // Number bets always pay 9.0x
                     const exposure = Math.round(actualBetAmount * numberOdds * 100); // Convert to cents
-                    await redisClient.hincrby(exposureKey, `number:${betValue}`, exposure);
+                    await getRedisHelper().hincrby(exposureKey, `number:${betValue}`, exposure);
                 }
                 // For other bets, update all matching numbers with correct odds
                 else {
@@ -910,7 +916,7 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                             const exposure = Math.round(actualBetAmount * correctOdds * 100); // Convert to cents
                             console.log(`🔍 [EXPOSURE_DEBUG] Adding exposure ${exposure} to number ${num}`);
 
-                            await redisClient.hincrby(exposureKey, `number:${num}`, exposure);
+                            await getRedisHelper().hincrby(exposureKey, `number:${num}`, exposure);
                         } else {
                             console.log(`🔍 [EXPOSURE_DEBUG] Number ${num} (${combo?.color}) does NOT win for bet ${betType}:${betValue}`);
                         }
@@ -948,7 +954,7 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
 
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
                     if (combo && checkK3WinCondition(combo, betType, betValue)) {
-                        await redisClient.hincrby(exposureKey, `dice:${key}`, k3Exposure);
+                        await getRedisHelper().hincrby(exposureKey, `dice:${key}`, k3Exposure);
                         winningCombinations++;
 
                         // Track exposure breakdown by result type
@@ -1018,7 +1024,7 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                 const fiveDOdds = calculateOdds(gameType, betType, betValue);
                 const fiveDExposure = Math.round(actualBetAmount * fiveDOdds * 100);
                 const betKey = `${betType}:${betValue}`;
-                await redisClient.hincrby(exposureKey, `bet:${betKey}`, fiveDExposure);
+                await getRedisHelper().hincrby(exposureKey, `bet:${betKey}`, fiveDExposure);
                 
                 // 🎯 ENHANCED 5D EXPOSURE LOGGING WITH UNIQUE EMOJIS
                 console.log(`🎯 [5D_BET_PLACED] 🎲 5D Bet Exposure Updated:`, {
@@ -1044,10 +1050,10 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
         }
 
         // Set expiry
-        await redisClient.expire(exposureKey, duration + 300);
+        await getRedisHelper().expire(exposureKey, duration + 300);
 
         // Debug: Check final exposures
-        const finalExposures = await redisClient.hgetall(exposureKey);
+        const finalExposures = await getRedisHelper().hgetall(exposureKey);
         console.log('🔍 [EXPOSURE_DEBUG] Final exposures after update:', finalExposures);
 
     } catch (error) {
@@ -1164,7 +1170,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId, timeline
             case 'wingo':
             case 'trx_wix':
                 // Get all exposures
-                const wingoExposures = await redisClient.hgetall(exposureKey);
+                const wingoExposures = await getRedisHelper().hgetall(exposureKey);
                 let minExposure = Infinity;
                 let optimalNumber = 0;
 
@@ -1197,7 +1203,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId, timeline
 
             case 'k3':
                 // Get all exposures
-                const k3Exposures = await redisClient.hgetall(exposureKey);
+                const k3Exposures = await getRedisHelper().hgetall(exposureKey);
                 let minK3Exposure = Infinity;
                 let optimalKey = '1,1,1';
 
@@ -1236,7 +1242,7 @@ async function getOptimalResultByExposure(gameType, duration, periodId, timeline
 async function getOptimal5DResultByExposure(duration, periodId, timeline = 'default') {
     try {
         const exposureKey = `exposure:5d:${duration}:${timeline}:${periodId}`;
-        const betExposures = await redisClient.hgetall(exposureKey);
+        const betExposures = await getRedisHelper().hgetall(exposureKey);
 
         // Get total bets amount
         const totalBets = Object.values(betExposures).reduce((sum, val) => sum + parseFloat(val), 0);
@@ -1426,12 +1432,12 @@ async function calculate5DExposure(combination, betExposures) {
     let totalExposure = 0;
     
     // Debug logging to understand the issue
-    console.log('🔍 [5D_EXPOSURE_DEBUG] calculate5DExposure called with:', {
-        combinationType: typeof combination,
-        winningConditionsType: typeof combination.winning_conditions,
-        winningConditionsValue: combination.winning_conditions,
-        betExposuresKeys: Object.keys(betExposures)
-    });
+    //console.log('🔍 [5D_EXPOSURE_DEBUG] calculate5DExposure called with:', {
+    //    combinationType: typeof combination,
+    //    winningConditionsType: typeof combination.winning_conditions,
+    //    winningConditionsValue: combination.winning_conditions,
+    //    betExposuresKeys: Object.keys(betExposures)
+    //});
     
     let winningConditions;
     if (typeof combination.winning_conditions === 'string') {
@@ -1527,7 +1533,7 @@ function findUnbetPositions(betExposures) {
 async function resetPeriodExposure(gameType, duration, periodId, timeline = 'default') {
     try {
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
-        await redisClient.del(exposureKey);
+        await getRedisHelper().del(exposureKey);
         logger.info('Period exposure reset', { gameType, duration, periodId, timeline });
     } catch (error) {
         logger.error('Error resetting period exposure', { error: error.message, gameType, periodId });
@@ -1539,7 +1545,7 @@ async function indexBetInHash(gameType, duration, periodId, timeline, bet) {
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
         const betId = `${bet.userId}:${bet.betType}:${bet.betValue}:${Date.now()}`;
 
-        await redisClient.hset(betHashKey, betId, JSON.stringify({
+        await getRedisHelper().hset(betHashKey, betId, JSON.stringify({
             userId: bet.userId,
             betType: bet.betType,
             betValue: bet.betValue,
@@ -1551,7 +1557,7 @@ async function indexBetInHash(gameType, duration, periodId, timeline, bet) {
         }));
 
         // Set expiry
-        await redisClient.expire(betHashKey, 86400);
+        await getRedisHelper().expire(betHashKey, 86400);
 
         return betId;
     } catch (error) {
@@ -1563,7 +1569,7 @@ async function indexBetInHash(gameType, duration, periodId, timeline, bet) {
 async function getBetsFromHash(gameType, duration, periodId, timeline = 'default') {
     try {
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const betsData = await redisClient.hgetall(betHashKey);
+        const betsData = await getRedisHelper().hgetall(betHashKey);
 
         const bets = [];
         for (const [betId, betJson] of Object.entries(betsData)) {
@@ -1699,8 +1705,8 @@ const initializeCombinationTracking = async (gameType, duration, periodId) => {
 
         // Store in Redis
         const trackingKey = `${gameType}:${durationKey}:${periodId}:tracking`;
-        await redisClient.set(trackingKey, JSON.stringify(trackingData));
-        await redisClient.expire(trackingKey, duration + 300); // 5 min buffer
+        await getRedisHelper().set(trackingKey, JSON.stringify(trackingData));
+        await getRedisHelper().expire(trackingKey, duration + 300); // 5 min buffer
 
         logger.info('Combination tracking initialized', {
             gameType,
@@ -1885,7 +1891,7 @@ const getPreCalculatedCombinations = async (gameType) => {
  */
 const calculateSampledPayout = async (gameType, durationKey, periodId, result, sampleRate) => {
     try {
-        const betKeys = await redisClient.keys(`${gameType}:${durationKey}:${periodId}:*`);
+        const betKeys = await getRedisHelper().keys(`${gameType}:${durationKey}:${periodId}:*`);
 
         // Sample bets randomly
         const sampleSize = Math.ceil(betKeys.length * sampleRate);
@@ -1898,7 +1904,7 @@ const calculateSampledPayout = async (gameType, durationKey, periodId, result, s
 
         for (const key of sampledKeys) {
             try {
-                const betData = await redisClient.get(key);
+                const betData = await getRedisHelper().get(key);
                 if (!betData) continue;
 
                 const bet = JSON.parse(betData);
@@ -2039,11 +2045,11 @@ const cleanupPeriodData = async (gameType, durationKey, periodId) => {
     try {
         // Stop optimization interval
         const intervalKey = `${gameType}:${durationKey}:${periodId}:optimization_interval`;
-        const intervalId = await redisClient.get(intervalKey);
+        const intervalId = await getRedisHelper().get(intervalKey);
 
         if (intervalId) {
             clearInterval(parseInt(intervalId));
-            await redisClient.del(intervalKey);
+            await getRedisHelper().del(intervalKey);
         }
 
         // Clean up tracking data (keep for analysis but remove from active keys)
@@ -2052,15 +2058,15 @@ const cleanupPeriodData = async (gameType, durationKey, periodId) => {
 
         // Move to archive instead of deleting (for analysis)
         const archiveKey = `archive:${gameType}:${durationKey}:${periodId}:tracking`;
-        const trackingData = await redisClient.get(trackingKey);
+        const trackingData = await getRedisHelper().get(trackingKey);
 
         if (trackingData) {
-            await redisClient.set(archiveKey, trackingData, 'EX', 7 * 24 * 60 * 60); // Keep for 7 days
+            await getRedisHelper().set(archiveKey, trackingData, 'EX', 7 * 24 * 60 * 60); // Keep for 7 days
         }
 
         // Delete active keys
-        await redisClient.del(trackingKey);
-        await redisClient.del(fallbackKey);
+        await getRedisHelper().del(trackingKey);
+        await getRedisHelper().del(fallbackKey);
 
         logger.info('Period data cleaned up', {
             gameType,
@@ -2095,8 +2101,8 @@ const getPeriodOptimizationStats = async (gameType, duration, periodId) => {
         const trackingKey = `${gameType}:${durationKey}:${periodId}:tracking`;
         const fallbackKey = `${gameType}:${durationKey}:${periodId}:fallbacks`;
 
-        const trackingData = await redisClient.get(trackingKey);
-        const fallbackData = await redisClient.get(fallbackKey);
+        const trackingData = await getRedisHelper().get(trackingKey);
+        const fallbackData = await getRedisHelper().get(fallbackKey);
 
         if (!trackingData) {
             return {
@@ -2159,7 +2165,7 @@ const getRealTimeOptimizedResult = async (gameType, duration, periodId, timeline
 
         // Get fallback data (pre-calculated)
         const fallbackKey = `${gameType}:${durationKey}:${timeline}:${periodId}:fallbacks`;
-        const fallbackData = await redisClient.get(fallbackKey);
+        const fallbackData = await getRedisHelper().get(fallbackKey);
 
         if (!fallbackData) {
             console.log(`⚠️ REALTIME: No real-time data for ${gameType} ${periodId}`);
@@ -2401,7 +2407,7 @@ const getTotalBetsOnOutcome = async (gameType, duration, periodId, betType, betV
 
         // Use timeline-aware hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const betsData = await redisClient.hgetall(betHashKey);
+        const betsData = await getRedisHelper().hgetall(betHashKey);
 
         let totalAmount = 0;
         for (const [betId, betJson] of Object.entries(betsData)) {
@@ -2480,7 +2486,7 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
             case 'trx_wix':
                 // Find zero exposure numbers
                 console.log('🔍 Checking exposures for key:', exposureKey);
-                const wingoExposures = await redisClient.hgetall(exposureKey);
+                const wingoExposures = await getRedisHelper().hgetall(exposureKey);
                 console.log('🔍 Raw exposures from Redis:', wingoExposures);
                 const zeroExposureNumbers = [];
 
@@ -2544,7 +2550,7 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
 
             case 'k3':
                 // Find zero exposure combination
-                const k3Exposures = await redisClient.hgetall(exposureKey);
+                const k3Exposures = await getRedisHelper().hgetall(exposureKey);
                 const zeroExposureK3 = [];
 
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
@@ -2603,7 +2609,7 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
                 });
 
                 // Get exposure data from Redis
-                const betExposures = await redisClient.hgetall(exposureKey);
+                const betExposures = await getRedisHelper().hgetall(exposureKey);
                 console.log('🛡️ [5D_PROTECTION_DEBUG] 🎲 5D Exposure Data Breakdown:', betExposures);
 
                 // Find zero exposure combinations
@@ -2762,7 +2768,7 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         } else if (['wingo', 'trx_wix'].includes(gameType.toLowerCase())) {
             // STRICT 60/40 ENFORCEMENT FOR WINGO/TRX_WIX
             const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-            const betsData = await redisClient.hgetall(betHashKey);
+            const betsData = await getRedisHelper().hgetall(betHashKey);
             const bets = Object.values(betsData).map(betJson => {
                 try { return JSON.parse(betJson); } catch { return null; }
             }).filter(Boolean);
@@ -2986,8 +2992,8 @@ async function track5DPerformance(enhancedTime, currentTime, success) {
             timestamp: Date.now()
         };
         
-        await redisClient.lpush('5d_performance_log', JSON.stringify(performanceData));
-        await redisClient.ltrim('5d_performance_log', 0, 999); // Keep last 1000 entries
+        await getRedisHelper().lpush('5d_performance_log', JSON.stringify(performanceData));
+        await getRedisHelper().ltrim('5d_performance_log', 0, 999); // Keep last 1000 entries
         
         console.log(`📊 [PERFORMANCE] Enhanced: ${enhancedTime}ms, Current: ${currentTime}ms, Improvement: ${(currentTime/enhancedTime).toFixed(1)}x, Success: ${success}`);
     } catch (error) {
@@ -3050,8 +3056,8 @@ async function preCalculate5DResult(gameType, duration, periodId, timeline) {
                 timeline
             };
             
-            await redisClient.set(preCalcKey, JSON.stringify(preCalcData));
-            await redisClient.expire(preCalcKey, 300); // 5 minutes TTL
+            await getRedisHelper().set(preCalcKey, JSON.stringify(preCalcData));
+            await getRedisHelper().expire(preCalcKey, 300); // 5 minutes TTL
             
             console.log('✅ [5D_PRE_CALC] Pre-calculated result stored:', {
                 periodId,
@@ -3082,7 +3088,7 @@ async function preCalculate5DResult(gameType, duration, periodId, timeline) {
 async function getPreCalculated5DResult(gameType, duration, periodId, timeline) {
     try {
         const preCalcKey = `precalc_5d:${gameType}:${duration}:${timeline}:${periodId}`;
-        const preCalcData = await redisClient.get(preCalcKey);
+        const preCalcData = await getRedisHelper().get(preCalcKey);
         
         if (preCalcData) {
             const parsed = JSON.parse(preCalcData);
@@ -3093,7 +3099,7 @@ async function getPreCalculated5DResult(gameType, duration, periodId, timeline) 
             });
             
             // Clean up the pre-calculated data
-            await redisClient.del(preCalcKey);
+            await getRedisHelper().del(preCalcKey);
             
             return parsed.result;
         } else {
@@ -3345,7 +3351,7 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
     try {
         // FIXED: Use correct Redis hash key pattern that matches bet storage
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const betsData = await redisClient.hgetall(betHashKey);
+        const betsData = await getRedisHelper().hgetall(betHashKey);
         const uniqueUsers = new Set();
 
         // Process all bets from the hash
@@ -3528,7 +3534,7 @@ const getBetDistribution = async (gameType, duration, periodId, timeline = 'defa
 
         // Get total bet amount using timeline-aware hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const betsData = await redisClient.hgetall(betHashKey);
+        const betsData = await getRedisHelper().hgetall(betHashKey);
 
         let totalBetAmount = 0;
         for (const [betId, betJson] of Object.entries(betsData)) {
@@ -5126,7 +5132,7 @@ const cleanupRedisData = async (aggressive = false) => {
                     const compareDate = aggressive ? threeDaysAgoStr : yesterdayStr;
 
                     // Find all result keys
-                    const resultKeys = await redisClient.keys(`${gameType}:${duration}:*:result`);
+                    const resultKeys = await getRedisHelper().keys(`${gameType}:${duration}:*:result`);
 
                     for (const key of resultKeys) {
                         // Extract periodId from key
@@ -5135,27 +5141,27 @@ const cleanupRedisData = async (aggressive = false) => {
 
                         // If period date is older than our threshold, delete it
                         if (periodId && periodId.startsWith('20') && periodId.slice(0, 8) < compareDate) {
-                            await redisClient.del(key);
+                            await getRedisHelper().del(key);
                             summary.cleaned++;
                         }
                     }
 
                     // 2. Clean up bet tracking data (always aggressive)
-                    const betKeys = await redisClient.keys(`${gameType}:${duration}:*:total`);
+                    const betKeys = await getRedisHelper().keys(`${gameType}:${duration}:*:total`);
                     for (const key of betKeys) {
                         const keyParts = key.split(':');
                         const periodId = keyParts[2];
 
                         // If period is older than yesterday, remove it
                         if (periodId && periodId.startsWith('20') && periodId.slice(0, 8) < yesterdayStr) {
-                            await redisClient.del(key);
+                            await getRedisHelper().del(key);
 
                             // Also remove related keys
                             const relatedPrefix = `${gameType}:${duration}:${periodId}`;
-                            const relatedKeys = await redisClient.keys(`${relatedPrefix}:*`);
+                            const relatedKeys = await getRedisHelper().keys(`${relatedPrefix}:*`);
 
                             for (const relatedKey of relatedKeys) {
-                                await redisClient.del(relatedKey);
+                                await getRedisHelper().del(relatedKey);
                                 summary.cleaned++;
                             }
                         }
@@ -5163,11 +5169,11 @@ const cleanupRedisData = async (aggressive = false) => {
 
                     // 3. Only keep last 10 periods in recent_results list
                     const recentResultsKey = `${gameType}:${duration}:recent_results`;
-                    await redisClient.zremrangebyrank(recentResultsKey, 0, -11);
+                    await getRedisHelper().zremrangebyrank(recentResultsKey, 0, -11);
 
                     // 4. Only keep last 20 tracked periods
                     const trackedPeriodsKey = `${gameType}:${duration}:tracked_periods`;
-                    await redisClient.zremrangebyrank(trackedPeriodsKey, 0, -21);
+                    await getRedisHelper().zremrangebyrank(trackedPeriodsKey, 0, -21);
                 } catch (err) {
                     console.error(`Error cleaning Redis data for ${gameType}:${duration}:`, err);
                     summary.errors++;
@@ -5267,7 +5273,7 @@ const hasBets = async (gameType, duration, periodId, timeline = 'default') => {
     try {
         // Use timeline-aware hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const betsData = await redisClient.hgetall(betHashKey);
+        const betsData = await getRedisHelper().hgetall(betHashKey);
 
         return Object.keys(betsData).length > 0;
     } catch (error) {
@@ -5312,22 +5318,22 @@ const updateGameHistory = async (gameType, duration, periodId, result) => {
 
         // Add to sorted set with timestamp as score
         const score = Date.now();
-        await redisClient.zadd(recentResultsKey, score, JSON.stringify(historyItem));
+        await getRedisHelper().zadd(recentResultsKey, score, JSON.stringify(historyItem));
 
         // Keep only last 100 results
-        await redisClient.zremrangebyrank(recentResultsKey, 0, -101);
+        await getRedisHelper().zremrangebyrank(recentResultsKey, 0, -101);
 
         // Set expiry for 24 hours
-        await redisClient.expire(recentResultsKey, 86400);
+        await getRedisHelper().expire(recentResultsKey, 86400);
 
         // Also store in history list
-        await redisClient.lpush(historyKey, JSON.stringify(historyItem));
+        await getRedisHelper().lpush(historyKey, JSON.stringify(historyItem));
 
         // Trim history list to 100 items
-        await redisClient.ltrim(historyKey, 0, 99);
+        await getRedisHelper().ltrim(historyKey, 0, 99);
 
         // Set expiry for 24 hours
-        await redisClient.expire(historyKey, 86400);
+        await getRedisHelper().expire(historyKey, 86400);
 
         logger.info('Game history updated', {
             gameType,
@@ -5853,7 +5859,7 @@ async function storeBetInRedis(betData) {
 
         // Update total bet amount
         const totalKey = `${gameType}:${durationKey}:${periodId}:total`;
-        await redisClient.incrbyfloat(totalKey, betAmount);
+        await getRedisHelper().incrbyfloat(totalKey, betAmount);
 
         // Update exposure tracking - FIXED: Pass production format that actually works
         await updateBetExposure(gameType, duration, periodId, {
@@ -6073,21 +6079,21 @@ const storeBetInRedisWithTimeline = async (betData) => {
 
         // Update totals
         const totalKey = `${gameType}:${durationKey}:${timeline}:${periodId}:total`;
-        const currentTotal = await redisClient.get(totalKey) || '0';
+        const currentTotal = await getRedisHelper().get(totalKey) || '0';
         const newTotal = parseFloat(currentTotal) + parseFloat(netBetAmount);
-        await redisClient.set(totalKey, newTotal.toString());
+        await getRedisHelper().set(totalKey, newTotal.toString());
 
         // Track platform fees
         const feeKey = `${gameType}:${durationKey}:${timeline}:${periodId}:fees`;
-        const currentFees = await redisClient.get(feeKey) || '0';
+        const currentFees = await getRedisHelper().get(feeKey) || '0';
         const newFees = parseFloat(currentFees) + parseFloat(platformFee);
-        await redisClient.set(feeKey, newFees.toString());
+        await getRedisHelper().set(feeKey, newFees.toString());
 
         // Track gross amounts
         const grossKey = `${gameType}:${durationKey}:${timeline}:${periodId}:gross`;
-        const currentGross = await redisClient.get(grossKey) || '0';
+        const currentGross = await getRedisHelper().get(grossKey) || '0';
         const newGross = parseFloat(currentGross) + parseFloat(grossBetAmount);
-        await redisClient.set(grossKey, newGross.toString());
+        await getRedisHelper().set(grossKey, newGross.toString());
 
         // Update exposure tracking - FIXED: Pass production format that actually works
         await updateBetExposure(gameType, duration, periodId, {
@@ -6098,9 +6104,9 @@ const storeBetInRedisWithTimeline = async (betData) => {
         }, timeline);
 
         // Set expiry for all keys
-        await redisClient.expire(totalKey, 86400);
-        await redisClient.expire(feeKey, 86400);
-        await redisClient.expire(grossKey, 86400);
+        await getRedisHelper().expire(totalKey, 86400);
+        await getRedisHelper().expire(feeKey, 86400);
+        await getRedisHelper().expire(grossKey, 86400);
 
         console.log(`✅ Bet stored in Redis with exposure tracking for ${gameType} ${duration}s ${timeline}`);
         return true;
@@ -6157,7 +6163,7 @@ const selectFallbackResult = async (gameType, duration, periodId) => {
 
         // Get fallback data from Redis
         const fallbackKey = `${gameType}:${durationKey}:${periodId}:fallbacks`;
-        const fallbackData = await redisClient.get(fallbackKey);
+        const fallbackData = await getRedisHelper().get(fallbackKey);
 
         if (fallbackData) {
             const fallbacks = JSON.parse(fallbackData);
@@ -6264,7 +6270,7 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
             // Redis lock
             const redisLockKey = `processing_lock_${gameType}_${duration}_${periodId}_${timeline}`;
             const redisLockValue = `${Date.now()}_${process.pid}`;
-            const redisLockAcquired = await redisClient.set(redisLockKey, redisLockValue, 'EX', 30, 'NX');
+            const redisLockAcquired = await getRedisHelper().set(redisLockKey, redisLockValue, 'EX', 30, 'NX');
 
             if (!redisLockAcquired) {
                 console.log(`🔒 Redis lock failed, waiting...`);
@@ -6421,9 +6427,9 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
             } finally {
                 // Release Redis lock
                 try {
-                    const currentLock = await redisClient.get(redisLockKey);
+                    const currentLock = await getRedisHelper().get(redisLockKey);
                     if (currentLock === redisLockValue) {
-                        await redisClient.del(redisLockKey);
+                        await getRedisHelper().del(redisLockKey);
                     }
                 } catch (lockError) {
                     console.error('❌ Error releasing Redis lock:', lockError);
@@ -7566,13 +7572,13 @@ const storeTemporaryResult = async (gameType, duration, periodId, result) => {
         const tempResultKey = `${gameType}:${durationKey}:${periodId}:temp_result`;
 
         // Store result
-        await redisClient.set(tempResultKey, JSON.stringify({
+        await getRedisHelper().set(tempResultKey, JSON.stringify({
             result,
             timestamp: Date.now()
         }));
 
         // Set expiry for 1 hour
-        await redisClient.expire(tempResultKey, 3600);
+        await getRedisHelper().expire(tempResultKey, 3600);
 
         logger.info('Temporary result stored', {
             gameType,
@@ -7802,7 +7808,7 @@ const getEnhancedPeriodStatus = async (gameType, duration, periodId) => {
                     duration === 300 ? '5m' : '10m';
 
         const totalBetKey = `${gameType}:${durationKey}:${periodId}:total`;
-        const totalBetAmount = parseFloat(await redisClient.get(totalBetKey) || 0);
+        const totalBetAmount = parseFloat(await getRedisHelper().get(totalBetKey) || 0);
 
         const uniqueUserCount = await getUniqueUserCount(gameType, duration, periodId);
 
@@ -7919,7 +7925,7 @@ const getK3ExposureAnalysis = async (gameType, duration, periodId, timeline = 'd
         }
 
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
-        const exposures = await redisClient.hgetall(exposureKey);
+        const exposures = await getRedisHelper().hgetall(exposureKey);
 
         if (!exposures || Object.keys(exposures).length === 0) {
             return {

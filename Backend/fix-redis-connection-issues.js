@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 #!/usr/bin/env node
 
 /**
@@ -5,7 +9,7 @@
  * This script helps diagnose and fix Redis connection problems
  */
 
-const Redis = require('ioredis');
+
 require('dotenv').config();
 
 console.log('🔧 Redis Connection Issues Fix Script');
@@ -42,7 +46,7 @@ let tempRedis = null;
 const createTestConnection = () => {
     if (!tempRedis) {
         console.log('🔄 Creating test Redis connection...');
-        tempRedis = new Redis(redisConfig);
+        tempRedis = 
         
         tempRedis.on('connect', () => {
             console.log('✅ Test Redis client connected');
@@ -229,10 +233,7 @@ const testConnectionPooling = async () => {
         console.log(`Creating ${maxTestConnections} test connections...`);
         
         for (let i = 0; i < maxTestConnections; i++) {
-            const redis = new Redis({
-                ...redisConfig,
-                connectionName: `test-connection-${i}`
-            });
+            const redis = 
             
             await new Promise((resolve, reject) => {
                 redis.once('ready', resolve);
@@ -341,3 +342,4 @@ const main = async () => {
 
 // Run the script
 main(); 
+module.exports = { setRedisHelper };

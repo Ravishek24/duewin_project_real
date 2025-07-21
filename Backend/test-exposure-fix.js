@@ -1,12 +1,13 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const { promisify } = require('util');
 const { calculateWingoWin } = require('./services/gameLogicService');
 
 // Create Redis client
-const redisClient = redis.createClient({
-    host: 'localhost',
-    port: 6379,
-    retry_strategy: function (options) {
+const redisClient =  {
         if (options.error && options.error.code === 'ECONNREFUSED') {
             return new Error('The server refused the connection');
         }
@@ -209,3 +210,4 @@ if (totalExposure === 539) {
     console.log('❌ Exposure calculation still has issues!');
     console.log(`   - Expected: ₹539, Actual: ₹${totalExposure}`);
 } 
+module.exports = { setRedisHelper };

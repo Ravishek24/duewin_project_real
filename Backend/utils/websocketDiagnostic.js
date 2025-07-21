@@ -1,7 +1,12 @@
 // Backend/utils/websocketDiagnostic.js - DIAGNOSTIC TOOL FOR ROOM ISOLATION
 
+let redisHelper = null;
+function setRedisHelper(helper) {
+  redisHelper = helper;
+}
+
 const websocketService = require('../services/websocketService');
-const { redis } = require('../config/redisConfig');
+
 
 /**
  * Comprehensive diagnostic tool to identify cross-contamination issues
@@ -365,7 +370,7 @@ class WebSocketDiagnostic {
                 for (const duration of durations) {
                     // Get current period from Redis
                     const periodKey = `game_scheduler:${gameType}:${duration}:current`;
-                    const periodData = await redis.get(periodKey);
+                    const periodData = await redisHelper.get(periodKey);
                     
                     if (!periodData) {
                         console.log(`⚠️ No period data found for ${gameType}:${duration}`);
@@ -467,6 +472,8 @@ class WebSocketDiagnostic {
 const diagnostic = new WebSocketDiagnostic();
 
 module.exports = {
+    setRedisHelper,
+    websocketService,
     diagnostic,
     startDiagnostic: () => diagnostic.startMonitoring(),
     getDiagnosticData: () => diagnostic.exportDiagnosticData(),

@@ -1,3 +1,7 @@
+const unifiedRedis = require('../config/unifiedRedisManager');
+function getRedisHelper() { return unifiedRedis.getHelper(); }
+
+
 #!/usr/bin/env node
 
 /**
@@ -5,7 +9,7 @@
  * This script manually creates periods for testing when the game scheduler is not running
  */
 
-const { redis } = require('../config/redisConfig');
+
 const periodService = require('../services/periodService');
 
 const createManualPeriod = async (gameType, duration) => {
@@ -37,8 +41,8 @@ const createManualPeriod = async (gameType, duration) => {
         };
         
         const redisKey = `game_scheduler:${gameType}:${duration}:current`;
-        await redis.set(redisKey, JSON.stringify(periodData));
-        await redis.expire(redisKey, 3600);
+        await getRedisHelper().set(redisKey, JSON.stringify(periodData));
+        await getRedisHelper().expire(redisKey, 3600);
         
         console.log(`✅ Period stored in Redis with key: ${redisKey}`);
         console.log(`📊 Period data:`, periodData);
@@ -89,7 +93,7 @@ const main = async () => {
     } catch (error) {
         console.error('❌ Manual period creation failed:', error);
     } finally {
-        await redis.quit();
+        await getRedisHelper().quit();
         process.exit(0);
     }
 };

@@ -1,3 +1,7 @@
+const unifiedRedis = require('../config/unifiedRedisManager');
+function getRedisHelper() { return unifiedRedis.getHelper(); }
+
+
 #!/usr/bin/env node
 
 /**
@@ -5,7 +9,7 @@
  * This script checks if the game scheduler is creating periods correctly
  */
 
-const { redis } = require('../config/redisConfig');
+
 const periodService = require('../services/periodService');
 
 const testPeriodCreation = async () => {
@@ -31,7 +35,7 @@ const testPeriodCreation = async () => {
             
             // 1. Check if game scheduler is storing periods
             const schedulerKey = `game_scheduler:${gameType}:${duration}:current`;
-            const schedulerData = await redis.get(schedulerKey);
+            const schedulerData = await getRedisHelper().get(schedulerKey);
             
             if (schedulerData) {
                 const periodInfo = JSON.parse(schedulerData);
@@ -75,9 +79,9 @@ const testPeriodCreation = async () => {
                 const betsKey = `${periodKey}:bets`;
                 const resultKey = `${periodKey}:result`;
                 
-                const periodExists = await redis.exists(periodKey);
-                const betsExist = await redis.exists(betsKey);
-                const resultExists = await redis.exists(resultKey);
+                const periodExists = await getRedisHelper().exists(periodKey);
+                const betsExist = await getRedisHelper().exists(betsKey);
+                const resultExists = await getRedisHelper().exists(resultKey);
                 
                 console.log(`   📊 Redis Period Keys:`);
                 console.log(`      - Period Data: ${periodExists ? '✅' : '❌'} (${periodKey})`);
@@ -88,20 +92,20 @@ const testPeriodCreation = async () => {
         
         // 4. Check Redis connection
         console.log('\n🔗 Redis Connection Status:');
-        const redisStatus = redis.status;
+        const redisStatus = getRedisHelper().status;
         console.log(`   - Status: ${redisStatus}`);
         console.log(`   - Connected: ${redisStatus === 'ready' ? '✅' : '❌'}`);
         
         // 5. Check for any Redis keys related to periods
         console.log('\n🔍 Redis Keys Scan:');
-        const keys = await redis.keys('*period*');
+        const keys = await getRedisHelper().keys('*period*');
         console.log(`   - Found ${keys.length} period-related keys`);
         if (keys.length > 0) {
             console.log(`   - Sample keys: ${keys.slice(0, 5).join(', ')}`);
         }
         
         // 6. Check for game scheduler keys
-        const schedulerKeys = await redis.keys('game_scheduler:*');
+        const schedulerKeys = await getRedisHelper().keys('game_scheduler:*');
         console.log(`   - Found ${schedulerKeys.length} game scheduler keys`);
         if (schedulerKeys.length > 0) {
             console.log(`   - Scheduler keys: ${schedulerKeys.join(', ')}`);
@@ -114,7 +118,7 @@ const testPeriodCreation = async () => {
         console.error('Stack trace:', error.stack);
     } finally {
         // Close Redis connection
-        await redis.quit();
+        await getRedisHelper().quit();
         process.exit(0);
     }
 };

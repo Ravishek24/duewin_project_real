@@ -1,7 +1,11 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 async function test5DDurationValidation() {
-    const client = redis.createClient({ url: 'redis://localhost:6379' });
+    const client = 
     
     try {
         await client.connect();
@@ -92,3 +96,4 @@ async function test5DDurationValidation() {
 
 // Run test
 test5DDurationValidation().catch(console.error); 
+module.exports = { setRedisHelper };

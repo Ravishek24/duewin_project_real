@@ -1,4 +1,4 @@
-const { getAllPendingRecharges, getAllSuccessfulRecharges, getFirstRecharges, getTodayTopDeposits, getTodayTopWithdrawals } = require('../../services/paymentService');
+const { getAllPendingRecharges, getAllSuccessfulRecharges, getFirstRecharges, getTodayTopDeposits, getTodayTopWithdrawals, processRechargeAdminAction } = require('../../services/paymentService');
 
 /**
  * Get all pending recharge requests
@@ -25,7 +25,59 @@ const getAllPendingRechargesController = async (req, res) => {
 };
 
 /**
- * Get all successful recharges
+ * Process recharge approval/rejection action
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const processRechargeActionController = async (req, res) => {
+  try {
+    const { recharge_id, action, notes } = req.body;
+    const adminId = req.user.user_id;
+    
+    if (!recharge_id || !action) {
+      return res.status(400).json({
+        success: false,
+        message: 'Recharge ID and action are required'
+      });
+    }
+    
+    if (action !== 'approve' && action !== 'reject') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid action. Must be either "approve" or "reject"'
+      });
+    }
+    
+    if (action === 'reject' && !notes) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notes are required when rejecting a recharge'
+      });
+    }
+    
+    const result = await processRechargeAdminAction(
+      adminId,
+      recharge_id,
+      action,
+      notes || ''
+    );
+    
+    if (result.success) {
+      return res.status(200).json(result);
+    } else {
+      return res.status(400).json(result);
+    }
+  } catch (error) {
+    console.error('Error processing recharge action:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error processing recharge action'
+    });
+  }
+};
+
+/**
+ * Get all successful recharge requests
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
@@ -49,7 +101,7 @@ const getAllSuccessfulRechargesController = async (req, res) => {
 };
 
 /**
- * Get successful first-time recharges
+ * Get first-time recharge requests
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
@@ -88,10 +140,10 @@ const getTodayTopDepositsController = async (req, res) => {
       return res.status(400).json(result);
     }
   } catch (error) {
-    console.error('Error fetching today\'s top deposits:', error);
+    console.error('Error fetching today top deposits:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error fetching today\'s top deposits'
+      message: 'Server error fetching today top deposits'
     });
   }
 };
@@ -112,16 +164,17 @@ const getTodayTopWithdrawalsController = async (req, res) => {
       return res.status(400).json(result);
     }
   } catch (error) {
-    console.error('Error fetching today\'s top withdrawals:', error);
+    console.error('Error fetching today top withdrawals:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error fetching today\'s top withdrawals'
+      message: 'Server error fetching today top withdrawals'
     });
   }
 };
 
 module.exports = {
   getAllPendingRechargesController,
+  processRechargeActionController,
   getAllSuccessfulRechargesController,
   getFirstRechargesController,
   getTodayTopDepositsController,

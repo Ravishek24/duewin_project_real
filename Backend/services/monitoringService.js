@@ -1,4 +1,8 @@
-const { redis } = require('../config/redisConfig');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const logger = require('../utils/logger');
 const os = require('os');
 const nodemailer = require('nodemailer');
@@ -383,3 +387,4 @@ class MonitoringService {
 }
 
 module.exports = new MonitoringService(); 
+module.exports.setRedisHelper = setRedisHelper;

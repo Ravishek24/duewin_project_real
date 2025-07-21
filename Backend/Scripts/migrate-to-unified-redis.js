@@ -1,3 +1,5 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
 const fs = require('fs');
 const path = require('path');
 
@@ -11,22 +13,22 @@ const migrationPatterns = [
     {
         name: 'redisHelper import',
         find: /const\s+redisHelper\s*=\s*require\(['"]\.\.\/config\/redis['"]\);/g,
-        replace: `const unifiedRedis = require('../config/unifiedRedisManager');\nconst redisHelper = unifiedRedis.getHelper();`
+        replace: `\n`
     },
     {
         name: 'redisConfig import',
         find: /const\s+\{\s*redis\s*\}\s*=\s*require\(['"]\.\.\/config\/redisConfig['"]\);/g,
-        replace: `const unifiedRedis = require('../config/unifiedRedisManager');\nconst redis = unifiedRedis.getConnection('websocket');`
+        replace: `\nconst redis = redisHelper;`
     },
     {
         name: 'redisConfig.redis import',
         find: /const\s+redisClient\s*=\s*require\(['"]\.\.\/config\/redisConfig['"]\)\.redis;/g,
-        replace: `const unifiedRedis = require('../config/unifiedRedisManager');\nconst redisClient = unifiedRedis.getConnection('main');`
+        replace: `\n`
     },
     {
         name: 'redisConfig import with destructuring',
         find: /const\s+\{\s*redis\s*:\s*(\w+)\s*\}\s*=\s*require\(['"]\.\.\/config\/redisConfig['"]\);/g,
-        replace: `const unifiedRedis = require('../config/unifiedRedisManager');\nconst $1 = unifiedRedis.getConnection('websocket');`
+        replace: `\nconst $1 = redisHelper;`
     }
 ];
 
@@ -160,7 +162,7 @@ function findFilesToMigrate() {
 function createInitializationScript() {
     const initScript = `
 // Backend/scripts/init-unified-redis.js
-const unifiedRedis = require('../config/unifiedRedisManager');
+
 
 /**
  * Initialize Unified Redis Manager

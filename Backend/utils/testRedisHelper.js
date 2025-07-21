@@ -1,4 +1,8 @@
-const redisManager = require('../config/redisConnectionManager');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 /**
  * Test Redis Helper - Prevents connection leaks in test scripts

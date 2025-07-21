@@ -1,12 +1,11 @@
-const Redis = require('ioredis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 // Redis client setup
-const redisClient = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || null,
-    db: process.env.REDIS_DB || 0
-});
+const redisClient = 
 
 redisClient.on('error', (err) => console.log('Redis Client Error', err));
 redisClient.on('connect', () => console.log('Redis client connected'));
@@ -125,3 +124,4 @@ async function testFixes() {
 
 // Run the tests
 testFixes(); 
+module.exports = { setRedisHelper };

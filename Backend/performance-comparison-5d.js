@@ -1,8 +1,12 @@
+function getRedisClient() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return getRedisClient();
+}
 const { initializeModels } = require('./models');
 const fiveDProtectionService = require('./services/fiveDProtectionService');
 const gameLogicService = require('./services/gameLogicService');
 const redisHelper = require('./config/redis');
-const redisClient = redisHelper.getClient();
+
 
 async function compare5DPerformance() {
     try {

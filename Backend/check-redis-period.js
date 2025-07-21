@@ -1,7 +1,11 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 async function checkRedisPeriod() {
-    const client = redis.createClient();
+    const client = 
     
     try {
         await client.connect();
@@ -102,3 +106,4 @@ async function checkRedisPeriod() {
 }
 
 checkRedisPeriod().catch(console.error); 
+module.exports = { setRedisHelper };

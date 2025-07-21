@@ -1,10 +1,14 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const { exec } = require('child_process');
 const util = require('util');
 const execAsync = util.promisify(exec);
 
 async function monitorScheduler() {
-    const client = redis.createClient({ url: 'redis://localhost:6379' });
+    const client = 
     
     try {
         await client.connect();
@@ -75,3 +79,4 @@ async function monitorScheduler() {
 
 // Run monitoring
 monitorScheduler().catch(console.error); 
+module.exports = { setRedisHelper };

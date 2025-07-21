@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 // scripts/test-hot-games-cache.js
 const axios = require('axios');
 const { cacheService } = require('../services/cacheService');
@@ -82,7 +86,7 @@ async function testHotGamesCache() {
 
     // Test 5: Check cache TTL
     console.log('\n5️⃣ Checking cache TTL...');
-    const { redis } = require('../config/redisConfig');
+    
     const ttl = await redis.ttl(HOT_GAMES_CACHE_KEY);
     console.log('   TTL (seconds):', ttl);
     console.log('   TTL (formatted):', ttl > 0 ? `${Math.floor(ttl / 3600)}h ${Math.floor((ttl % 3600) / 60)}m ${ttl % 60}s` : 'N/A');

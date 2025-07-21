@@ -1,5 +1,9 @@
+function getRedisClient() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return getRedisClient();
+}
 const redisHelper = require('./config/redis');
-const redisClient = redisHelper.getClient();
+
 const { processBet, calculateResultWithVerification, getUniqueUserCount, ensureModelsInitialized } = require('./services/gameLogicService');
 const { Op } = require('sequelize');
 

@@ -1,9 +1,12 @@
-const securityConfig = require('../config/securityConfig');
-// const Redis = require('ioredis');
-const redisHelper = require('../config/redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+function getRedisClient() {
+  if (!redisHelper) throw new Error('redisHelper not set!');
+  return redisHelper.getClient();
+}
 
-// Use the singleton Redis client from redisHelper
-const redis = redisHelper.getClient();
+const securityConfig = require('../config/securityConfig');
+//
 
 /**
  * Advanced Attack Protection Middleware
@@ -64,12 +67,12 @@ const attackProtection = (req, res, next) => {
         }
 
         // Check for rapid requests (DDoS attempt)
-        if (!redis) {
+        if (!redisHelper) {
             console.warn('⚠️  Redis not available, skipping rate limiting');
             next();
             return;
         }
-        
+        const redis = getRedisClient();
         const requestKey = `attack_protection:${ipAddress}`;
         
         redis.incr(requestKey).then((attempts) => {
@@ -126,11 +129,11 @@ const attackProtection = (req, res, next) => {
  */
 const isIPBlocked = async (ipAddress) => {
     try {
-        if (!redis) {
+        if (!redisHelper) {
             console.warn('⚠️  Redis not available, cannot check IP block status');
             return false;
         }
-        
+        const redis = getRedisClient();
         const blockKey = `ip_block:${ipAddress}`;
         const blocked = await redis.get(blockKey);
         return !!blocked;
@@ -145,11 +148,11 @@ const isIPBlocked = async (ipAddress) => {
  */
 const blockIP = async (ipAddress, duration = 3600, reason = 'manual') => {
     try {
-        if (!redis) {
+        if (!redisHelper) {
             console.warn('⚠️  Redis not available, cannot block IP');
             return false;
         }
-        
+        const redis = getRedisClient();
         const blockKey = `ip_block:${ipAddress}`;
         await redis.setex(blockKey, duration, reason);
         console.log(`🚫 MANUALLY BLOCKED: IP ${ipAddress} for ${duration} seconds - Reason: ${reason}`);
@@ -165,11 +168,11 @@ const blockIP = async (ipAddress, duration = 3600, reason = 'manual') => {
  */
 const unblockIP = async (ipAddress) => {
     try {
-        if (!redis) {
+        if (!redisHelper) {
             console.warn('⚠️  Redis not available, cannot unblock IP');
             return false;
         }
-        
+        const redis = getRedisClient();
         const blockKey = `ip_block:${ipAddress}`;
         await redis.del(blockKey);
         console.log(`✅ UNBLOCKED: IP ${ipAddress}`);
@@ -181,6 +184,7 @@ const unblockIP = async (ipAddress) => {
 };
 
 module.exports = {
+    setRedisHelper,
     attackProtection,
     isIPBlocked,
     blockIP,

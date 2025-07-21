@@ -1,9 +1,13 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { Sequelize } = require('sequelize');
 const config = require('./config/config.cjs');
 const { initializeGameCombinations } = require('./services/gameLogicService');
 
 // Import Redis properly
-const Redis = require('ioredis');
+
 const { CACHE } = require('./config/constants');
 
 // Redis configuration
@@ -20,7 +24,7 @@ const redisConfig = {
 };
 
 // Create Redis client
-const redisClient = new Redis(redisConfig);
+const redisClient = 
 
 const gameLogicService = require('./services/gameLogicService');
 
@@ -182,3 +186,4 @@ async function examineK3Exposure() {
 
 // Run the analysis
 examineK3Exposure(); 
+module.exports = { setRedisHelper };

@@ -3,6 +3,8 @@
 // Backend/start-scheduler.js - UPDATED VERSION
 require('dotenv').config();
 
+const unifiedRedis = require('./config/unifiedRedisManager');
+
 console.log('DEBUG REDIS_HOST:', process.env.REDIS_HOST);
 console.log('DEBUG REDIS_PORT:', process.env.REDIS_PORT);
 console.log('DEBUG REDIS_DB:', process.env.REDIS_DB);
@@ -16,6 +18,9 @@ console.log('🚀 Starting DueWin Scheduler System...');
 const startSchedulerSystem = async () => {
     try {
         console.log('🔄 Initializing scheduler components...');
+        // Initialize unified Redis manager first
+        await unifiedRedis.initialize();
+        console.log('✅ Unified Redis Manager initialized');
         
         // Import and start game scheduler
         try {

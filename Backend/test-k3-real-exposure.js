@@ -1,5 +1,9 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { updateBetExposure, initializeGameCombinations } = require('./services/gameLogicService');
-const Redis = require('ioredis');
+
 const { CACHE } = require('./config/constants');
 
 // Redis configuration
@@ -16,7 +20,7 @@ const redisConfig = {
 };
 
 // Create Redis client
-const redisClient = new Redis(redisConfig);
+const redisClient = 
 
 async function testK3RealExposure() {
     try {
@@ -80,3 +84,4 @@ async function testK3RealExposure() {
 
 // Run the test
 testK3RealExposure(); 
+module.exports = { setRedisHelper };

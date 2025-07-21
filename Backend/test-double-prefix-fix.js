@@ -1,11 +1,12 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const { promisify } = require('util');
 
 // Create Redis client with the same configuration as the main app
-const redisClient = redis.createClient({
-    host: 'localhost',
-    port: 6379,
-    retry_strategy: function (options) {
+const redisClient =  {
         if (options.error && options.error.code === 'ECONNREFUSED') {
             return new Error('The server refused the connection');
         }
@@ -122,3 +123,4 @@ async function testDoublePrefixFix() {
 
 // Run the test
 testDoublePrefixFix(); 
+module.exports = { setRedisHelper };

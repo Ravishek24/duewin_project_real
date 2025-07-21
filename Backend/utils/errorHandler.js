@@ -1,5 +1,9 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 const { logger } = require('./logger');
-const { redis } = require('../config/redisConfig');
+
 
 class ErrorHandler {
     constructor() {
@@ -150,3 +154,4 @@ class ErrorHandler {
 }
 
 module.exports = new ErrorHandler(); 
+module.exports.setRedisHelper = setRedisHelper;

@@ -86,6 +86,15 @@ const registerController = async (req, res) => {
 
         const { phone_no, password, referred_by, email, user_name } = req.body;
 
+        console.log('📝 Registration attempt with data:', {
+            phone_no: phone_no,
+            phone_no_type: typeof phone_no,
+            phone_no_length: phone_no ? phone_no.length : 0,
+            referred_by: referred_by,
+            email: email || 'not provided',
+            user_name: user_name || 'not provided'
+        });
+
         // Validate required fields
         if (!phone_no || !password || !referred_by) {
             return res.status(400).json({
@@ -99,25 +108,73 @@ const registerController = async (req, res) => {
 
         try {
             // Check if user already exists (optimized query)
+            const whereConditions = [{ phone_no }];
+            
+            // Only add email condition if email is provided
+            if (email && email.trim()) {
+                whereConditions.push({ email: email.trim() });
+            }
+            
+            // Only add username condition if username is provided
+            if (user_name && user_name.trim()) {
+                whereConditions.push({ user_name: user_name.trim() });
+            }
+            
+            console.log('🔍 Checking for existing user with conditions:', whereConditions);
+            
+            // First, let's check specifically for the phone number
+            const phoneCheck = await User.findOne({
+                where: { phone_no: phone_no },
+                transaction,
+                attributes: ['user_id', 'phone_no']
+            });
+            
+            if (phoneCheck) {
+                console.log('❌ Phone number already exists:', phoneCheck.phone_no, 'User ID:', phoneCheck.user_id);
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false,
+                    message: 'User already exists with this phone number'
+                });
+            }
+            
             const existingUser = await User.findOne({
                 where: {
-                    [Op.or]: [
-                        { phone_no },
-                        ...(email ? [{ email }] : []),
-                        ...(user_name ? [{ user_name }] : [])
-                    ]
+                    [Op.or]: whereConditions
                 },
                 transaction,
                 attributes: ['user_id'] // Only fetch what we need
             });
 
             if (existingUser) {
+                console.log('❌ User already exists with ID:', existingUser.user_id);
                 await transaction.rollback();
                 return res.status(400).json({
                     success: false,
                     message: 'User already exists with this phone number, email, or username'
                 });
             }
+            
+            console.log('✅ No existing user found, proceeding with registration');
+
+            // Validate referral code exists
+            console.log('🔍 Validating referral code:', referred_by);
+            const referrer = await User.findOne({
+                where: { referring_code: referred_by },
+                transaction,
+                attributes: ['user_id', 'user_name']
+            });
+
+            if (!referrer) {
+                console.log('❌ Invalid referral code:', referred_by);
+                await transaction.rollback();
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid referral code. Please check and try again.'
+                });
+            }
+
+            console.log('✅ Valid referral code found for user:', referrer.user_name);
 
             // Generate unique referring code (optimized)
             const referring_code = await referralCodeGenerator.generateUniqueCode(User, transaction);

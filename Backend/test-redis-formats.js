@@ -1,10 +1,11 @@
-const Redis = require('ioredis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 // Create Redis client
-const redisClient = new Redis({
-    host: 'localhost',
-    port: 6379,
-    retryStrategy: function (times) {
+const redisClient =  {
         const delay = Math.min(times * 50, 2000);
         return delay;
     }
@@ -247,3 +248,4 @@ async function testRedisFormats() {
 
 // Run the test
 testRedisFormats(); 
+module.exports = { setRedisHelper };

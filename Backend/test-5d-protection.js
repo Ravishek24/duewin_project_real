@@ -1,12 +1,12 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const { getSequelizeInstance } = require('./config/db');
 
 // Initialize Redis client
-const redisClient = redis.createClient({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || null
-});
+const redisClient = 
 
 redisClient.on('error', (err) => console.error('Redis Client Error:', err));
 redisClient.on('connect', () => console.log('✅ Redis connected for 5D protection test'));
@@ -292,3 +292,4 @@ process.on('SIGINT', async () => {
 
 // Start testing
 main(); 
+module.exports = { setRedisHelper };

@@ -1,16 +1,15 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 // Debug Exposure Tracking Issue
 // Tests specifically why exposure data is not being created
 
-const Redis = require('ioredis');
+
 const gameLogicService = require('./services/gameLogicService');
 
 // Redis client
-const redisClient = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD || '',
-    db: process.env.REDIS_DB || 0
-});
+const redisClient = 
 
 async function debugExposureTracking() {
     try {

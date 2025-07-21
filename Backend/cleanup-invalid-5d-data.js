@@ -1,7 +1,11 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 async function cleanupInvalid5DData() {
-    const client = redis.createClient({ url: 'redis://localhost:6379' });
+    const client = 
     
     try {
         await client.connect();
@@ -56,3 +60,4 @@ async function cleanupInvalid5DData() {
 
 // Run cleanup
 cleanupInvalid5DData().catch(console.error); 
+module.exports = { setRedisHelper };

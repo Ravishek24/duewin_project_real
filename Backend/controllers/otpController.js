@@ -20,7 +20,7 @@ const sendOtpController = async (req, res) => {
         }
 
         // Validate purpose
-        const validPurposes = ['bank_account', 'forgot_password'];
+        const validPurposes = ['registration', 'login', 'phone_update', 'bank_account', 'withdrawal', 'forgot_password'];
         if (!validPurposes.includes(purpose)) {
             return res.status(400).json({
                 success: false,
@@ -35,8 +35,32 @@ const sendOtpController = async (req, res) => {
             formattedPhone = `+${cc}${phone}`;
         }
 
+        // Find user if they exist (for forgot_password, phone_update, etc.)
+        let userId = null;
+        if (purpose !== 'registration') {
+            try {
+                const { getModels } = require('../models');
+                const models = await getModels();
+                const User = models.User;
+                
+                const user = await User.findOne({
+                    where: { phone_no: phone.replace('+', '') },
+                    attributes: ['user_id']
+                });
+                
+                if (user) {
+                    userId = user.user_id;
+                }
+            } catch (error) {
+                console.error('Error finding user for OTP:', error);
+                // Continue without user_id for registration cases
+            }
+        }
+
+        console.log(`📱 Sending OTP for phone: ${formattedPhone}, purpose: ${purpose}, userId: ${userId || 'not found'}`);
+
         // Send OTP
-        const result = await otpService.createOtpSession(formattedPhone, countryCode || '91', '', {}, purpose);
+        const result = await otpService.createOtpSession(formattedPhone, countryCode || '91', '', {}, purpose, userId);
 
         if (!result.success) {
             return res.status(400).json(result);

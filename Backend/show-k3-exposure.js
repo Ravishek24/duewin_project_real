@@ -1,4 +1,8 @@
-const Redis = require('ioredis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const { CACHE } = require('./config/constants');
 
 // Redis configuration
@@ -15,7 +19,7 @@ const redisConfig = {
 };
 
 // Create Redis client
-const redisClient = new Redis(redisConfig);
+const redisClient = 
 
 async function showK3Exposure() {
     try {
@@ -143,3 +147,4 @@ async function showK3Exposure() {
 
 // Run the viewer
 showK3Exposure(); 
+module.exports = { setRedisHelper };

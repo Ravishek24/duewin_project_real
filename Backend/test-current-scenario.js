@@ -1,8 +1,12 @@
-const redis = require('redis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 const gameLogicService = require('./services/gameLogicService');
 
 async function testCurrentScenario() {
-    const client = redis.createClient();
+    const client = 
     
     try {
         await client.connect();
@@ -113,3 +117,4 @@ async function testCurrentScenario() {
 }
 
 testCurrentScenario().catch(console.error); 
+module.exports = { setRedisHelper };

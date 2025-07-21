@@ -71,6 +71,8 @@ const checkOtpLimit = async (userId, phoneNo) => {
  */
 const createOtpSession = async (mobileNo, countryCode, userName, userData = {}, requestType, userId) => {
     try {
+        console.log(`🔐 Creating OTP session for: ${mobileNo}, type: ${requestType}, userId: ${userId || 'none'}`);
+        
         // Prelude expects phone number in E.164 format (e.g., +911234567890)
         let phoneNumber = mobileNo;
         if (!phoneNumber.startsWith('+')) {
@@ -92,23 +94,25 @@ const createOtpSession = async (mobileNo, countryCode, userName, userData = {}, 
             },
             // Optionally, you can add dispatch_id or metadata here
         });
-        // Create OTP request record if userId is provided
+        // Create OTP request record
+        const otpRequestData = {
+            phone_no: phoneNumber,
+            otp_session_id: verification.id,
+            request_type: requestType,
+            status: 'pending'
+        };
+
+        // Add user_id if provided
         if (userId) {
-            await OtpRequest.create({
-                user_id: userId,
-                phone_no: phoneNumber,
-                otp_session_id: verification.id,
-                request_type: requestType,
-                status: 'pending'
-            });
-        } else {
-            await OtpRequest.create({
-                phone_no: phoneNumber,
-                otp_session_id: verification.id,
-                request_type: requestType,
-                status: 'pending'
-            });
+            otpRequestData.user_id = userId;
         }
+
+        console.log(`📝 Creating OTP request with data:`, otpRequestData);
+        
+        await OtpRequest.create(otpRequestData);
+        
+        console.log(`✅ OTP session created successfully with ID: ${verification.id}`);
+        
         return {
             success: true,
             message: 'OTP sent successfully',

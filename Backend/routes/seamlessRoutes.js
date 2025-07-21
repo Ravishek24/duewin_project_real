@@ -1,3 +1,7 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 // routes/seamlessRoutes.js - FIXED VERSION
 const express = require('express');
 const router = express.Router();
@@ -268,7 +272,7 @@ router.get('/hot-games/cache-status', auth, async (req, res) => {
     }
 
     // Get cache TTL
-    const { redis } = require('../config/redisConfig');
+    
     const ttl = await redis.ttl(HOT_GAMES_CACHE_KEY);
     
     // Get cached data
@@ -819,3 +823,4 @@ router.get('/stats/all', auth, getAllSeamlessGamesStatsController);
 router.get('/stats/:gameType/history', auth, getSeamlessGameHistoryController);
 
 module.exports = router;
+module.exports.setRedisHelper = setRedisHelper;

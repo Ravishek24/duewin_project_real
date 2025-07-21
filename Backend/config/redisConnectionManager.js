@@ -1,4 +1,8 @@
-const Redis = require('ioredis');
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
 
 /**
  * Redis Connection Manager - Non-disruptive implementation
@@ -88,7 +92,7 @@ class RedisConnectionManager {
             ...options
         };
 
-        const connection = new Redis(config);
+        const connection = 
 
         // Add connection event handlers
         connection.on('connect', () => {
@@ -246,3 +250,4 @@ class RedisConnectionManager {
 const redisManager = new RedisConnectionManager();
 
 module.exports = redisManager; 
+module.exports.setRedisHelper = setRedisHelper;

@@ -1,10 +1,9 @@
-const Redis = require('ioredis');
-const redisClient = new Redis({
-    host: 'localhost',
-    port: 6379,
-    password: null,
-    db: 0
-});
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
+
+const redisClient = 
 
 async function testProtectionSimple() {
     console.log('🧪 Testing Simple Protection Logic');
@@ -144,3 +143,4 @@ async function testProtectionSimple() {
 }
 
 testProtectionSimple(); 
+module.exports = { setRedisHelper };

@@ -1,5 +1,9 @@
+let redisHelper = null;
+function setRedisHelper(helper) { redisHelper = helper; }
+
+
 // Initialize Redis and database connections
-const redis = require('redis');
+
 const { processBet, calculateResultWithVerification, getUniqueUserCount } = require('./services/gameLogicService');
 
 let redisClient;
@@ -7,11 +11,7 @@ let redisClient;
 async function initializeConnections() {
     try {
         // Initialize Redis
-        redisClient = redis.createClient({
-            host: process.env.REDIS_HOST || 'localhost',
-            port: process.env.REDIS_PORT || 6379,
-            password: process.env.REDIS_PASSWORD || undefined
-        });
+        redisClient = 
         
         await redisClient.connect();
         console.log('✅ [DEBUG] Redis connected');
@@ -172,3 +172,4 @@ debugSingleUserGreenBet().then(() => {
     console.error('❌ [DEBUG FATAL ERROR]:', error);
     process.exit(1);
 }); 
+module.exports = { setRedisHelper };
