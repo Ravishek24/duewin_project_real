@@ -10,7 +10,7 @@ const originalRegisterController = require('../controllers/userController/regist
 const originalLoginController = require('../controllers/userController/loginController');
 
 // Import validation middleware (maintain original validation)
-const { validationRules } = require('../middleware/inputValidator');
+const validationRules = require('../middleware/inputValidator');
 
 // Configuration: Set to true to use optimized controllers, false for original
 const USE_OPTIMIZED_CONTROLLERS = process.env.USE_OPTIMIZED_CONTROLLERS === 'true' || true; // Default to optimized
@@ -145,7 +145,19 @@ router.post('/toggle-optimization', async (req, res) => {
 router.get('/cache-health', async (req, res) => {
     try {
         const optimizedCacheService = require('../services/optimizedCacheService');
-        await optimizedCacheService.initialize();
+        
+        // FIXED: Don't initialize on every request, check if already initialized
+        if (!optimizedCacheService.isInitialized) {
+            return res.status(503).json({
+                success: false,
+                message: 'Cache service not initialized',
+                data: {
+                    cacheStatus: 'not_initialized',
+                    testPassed: false,
+                    timestamp: new Date().toISOString()
+                }
+            });
+        }
         
         // Simple cache test
         const testKey = 'health_check_' + Date.now();

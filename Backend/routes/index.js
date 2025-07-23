@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 
 // Import all route modules
 const userRoutes = require('./userRoutes');
+const optimizedUserRoutes = require('./optimizedUserRoutes'); // NEW: Import optimized routes
 const bankRoutes = require('./bankRoutes');
 const usdtRoutes = require('./usdtRoutes');
 const walletRoutes = require('./walletRoutes');
@@ -116,7 +117,8 @@ router.get('/debug/referral', auth, (req, res) => {
 });
 
 // CRITICAL: Routes that don't require authentication (MUST be before auth-required routes)
-router.use('/users', userRoutes);
+router.use('/users', userRoutes); // Original user routes (working)
+router.use('/users-optimized', optimizedUserRoutes.router); // NEW: Optimized routes for testing
 router.use('/otp', otpRoutes);
 router.use('/seamless', seamlessRoutes);
 router.use('/seamless-wallet', auth, seamlessWalletRoutes);

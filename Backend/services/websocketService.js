@@ -1,3 +1,4 @@
+require('dotenv').config();
 const unifiedRedis = require('../config/unifiedRedisManager');
 function getRedisHelper() { return unifiedRedis.getHelper(); }
 
@@ -10,11 +11,13 @@ const { JWT_SECRET } = require('../config/constants');
 
 
 
+
 const { logger } = require('../utils/logger');
 const moment = require('moment-timezone');
 const { getSequelizeInstance } = require('../config/db');
 const { initializeModels } = require('../models');
 const { recordVipExperience } = require('./autoVipService');
+
 
 function getPublisherRedis() {
   return unifiedRedis.getConnection('publisher');
@@ -46,33 +49,26 @@ const {
 let redisSubscriber = null;
 
 const Redis = require('ioredis');
-
 const createRedisSubscriber = async () => {
     try {
         //console.log('🔄 [REDIS_SUBSCRIBER] Creating dedicated Redis subscriber for ElastiCache...');
 
-        
-
         // Use the same config as your main Redis connection but create a separate instance
         const subscriberConfig = {
-            host: process.env.REDIS_HOST || 'localhost',
+            host: process.env.REDIS_HOST ,
             port: process.env.REDIS_PORT || 6379,
             password: process.env.REDIS_PASSWORD || '',
             db: process.env.REDIS_DB || 0,
-
             // CRITICAL: Same TLS configuration as your working redis.js
             tls: {
                 rejectUnauthorized: false,
                 requestCert: true,
                 agent: false
             },
-
             retryStrategy: function (times) {
                 const delay = Math.min(times * 50, 2000);
-                //console.log(`🔄 [REDIS_SUBSCRIBER] Retrying in ${delay}ms (attempt ${times})`);
                 return delay;
             },
-
             connectTimeout: 15000,
             commandTimeout: 5000,
             lazyConnect: false,
@@ -80,6 +76,9 @@ const createRedisSubscriber = async () => {
             maxRetriesPerRequest: 3,
             family: 4
         };
+
+        // Add debug log to print the actual config being used
+        console.log('[DEBUG] About to create Redis subscriber with config:', subscriberConfig);
 
         redisSubscriber = new Redis(subscriberConfig);
 
@@ -132,6 +131,7 @@ const createRedisSubscriber = async () => {
         throw error;
     }
 };
+
 
 
 /**
@@ -1699,25 +1699,59 @@ const initializeWebSocket = async (server) => {
 /**
  * EXISTING: Setup Redis subscriptions for game scheduler events
  */
+
 /**
- * CRITICAL FIX: Enhanced Redis subscription setup for multi-instance
+ * FIXED: Setup Redis subscriptions without creating new connections
  */
 const setupRedisSubscriptions = async () => {
     try {
-        console.log('🔄 [REDIS_PUBSUB] Setting up Redis subscriptions for multi-instance setup...');
+        console.log('🔄 [REDIS_PUBSUB] Setting up Redis subscriptions using unified Redis...');
 
-        // Create dedicated subscriber if not exists
-        if (!redisSubscriber) {
-            redisSubscriber = await createRedisSubscriber();
+        // Don't create a new Redis subscriber - just use the existing one
+        if (redisSubscriber) {
+            console.log('⚠️ [REDIS_PUBSUB] Redis subscriber already exists, skipping setup');
+            return;
         }
 
-        // Subscribe to all possible scheduler channels
+        // Get the existing subscriber connection from unified Redis
+        redisSubscriber = unifiedRedis.getConnection('subscriber');
+        
+        if (!redisSubscriber) {
+            console.log('❌ [REDIS_PUBSUB] No unified Redis subscriber available, skipping Redis pub/sub setup');
+            console.log('⚠️ [REDIS_PUBSUB] WebSocket will work without Redis subscriptions (using polling mode)');
+            return;
+        }
+
+        console.log('✅ [REDIS_PUBSUB] Using existing unified Redis subscriber connection');
+
+        // Check if the connection is already ready
+        if (redisSubscriber.status !== 'ready') {
+            console.log('⚠️ [REDIS_PUBSUB] Subscriber not ready, waiting...');
+            
+            // Wait for ready state with timeout
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('Redis subscriber ready timeout'));
+                }, 5000);
+
+                if (redisSubscriber.status === 'ready') {
+                    clearTimeout(timeout);
+                    resolve();
+                } else {
+                    redisSubscriber.once('ready', () => {
+                        clearTimeout(timeout);
+                        resolve();
+                    });
+                }
+            });
+        }
+
+        // Define channels to subscribe to
         const channels = [
             'game_scheduler:period_start',
             'game_scheduler:period_result',
             'game_scheduler:betting_closed',
             'game_scheduler:period_error',
-            // Additional channels the scheduler might use
             'scheduler:period_start',
             'scheduler:period_result',
             'scheduler:betting_closed',
@@ -1726,55 +1760,86 @@ const setupRedisSubscriptions = async () => {
             'period:betting_closed'
         ];
 
-        //console.log('🔔 [REDIS_PUBSUB] Subscribing to scheduler channels...');
+        console.log('🔔 [REDIS_PUBSUB] Subscribing to scheduler channels...');
 
+        // Subscribe to channels sequentially to avoid overwhelming the connection
+        let successfulSubscriptions = 0;
+        
         for (const channel of channels) {
             try {
-                await redisSubscriber.subscribe(channel);
-                //console.log(`✅ [REDIS_PUBSUB] Subscribed to: ${channel}`);
+                // Check if already subscribed to avoid duplicate subscriptions
+                const subscribedChannels = redisSubscriber.getBuiltinCommands ? [] : (redisSubscriber.subscribedChannels || []);
+                
+                if (!subscribedChannels.includes(channel)) {
+                    await redisSubscriber.subscribe(channel);
+                    successfulSubscriptions++;
+                    console.log(`✅ [REDIS_PUBSUB] Subscribed to: ${channel}`);
+                } else {
+                    console.log(`⏭️ [REDIS_PUBSUB] Already subscribed to: ${channel}`);
+                    successfulSubscriptions++;
+                }
+                
+                // Small delay between subscriptions
+                await new Promise(resolve => setTimeout(resolve, 50));
+                
             } catch (subError) {
-                console.error(`❌ [REDIS_PUBSUB] Failed to subscribe to ${channel}:`, subError);
+                console.error(`❌ [REDIS_PUBSUB] Failed to subscribe to ${channel}:`, subError.message);
+                // Continue with other channels even if one fails
             }
         }
 
-        // Enhanced message handler
-        redisSubscriber.on('message', (channel, message) => {
-            const timestamp = new Date().toISOString();
-            //console.log(`\n📨 [SCHEDULER_EVENT] ==========================================`);
-            //console.log(`📨 [SCHEDULER_EVENT] Channel: ${channel} at ${timestamp}`);
-            //console.log(`📨 [SCHEDULER_EVENT] Message: ${message}`);
-
-            try {
-                const data = JSON.parse(message);
-                //console.log(`📨 [SCHEDULER_EVENT] Parsed data:`, JSON.stringify(data, null, 2));
-
-                // Validate required fields
-                if (!data.gameType || !data.duration) {
-                    console.error(`❌ [SCHEDULER_EVENT] Missing required fields`);
-                    return;
-                }
-
-                // Handle the event
-                handleGameSchedulerEvent(channel, data);
-
-            } catch (parseError) {
-                console.error(`❌ [SCHEDULER_EVENT] Error parsing message:`, parseError);
+        // Only set up event handlers if we have successful subscriptions
+        if (successfulSubscriptions > 0) {
+            // Set up message handler only once
+            if (!redisSubscriber.listenerCount('message')) {
+                redisSubscriber.on('message', (channel, message) => {
+                    try {
+                        const data = JSON.parse(message);
+                        
+                        if (!data.gameType || !data.duration) {
+                            console.error(`❌ [SCHEDULER_EVENT] Missing required fields in message from ${channel}`);
+                            return;
+                        }
+                        
+                        // Handle the game scheduler event
+                        handleGameSchedulerEvent(channel, data);
+                        
+                    } catch (parseError) {
+                        console.error(`❌ [SCHEDULER_EVENT] Error parsing message from ${channel}:`, parseError.message);
+                    }
+                });
             }
-        });
 
-        // Subscription confirmation handler
-        redisSubscriber.on('subscribe', (channel, count) => {
-            //console.log(`✅ [REDIS_SUBSCRIPTION] Subscribed to ${channel} (total: ${count})`);
-        });
+            // Set up subscription confirmation handler
+            if (!redisSubscriber.listenerCount('subscribe')) {
+                redisSubscriber.on('subscribe', (channel, count) => {
+                    console.log(`✅ [REDIS_SUBSCRIPTION] Confirmed subscription to ${channel} (total: ${count})`);
+                });
+            }
 
-        //console.log('✅ [REDIS_PUBSUB] Redis subscriptions setup completed');
+            // Error handler - but don't let errors crash the app
+            if (!redisSubscriber.listenerCount('error')) {
+                redisSubscriber.on('error', (err) => {
+                    console.error('❌ [REDIS_PUBSUB] Subscriber error:', err.message);
+                    // Don't throw or reconnect - just log the error
+                });
+            }
+
+            console.log(`✅ [REDIS_PUBSUB] Successfully subscribed to ${successfulSubscriptions}/${channels.length} channels`);
+        } else {
+            console.log('❌ [REDIS_PUBSUB] No successful subscriptions, Redis pub/sub disabled');
+        }
+
+        console.log('✅ [REDIS_PUBSUB] Redis subscriptions setup completed');
 
     } catch (error) {
-        console.error('❌ [REDIS_PUBSUB] Critical error setting up subscriptions:', error);
-        throw error;
+        console.error('❌ [REDIS_PUBSUB] Error setting up Redis subscriptions:', error.message);
+        console.log('⚠️ [REDIS_PUBSUB] Continuing without Redis subscriptions - WebSocket will use polling mode');
+        
+        // Don't throw the error - let the app continue without Redis subscriptions
+        redisSubscriber = null;
     }
 };
-
 /**
  * CRITICAL: Add cleanup function
  */
@@ -2491,7 +2556,6 @@ module.exports = {
     setupRedisSubscriptions,
     createRedisSubscriber,
     handleGameSchedulerEvent,
-    setupRedisSubscriptions,
     stopRedisSubscriptions,
     startBroadcastTicks,
     startBroadcastTicksForGame,

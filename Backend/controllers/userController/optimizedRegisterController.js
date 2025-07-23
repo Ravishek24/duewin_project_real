@@ -107,7 +107,13 @@ const optimizedRegisterController = async (req, res) => {
         });
 
         // OPTIMIZATION 1: Check cache for user existence first
-        const userExistsCache = await optimizedCacheService.checkUserExists(phone_no, email, user_name);
+        let userExistsCache = { fromCache: false };
+        try {
+            userExistsCache = await optimizedCacheService.checkUserExists(phone_no, email, user_name);
+        } catch (error) {
+            console.warn('⚠️ Cache unavailable, using database for user existence check:', error.message);
+        }
+        
         let userExists = false;
 
         if (userExistsCache.fromCache) {
@@ -137,8 +143,12 @@ const optimizedRegisterController = async (req, res) => {
             if (existingUser) {
                 console.log('❌ User already exists with ID:', existingUser.user_id);
                 
-                // Cache the result for future requests
-                await optimizedCacheService.cacheUserExistsResult(phone_no, true, 'phone_no');
+                // Cache the result for future requests (graceful fallback)
+                try {
+                    await optimizedCacheService.cacheUserExistsResult(phone_no, true, 'phone_no');
+                } catch (error) {
+                    console.warn('⚠️ Failed to cache user exists result:', error.message);
+                }
                 
                 return res.status(400).json({
                     success: false,
@@ -146,13 +156,23 @@ const optimizedRegisterController = async (req, res) => {
                 });
             }
 
-            // Cache the negative result
-            await optimizedCacheService.cacheUserExistsResult(phone_no, false);
+            // Cache the negative result (graceful fallback)
+            try {
+                await optimizedCacheService.cacheUserExistsResult(phone_no, false);
+            } catch (error) {
+                console.warn('⚠️ Failed to cache user exists result:', error.message);
+            }
             console.log('✅ No existing user found, proceeding with registration');
         }
 
         // OPTIMIZATION 3: Check referral code with caching
-        const referralCache = await optimizedCacheService.validateReferralCode(referred_by);
+        let referralCache = { fromCache: false };
+        try {
+            referralCache = await optimizedCacheService.validateReferralCode(referred_by);
+        } catch (error) {
+            console.warn('⚠️ Cache unavailable, using database for referral validation:', error.message);
+        }
+        
         let referrer = null;
 
         if (referralCache.fromCache) {
@@ -181,8 +201,12 @@ const optimizedRegisterController = async (req, res) => {
             if (!referrer) {
                 console.log('❌ Invalid referral code:', referred_by);
                 
-                // Cache the negative result
-                await optimizedCacheService.cacheReferralValidation(referred_by, false);
+                // Cache the negative result (graceful fallback)
+                try {
+                    await optimizedCacheService.cacheReferralValidation(referred_by, false);
+                } catch (error) {
+                    console.warn('⚠️ Failed to cache referral validation:', error.message);
+                }
                 
                 return res.status(400).json({
                     success: false,
@@ -190,13 +214,17 @@ const optimizedRegisterController = async (req, res) => {
                 });
             }
 
-            // Cache the positive result
-            await optimizedCacheService.cacheReferralValidation(
-                referred_by, 
-                true, 
-                referrer.user_id, 
-                referrer.user_name
-            );
+            // Cache the positive result (graceful fallback)
+            try {
+                await optimizedCacheService.cacheReferralValidation(
+                    referred_by, 
+                    true, 
+                    referrer.user_id, 
+                    referrer.user_name
+                );
+            } catch (error) {
+                console.warn('⚠️ Failed to cache referral validation:', error.message);
+            }
             
             console.log('✅ Valid referral code found for user:', referrer.user_name);
         }
@@ -233,8 +261,12 @@ const optimizedRegisterController = async (req, res) => {
 
             console.log('✅ User created successfully with ID:', user.user_id);
 
-            // OPTIMIZATION 6: Cache user profile immediately for future logins
-            await optimizedCacheService.cacheUserProfile(user);
+            // OPTIMIZATION 6: Cache user profile immediately for future logins (graceful fallback)
+            try {
+                await optimizedCacheService.cacheUserProfile(user);
+            } catch (error) {
+                console.warn('⚠️ Failed to cache user profile:', error.message);
+            }
 
             // OPTIMIZATION 7: Background jobs with proper configuration (maintain original)
             const bonusJobId = `bonus-${user.user_id}`;
@@ -277,8 +309,12 @@ const optimizedRegisterController = async (req, res) => {
             const processingTime = Date.now() - startTime;
             console.log(`⚡ Registration completed in ${processingTime}ms`);
 
-            // Track cache performance
-            await optimizedCacheService.trackCacheMetrics('registration', true);
+            // Track cache performance (graceful fallback)
+            try {
+                await optimizedCacheService.trackCacheMetrics('registration', true);
+            } catch (error) {
+                console.warn('⚠️ Failed to track cache metrics:', error.message);
+            }
 
             // Respond with same format as original (100% compatibility)
             res.status(201).json({
@@ -315,8 +351,12 @@ const optimizedRegisterController = async (req, res) => {
     } catch (error) {
         console.error('Registration error:', error);
         
-        // Track failed registration
-        await optimizedCacheService.trackCacheMetrics('registration', false);
+        // Track failed registration (graceful fallback)
+        try {
+            await optimizedCacheService.trackCacheMetrics('registration', false);
+        } catch (error) {
+            console.warn('⚠️ Failed to track cache metrics:', error.message);
+        }
         
         // Handle validation errors (maintain original error handling)
         if (error.name === 'SequelizeValidationError') {

@@ -1,25 +1,25 @@
 const { requestPasswordReset } = require('../../services/userServices');
 
 const forgotPasswordController = async (req, res) => {
-    const { email } = req.body;
+    const { phone_no } = req.body;
 
-    // Validate email
-    if (!email) {
+    // Validate phone_no
+    if (!phone_no) {
         return res.status(400).json({ 
             success: false, 
-            message: 'Email is required.' 
+            message: 'Phone number is required.' 
         });
     }
 
     try {
         // Request password reset
-        const result = await requestPasswordReset(email);
-        
-        // Always return success even if email not found for security
-        // The service will still return success:false, but we don't expose that to the client
+        const result = await requestPasswordReset(phone_no);
+        // Always return success even if phone not found for security
         return res.status(200).json({ 
             success: true, 
-            message: 'If your email is registered, you will receive password reset instructions shortly.' 
+            message: 'If your phone number is registered, you will receive password reset instructions shortly.',
+            otpSessionId: result.otpSessionId || null,
+            resetToken: result.resetToken || null
         });
     } catch (error) {
         console.error('Error in forgot password:', error);

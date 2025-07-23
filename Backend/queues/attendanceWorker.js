@@ -1,41 +1,67 @@
 const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
-const queueConnections = require('../config/queueConfig');
+const getQueueConnections = require('../config/queueConfig');
+const unifiedRedis = require('../config/unifiedRedisManager');
 const moment = require('moment-timezone');
 
-const worker = new Worker('attendance', async job => {
-  const { userId } = job.data;
-  
-  try {
-    const models = getWorkerModels(); // No async call - uses pre-initialized models
-    
-    await processAttendanceWithDeduplication(userId, models);
-    console.log(`[BullMQ] Attendance processed for user ${userId}`);
-  } catch (error) {
-    console.error(`[BullMQ] Attendance job failed for user ${userId}:`, error.message);
-    
-    if (isRetryableError(error)) {
-      throw error; // Will trigger retry
+async function startWorker() {
+  await unifiedRedis.initialize();
+  const queueConnections = getQueueConnections();
+
+  const worker = new Worker('attendance', async job => {
+    const { userId } = job.data;
+    try {
+      const models = getWorkerModels();
+      await processAttendanceWithDeduplication(userId, models);
+      console.log(`[BullMQ] Attendance processed for user ${userId}`);
+    } catch (error) {
+      console.error(`[BullMQ] Attendance job failed for user ${userId}:`, error.message);
+      if (isRetryableError(error)) {
+        throw error;
+      }
+      console.warn(`Non-critical attendance error for user ${userId}:`, error.message);
     }
-    
-    // Log and continue for non-critical attendance errors
-    console.warn(`Non-critical attendance error for user ${userId}:`, error.message);
-  }
-}, { 
-  connection: queueConnections.attendance,
-  concurrency: 10, // Higher concurrency for lightweight operations
-  settings: {
-    stalledInterval: 30000,
-    maxStalledCount: 1
-  }
-});
+  }, {
+    connection: queueConnections.attendance,
+    concurrency: 10,
+    settings: {
+      stalledInterval: 30000,
+      maxStalledCount: 1
+    }
+  });
+
+  worker.on('completed', job => {
+    console.log(`[BullMQ] Attendance job completed:`, job.id);
+  });
+
+  worker.on('failed', (job, err) => {
+    console.error(`[BullMQ] Attendance job failed:`, job.id, err.message);
+    if (err.name === 'SequelizeDeadlockError') {
+      console.error('\ud83d\udea8 DEADLOCK DETECTED in attendance worker:', {
+        job: job.data,
+        timestamp: new Date().toISOString(),
+        stack: err.stack
+      });
+    }
+  });
+
+  const attendanceQueue = new Queue('attendance', { connection: queueConnections.attendance });
+  setInterval(() => {
+    attendanceQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
+    attendanceQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});
+  }, 6 * 60 * 60 * 1000); // Every 6 hours
+
+  return worker;
+}
+
+module.exports = startWorker();
 
 // Enhanced attendance processing with deduplication
 async function processAttendanceWithDeduplication(userId, models) {
   const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
   
-  // Use Redis-based deduplication to prevent duplicate processing
-  const redis = require('../config/redisConfig').redis;
+  // FIXED: Use unified Redis manager connection
+  const redis = unifiedRedis.getConnection('main');
   const deduplicationKey = `attendance:${userId}:${today}`;
   const cronDeduplicationKey = `attendance_cron:${userId}:${today}`;
   
@@ -113,27 +139,4 @@ function isRetryableError(error) {
     'TimeoutError'
   ];
   return retryableErrors.includes(error.name);
-}
-
-worker.on('completed', job => {
-  console.log(`[BullMQ] Attendance job completed:`, job.id);
-});
-
-worker.on('failed', (job, err) => {
-  console.error(`[BullMQ] Attendance job failed:`, job.id, err.message);
-  if (err.name === 'SequelizeDeadlockError') {
-    console.error('🚨 DEADLOCK DETECTED in attendance worker:', {
-      job: job.data,
-      timestamp: new Date().toISOString(),
-      stack: err.stack
-    });
-  }
-});
-
-const attendanceQueue = new Queue('attendance', { connection: queueConnections.attendance });
-setInterval(() => {
-  attendanceQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
-  attendanceQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});
-}, 6 * 60 * 60 * 1000); // Every 6 hours
-
-module.exports = worker; 
+} 

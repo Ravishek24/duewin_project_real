@@ -578,17 +578,19 @@ const verifyPhoneUpdateOtp = async (userId, otpSessionId, newPhone) => {
  * @param {string} email - User's email to identify account
  * @returns {Object} - Result of password reset request
  */
-const requestPasswordReset = async (email) => {
+const requestPasswordReset = async (phone_no) => {
     try {
-        const user = await User.findOne({ where: { email } });
+        const user = await User.findOne({ where: { phone_no } });
         // Always return same message regardless of user existence
         if (!user) {
             return {
                 success: true,
-                message: "If your email is registered, you will receive password reset instructions."
+                message: "If your phone number is registered, you will receive password reset instructions.",
+                otpSessionId: null,
+                resetToken: null
             };
         }
-        const resetToken = generateJWT(user.user_id, user.email, '1h');
+        const resetToken = generateJWT(user.user_id, user.phone_no, '1h');
         await User.update(
             {
                 reset_token: resetToken,
@@ -602,7 +604,7 @@ const requestPasswordReset = async (email) => {
             user.phone_no,
             countryCode,
             user.user_name,
-            { udf1: user.email },
+            { udf1: user.phone_no },
             'forgot_password',
             user.user_id
         );
@@ -618,13 +620,17 @@ const requestPasswordReset = async (email) => {
         }
         return {
             success: true,
-            message: "If your email is registered, you will receive password reset instructions."
+            message: "If your phone number is registered, you will receive password reset instructions.",
+            otpSessionId: otpResponse.success ? otpResponse.otpSessionId : null,
+            resetToken: resetToken
         };
     } catch (error) {
         console.error('Error requesting password reset:', error);
         return {
             success: true,
-            message: "If your email is registered, you will receive password reset instructions."
+            message: "If your phone number is registered, you will receive password reset instructions.",
+            otpSessionId: null,
+            resetToken: null
         };
     }
 };
@@ -636,24 +642,21 @@ const requestPasswordReset = async (email) => {
  */
 const validateResetToken = async (token) => {
     try {
-        // Hash the provided token
-        const tokenHash = generateJWT(null, null, null, token);
-        
         // Find user with matching token that hasn't expired
         const user = await User.findOne({
             where: {
-                reset_token: tokenHash,
+                reset_token: token,
                 reset_token_expiry: { [Op.gt]: new Date() }
             }
         });
-        
+
         if (!user) {
             return {
                 success: false,
                 message: "Invalid or expired token."
             };
         }
-        
+
         return {
             success: true,
             message: "Token validated successfully.",
@@ -690,8 +693,13 @@ const resetPassword = async (token, newPassword, otp_session_id, phone, otp_code
         if (user.phone_otp_session_id !== otp_session_id) {
             return { success: false, message: 'Invalid OTP session for this user.' };
         }
+        // Ensure phone number is in E.164 format (starts with '+')
+        let formattedPhone = phone;
+        if (!formattedPhone.startsWith('+')) {
+            formattedPhone = '+91' + formattedPhone;
+        }
         // Verify OTP
-        const otpVerificationResult = await require('../services/otpService').checkOtpSession(otp_session_id, phone, otp_code);
+        const otpVerificationResult = await require('../services/otpService').checkOtpSession(otp_session_id, formattedPhone, otp_code);
         if (!otpVerificationResult.success || !otpVerificationResult.verified) {
             return { success: false, message: 'OTP verification failed: ' + (otpVerificationResult.message || 'Invalid OTP') };
         }

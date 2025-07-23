@@ -1,6 +1,7 @@
 let redisHelper = null;
 function setRedisHelper(helper) { redisHelper = helper; }
 
+require('dotenv').config();
 
 
 
@@ -62,7 +63,7 @@ class RedisConnectionManager {
      */
     createConnection(purpose, options = {}) {
         const config = {
-            host: process.env.REDIS_HOST || 'localhost',
+            host: process.env.REDIS_HOST,
             port: process.env.REDIS_PORT || 6379,
             password: process.env.REDIS_PASSWORD || null,
             db: process.env.REDIS_DB || 0,

@@ -2,7 +2,7 @@ const unifiedRedisManager = require('../config/unifiedRedisManager');
 
 /**
  * Optimized Cache Service for Registration & Login Performance
- * Reduces database queries by 70-80% through intelligent caching
+ * FIXED: Uses existing unified Redis manager instead of creating new connection
  */
 class OptimizedCacheService {
     constructor() {
@@ -26,33 +26,64 @@ class OptimizedCacheService {
         
         // Cache key prefixes
         this.keys = {
-            USER_EXISTS: 'user_exists:',
-            REFERRAL_CODE: 'referral:',
-            USER_SESSION: 'session:',
-            USER_PROFILE: 'profile:',
-            PHONE_CHECK: 'phone:',
-            EMAIL_CHECK: 'email:',
-            USERNAME_CHECK: 'username:',
-            LOGIN_ATTEMPTS: 'login_attempts:',
-            METRICS: 'metrics:'
+            USER_EXISTS: 'opt_user_exists:',       // Add prefix to avoid conflicts
+            REFERRAL_CODE: 'opt_referral:',
+            USER_SESSION: 'opt_session:',
+            USER_PROFILE: 'opt_profile:',
+            PHONE_CHECK: 'opt_phone:',
+            EMAIL_CHECK: 'opt_email:',
+            USERNAME_CHECK: 'opt_username:',
+            LOGIN_ATTEMPTS: 'opt_login_attempts:',
+            METRICS: 'opt_metrics:'
         };
     }
 
     /**
-     * Initialize cache service
+     * Initialize cache service - FIXED: Uses existing unified Redis connection
      */
     async initialize() {
-        if (this.isInitialized) return;
+        if (this.isInitialized && this.cacheClient) {
+            console.log('⚡ OptimizedCacheService already initialized');
+            return;
+        }
         
         try {
-            await unifiedRedisManager.initialize();
-            this.cacheClient = unifiedRedisManager.getConnection('main');
-            this.isInitialized = true;
+            console.log('🔄 Initializing OptimizedCacheService using unified Redis...');
             
-            console.log('✅ OptimizedCacheService initialized');
+            // FIXED: Use existing unified Redis connection instead of creating new one
+            this.cacheClient = unifiedRedisManager.getConnection('main');
+            
+            if (!this.cacheClient) {
+                throw new Error('Unable to get Redis connection from unified manager');
+            }
+            
+            // Test the connection
+            await this.cacheClient.ping();
+            
+            this.isInitialized = true;
+            console.log('✅ OptimizedCacheService initialized using unified Redis connection');
+            
         } catch (error) {
             console.error('❌ Failed to initialize OptimizedCacheService:', error.message);
+            this.isInitialized = false;
             throw error;
+        }
+    }
+
+    /**
+     * Ensure connection is ready - SAFE method that doesn't create new connections
+     */
+    async ensureConnection() {
+        if (!this.isInitialized || !this.cacheClient) {
+            throw new Error('Cache service not initialized. Initialize once on server startup.');
+        }
+
+        // Quick connection check
+        try {
+            await this.cacheClient.ping();
+        } catch (error) {
+            console.warn('⚠️ Cache connection issue:', error.message);
+            throw new Error('Cache connection not ready. Please retry.');
         }
     }
 
@@ -61,7 +92,7 @@ class OptimizedCacheService {
      * Returns cached result if available, otherwise queries database once
      */
     async checkUserExists(phone_no, email = null, user_name = null) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             // Create a composite key for the specific combination
@@ -92,7 +123,7 @@ class OptimizedCacheService {
      * Cache user existence result after database check
      */
     async cacheUserExistsResult(phone_no, exists, field = null) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const checkKey = `${this.keys.USER_EXISTS}${phone_no}`;
@@ -120,7 +151,7 @@ class OptimizedCacheService {
      * REGISTRATION OPTIMIZATION: Validate referral code with caching
      */
     async validateReferralCode(referral_code) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const referralKey = `${this.keys.REFERRAL_CODE}${referral_code}`;
@@ -149,7 +180,7 @@ class OptimizedCacheService {
      * Cache referral code validation result
      */
     async cacheReferralValidation(referral_code, valid, referrer_id = null, user_name = null) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const referralKey = `${this.keys.REFERRAL_CODE}${referral_code}`;
@@ -172,7 +203,7 @@ class OptimizedCacheService {
      * LOGIN OPTIMIZATION: Cache user profile for faster login
      */
     async getUserProfile(user_id) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const profileKey = `${this.keys.USER_PROFILE}${user_id}`;
@@ -206,7 +237,7 @@ class OptimizedCacheService {
      * Cache user profile after login
      */
     async cacheUserProfile(user) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const profileKey = `${this.keys.USER_PROFILE}${user.user_id}`;
@@ -235,7 +266,7 @@ class OptimizedCacheService {
      * LOGIN OPTIMIZATION: Track and limit login attempts
      */
     async checkLoginAttempts(phone_no, ip_address) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const attemptKey = `${this.keys.LOGIN_ATTEMPTS}${phone_no}:${ip_address}`;
@@ -265,7 +296,7 @@ class OptimizedCacheService {
      * Record failed login attempt
      */
     async recordFailedLogin(phone_no, ip_address) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const attemptKey = `${this.keys.LOGIN_ATTEMPTS}${phone_no}:${ip_address}`;
@@ -282,7 +313,7 @@ class OptimizedCacheService {
      * Clear login attempts on successful login
      */
     async clearLoginAttempts(phone_no, ip_address) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const attemptKey = `${this.keys.LOGIN_ATTEMPTS}${phone_no}:${ip_address}`;
@@ -297,7 +328,7 @@ class OptimizedCacheService {
      * PERFORMANCE MONITORING: Track cache hit rates
      */
     async trackCacheMetrics(operation, hit) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const metricsKey = `${this.keys.METRICS}${operation}`;
@@ -316,7 +347,7 @@ class OptimizedCacheService {
      * Get cache performance metrics
      */
     async getCacheMetrics() {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const operations = ['user_exists', 'referral_code', 'user_profile'];
@@ -352,7 +383,7 @@ class OptimizedCacheService {
      * Invalidate user-related caches (on user update)
      */
     async invalidateUserCache(user_id, phone_no) {
-        await this.initialize();
+        await this.ensureConnection();
         
         try {
             const keys = [
@@ -373,7 +404,7 @@ class OptimizedCacheService {
      * Warm up cache with frequently accessed data
      */
     async warmUpCache(frequentReferralCodes = []) {
-        await this.initialize();
+        await this.ensureConnection();
         
         console.log('🔥 Warming up cache with frequent data...');
         

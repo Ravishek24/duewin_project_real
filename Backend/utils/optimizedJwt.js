@@ -159,7 +159,11 @@ const decodeToken = (token) => {
  */
 const blacklistToken = async (token, expiryTime = null) => {
     try {
-        await optimizedCacheService.initialize();
+        // FIXED: Don't initialize on every request, graceful fallback
+        if (!optimizedCacheService.isInitialized) {
+            console.warn('⚠️ Cache service not initialized, skipping token blacklisting');
+            return;
+        }
         
         // Calculate TTL based on token expiry
         let ttl = 3600; // Default 1 hour
@@ -181,8 +185,7 @@ const blacklistToken = async (token, expiryTime = null) => {
         // Store token hash instead of full token for privacy
         const tokenHash = require('crypto').createHash('sha256').update(token).digest('hex');
         
-        const cacheClient = await optimizedCacheService.cacheClient;
-        await cacheClient.setex(`blacklist:${tokenHash}`, ttl, '1');
+        await optimizedCacheService.cacheClient.setex(`blacklist:${tokenHash}`, ttl, '1');
         
         console.log(`🚫 Token blacklisted for ${ttl} seconds`);
     } catch (error) {
@@ -197,12 +200,15 @@ const blacklistToken = async (token, expiryTime = null) => {
  */
 const isTokenBlacklisted = async (token) => {
     try {
-        await optimizedCacheService.initialize();
+        // FIXED: Don't initialize on every request, graceful fallback
+        if (!optimizedCacheService.isInitialized) {
+            console.warn('⚠️ Cache service not initialized, assuming token not blacklisted');
+            return false;
+        }
         
         const tokenHash = require('crypto').createHash('sha256').update(token).digest('hex');
         
-        const cacheClient = await optimizedCacheService.cacheClient;
-        const result = await cacheClient.get(`blacklist:${tokenHash}`);
+        const result = await optimizedCacheService.cacheClient.get(`blacklist:${tokenHash}`);
         
         return result === '1';
     } catch (error) {

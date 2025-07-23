@@ -55,7 +55,13 @@ const optimizedLoginController = async (req, res) => {
         const ipAddress = req.ip || req.connection.remoteAddress;
         
         // OPTIMIZATION 1: Check login attempts to prevent brute force
-        const loginAttempts = await optimizedCacheService.checkLoginAttempts(phone_no, ipAddress);
+        let loginAttempts = { blocked: false, attempts: 0 };
+        try {
+            loginAttempts = await optimizedCacheService.checkLoginAttempts(phone_no, ipAddress);
+        } catch (error) {
+            console.warn('⚠️ Cache unavailable, skipping login attempt check:', error.message);
+        }
+        
         if (loginAttempts.blocked) {
             console.log(`🚫 Login blocked for ${phone_no} from ${ipAddress} - too many attempts`);
             
@@ -73,7 +79,12 @@ const optimizedLoginController = async (req, res) => {
 
         // OPTIMIZATION 2: Try to get user profile from cache first
         let user = null;
-        const cachedProfile = await optimizedCacheService.getUserProfile(phone_no);
+        let cachedProfile = { fromCache: false };
+        try {
+            cachedProfile = await optimizedCacheService.getUserProfile(phone_no);
+        } catch (error) {
+            console.warn('⚠️ Cache unavailable, using database for user profile:', error.message);
+        }
         
         if (cachedProfile.fromCache) {
             console.log('⚡ Cache hit: User profile found in cache');
@@ -86,10 +97,18 @@ const optimizedLoginController = async (req, res) => {
             });
             
             if (!userWithPassword) {
-                // User was deleted but still in cache - invalidate cache
-                await optimizedCacheService.invalidateUserCache(cachedProfile.user_id, phone_no);
+                // User was deleted but still in cache - invalidate cache (graceful fallback)
+                try {
+                    await optimizedCacheService.invalidateUserCache(cachedProfile.user_id, phone_no);
+                } catch (error) {
+                    console.warn('⚠️ Failed to invalidate cache:', error.message);
+                }
                 
-                await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                try {
+                    await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                } catch (error) {
+                    console.warn('⚠️ Failed to record failed login:', error.message);
+                }
                 setSecurityHeaders(res);
                 
                 return res.status(401).json({
@@ -100,7 +119,11 @@ const optimizedLoginController = async (req, res) => {
             
             // Check if user is blocked
             if (userWithPassword.is_blocked || cachedProfile.is_blocked) {
-                await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                try {
+                    await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                } catch (error) {
+                    console.warn('⚠️ Failed to record failed login:', error.message);
+                }
                 setSecurityHeaders(res);
                 
                 return res.status(403).json({
@@ -113,7 +136,11 @@ const optimizedLoginController = async (req, res) => {
             const isValidPassword = await userWithPassword.checkPassword(password);
             if (!isValidPassword) {
                 console.log('❌ Invalid password for cached user');
-                await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                try {
+                    await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                } catch (error) {
+                    console.warn('⚠️ Failed to record failed login:', error.message);
+                }
                 setSecurityHeaders(res);
                 
                 return res.status(401).json({
@@ -144,7 +171,11 @@ const optimizedLoginController = async (req, res) => {
             });
             
             if (!user) {
-                await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                try {
+                    await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                } catch (error) {
+                    console.warn('⚠️ Failed to record failed login:', error.message);
+                }
                 setSecurityHeaders(res);
                 
                 return res.status(401).json({
@@ -154,7 +185,11 @@ const optimizedLoginController = async (req, res) => {
             }
             
             if (user.is_blocked) {
-                await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                try {
+                    await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                } catch (error) {
+                    console.warn('⚠️ Failed to record failed login:', error.message);
+                }
                 setSecurityHeaders(res);
                 
                 return res.status(403).json({
@@ -165,7 +200,11 @@ const optimizedLoginController = async (req, res) => {
             
             const isValidPassword = await user.checkPassword(password);
             if (!isValidPassword) {
-                await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                try {
+                    await optimizedCacheService.recordFailedLogin(phone_no, ipAddress);
+                } catch (error) {
+                    console.warn('⚠️ Failed to record failed login:', error.message);
+                }
                 setSecurityHeaders(res);
                 
                 return res.status(401).json({
@@ -174,13 +213,21 @@ const optimizedLoginController = async (req, res) => {
                 });
             }
             
-            // OPTIMIZATION 4: Cache user profile for future logins
-            await optimizedCacheService.cacheUserProfile(user);
+            // OPTIMIZATION 4: Cache user profile for future logins (graceful fallback)
+            try {
+                await optimizedCacheService.cacheUserProfile(user);
+            } catch (error) {
+                console.warn('⚠️ Failed to cache user profile:', error.message);
+            }
             console.log('✅ Login successful - profile cached for future requests');
         }
 
-        // OPTIMIZATION 5: Clear failed login attempts on successful login
-        await optimizedCacheService.clearLoginAttempts(phone_no, ipAddress);
+        // OPTIMIZATION 5: Clear failed login attempts on successful login (graceful fallback)
+        try {
+            await optimizedCacheService.clearLoginAttempts(phone_no, ipAddress);
+        } catch (error) {
+            console.warn('⚠️ Failed to clear login attempts:', error.message);
+        }
 
         // OPTIMIZATION 6: Optimized token generation
         const accessToken = generateToken(user);
@@ -225,8 +272,12 @@ const optimizedLoginController = async (req, res) => {
         const processingTime = Date.now() - startTime;
         console.log(`⚡ Login completed in ${processingTime}ms`);
 
-        // Track cache performance
-        await optimizedCacheService.trackCacheMetrics('login', cachedProfile.fromCache);
+        // Track cache performance (graceful fallback)
+        try {
+            await optimizedCacheService.trackCacheMetrics('login', cachedProfile.fromCache);
+        } catch (error) {
+            console.warn('⚠️ Failed to track cache metrics:', error.message);
+        }
 
         // OPTIMIZATION 9: Optimized member detail generation
         const memberDetail = `MEMBER${user.user_name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
@@ -260,8 +311,12 @@ const optimizedLoginController = async (req, res) => {
     } catch (error) {
         console.error('Login error:', error);
         
-        // Track failed login in cache metrics
-        await optimizedCacheService.trackCacheMetrics('login', false);
+        // Track failed login in cache metrics (graceful fallback)
+        try {
+            await optimizedCacheService.trackCacheMetrics('login', false);
+        } catch (error) {
+            console.warn('⚠️ Failed to track cache metrics:', error.message);
+        }
         
         // Set security headers even on error
         setSecurityHeaders(res);
