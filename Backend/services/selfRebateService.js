@@ -59,8 +59,9 @@ const processSelfRebate = async (userId, betAmount, gameType, gameId = null, bet
         const rebateRate = vipLevel ? vipLevel.rebate_rate : 0;
         console.log(`User VIP level: ${user.vip_level}, effective level: ${effectiveVipLevel}, rebate rate: ${rebateRate}`);
 
-        // Calculate rebate amount (rebate rate is already in decimal form, e.g., 0.0050 for 0.50%)
-        const rebateAmount = parseFloat(betAmount) * parseFloat(rebateRate);
+        // Always treat rebate_rate as a decimal (e.g., 0.005 means 0.5%)
+        const effectiveRate = parseFloat(rebateRate); // Use decimal directly
+        const rebateAmount = parseFloat(betAmount) * effectiveRate;
         console.log(`Calculated rebate amount: ${rebateAmount}`);
 
         if (rebateAmount <= 0) {

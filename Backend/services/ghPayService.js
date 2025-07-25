@@ -170,7 +170,25 @@ async function processGhPayCallback(callbackData) {
             const user = await User.findByPk(order.user_id);
             if (user) {
                 const newBalance = parseFloat(user.wallet_balance) + parseFloat(order.amount);
-                await user.update({ wallet_balance: newBalance });
+                const newActualDeposit = parseFloat(user.actual_deposit_amount || 0) + parseFloat(order.amount);
+                await user.update({ 
+                  wallet_balance: newBalance,
+                  actual_deposit_amount: newActualDeposit
+                });
+                // First recharge bonus logic
+                const referralService = require('./referralService');
+                if (!user.has_received_first_bonus) {
+                  const result = await referralService.processFirstRechargeBonus(user.user_id, parseFloat(order.amount));
+                  if (result.success) {
+                    const newBonusAmount = parseFloat(user.bonus_amount || 0) + (result.bonusAmount || 0);
+                    await user.update({ 
+                      has_received_first_bonus: true,
+                      bonus_amount: newBonusAmount
+                    });
+                  }
+                }
+                // Referral update
+                await referralService.updateReferralOnRecharge(user.user_id, parseFloat(order.amount));
             }
         }
         // 6. If withdrawal and completed, you may want to log or notify

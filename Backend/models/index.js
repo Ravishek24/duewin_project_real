@@ -438,6 +438,12 @@ module.exports = {
         }
         return models.VipLevel;
     },
+    get VipReward() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.VipReward;
+    },
     get GameSession() {
         if (!isInitialized) {
             throw new Error('Models not initialized. Call initializeModels() first.');

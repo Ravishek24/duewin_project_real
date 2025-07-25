@@ -4,6 +4,8 @@ const solPayConfig = require('../config/solPayConfig');
 const { WalletRecharge } = require('../models');
 const { WalletWithdrawal } = require('../models');
 const User = require('../models/User');
+const AttendanceRecord = require('../models/AttendanceRecord');
+const moment = require('moment-timezone');
 
 // Utility: Generate SOLPAY RSA signature
 function generateSolPaySignature(params, privateKey = solPayConfig.privateKey) {
@@ -171,7 +173,53 @@ async function processSolPayDepositCallback(callbackData) {
             const user = await User.findByPk(order.user_id);
             if (user) {
                 const newBalance = parseFloat(user.wallet_balance) + parseFloat(order.amount);
-                await user.update({ wallet_balance: newBalance });
+                const newActualDeposit = parseFloat(user.actual_deposit_amount || 0) + parseFloat(order.amount);
+                await user.update({ 
+                  wallet_balance: newBalance,
+                  actual_deposit_amount: newActualDeposit
+                });
+                // First recharge bonus logic
+                const referralService = require('./referralService');
+                if (!user.has_received_first_bonus) {
+                  const result = await referralService.processFirstRechargeBonus(user.user_id, parseFloat(order.amount));
+                  if (result.success) {
+                    const newBonusAmount = parseFloat(user.bonus_amount || 0) + (result.bonusAmount || 0);
+                    await user.update({ 
+                      has_received_first_bonus: true,
+                      bonus_amount: newBonusAmount
+                    });
+                  }
+                }
+                // Referral update
+                await referralService.updateReferralOnRecharge(user.user_id, parseFloat(order.amount));
+                // --- Attendance update logic ---
+                const amount = parseFloat(order.amount);
+                const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
+                const [attendance, created] = await AttendanceRecord.findOrCreate({
+                  where: { user_id: user.user_id, attendance_date: todayIST },
+                  defaults: {
+                    user_id: user.user_id,
+                    attendance_date: todayIST,
+                    date: todayIST,
+                    streak_count: 1,
+                    has_recharged: true,
+                    recharge_amount: amount,
+                    claim_eligible: true,
+                    bonus_amount: 0,
+                    bonus_claimed: false,
+                    created_at: new Date(),
+                    updated_at: new Date()
+                  }
+                });
+                if (!created) {
+                  await attendance.update({
+                    has_recharged: true,
+                    recharge_amount: (parseFloat(attendance.recharge_amount) || 0) + amount,
+                    claim_eligible: true,
+                    updated_at: new Date()
+                  });
+                }
+                // --- End Attendance update logic ---
             }
         }
         // 6. Return 'SUCCESS' for SOLPAY

@@ -28,6 +28,11 @@ class VipReward extends Model {
                 type: DataTypes.DECIMAL(10, 2),
                 allowNull: false
             },
+            status: {
+                type: DataTypes.ENUM('pending', 'completed'),
+                allowNull: false,
+                defaultValue: 'pending'
+            },
             claimed_at: {
                 type: DataTypes.DATE,
                 allowNull: false,

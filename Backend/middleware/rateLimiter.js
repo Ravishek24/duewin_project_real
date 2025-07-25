@@ -6,7 +6,7 @@ function getRedisClient() {
 }
 
 const rateLimit = require('express-rate-limit');
-const { RedisStore } = require('rate-limit-redis');
+//const { RedisStore } = require('rate-limit-redis');
 const { isWhitelisted } = require('../config/whitelist');
 
 // No top-level redis usage!

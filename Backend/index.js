@@ -1,116 +1,4 @@
-// Replace your current tracker in index.js with this enhanced version
 
-// Replace your tracker in index.js with this enhanced version that will find the exact file
-
-const originalCreateConnection = require('net').createConnection;
-const path = require('path');
-
-require('net').createConnection = function(...args) {
-    const options = args[0];
-    
-    if (options && (options.port === 6379 || options.port === '6379')) {
-        console.log('\n🚨 [NET_TRACKER] ==========================================');
-        console.log('🚨 [NET_TRACKER] Network connection to Redis port 6379 detected!');
-        console.log('🚨 [NET_TRACKER] Target:', options.host || options.hostname || 'localhost');
-        console.log('🚨 [NET_TRACKER] Port:', options.port);
-        
-        // Get full call stack
-        const error = new Error();
-        const stack = error.stack.split('\n');
-        
-        // Find the exact file that's making this call
-        let culpritFile = null;
-        let culpritFunction = null;
-        
-        for (let i = 1; i < stack.length; i++) {
-            const line = stack[i].trim();
-            
-            // Skip node_modules and internal calls
-            if (line.includes('node_modules') || line.includes('internal/')) {
-                continue;
-            }
-            
-            // Look for your backend files
-            if (line.includes('/backend/') && !line.includes('index.js')) {
-                const match = line.match(/at\s+(.+?)\s+\((.+?):(\d+):(\d+)\)/);
-                if (match) {
-                    culpritFunction = match[1];
-                    culpritFile = match[2];
-                    const lineNumber = match[3];
-                    
-                    console.log('🎯 [NET_TRACKER] FOUND CULPRIT!');
-                    console.log('🎯 [NET_TRACKER] File:', culpritFile);
-                    console.log('🎯 [NET_TRACKER] Function:', culpritFunction);
-                    console.log('🎯 [NET_TRACKER] Line:', lineNumber);
-                    
-                    // Identify the service type
-                    if (culpritFile.includes('/services/')) {
-                        const serviceName = path.basename(culpritFile);
-                        console.log('🎯 [NET_TRACKER] SERVICE:', serviceName);
-                    } else if (culpritFile.includes('/middleware/')) {
-                        const middlewareName = path.basename(culpritFile);
-                        console.log('🎯 [NET_TRACKER] MIDDLEWARE:', middlewareName);
-                    } else if (culpritFile.includes('/routes/')) {
-                        const routeName = path.basename(culpritFile);
-                        console.log('🎯 [NET_TRACKER] ROUTE:', routeName);
-                    }
-                    
-                    break;
-                }
-            }
-        }
-        
-        // If we didn't find a specific file, show more of the stack
-        if (!culpritFile) {
-            console.log('🔍 [NET_TRACKER] Full call stack (first 15 lines):');
-            stack.slice(1, 16).forEach((line, index) => {
-                console.log(`   ${index + 1}. ${line.trim()}`);
-            });
-        }
-        
-        console.log('🚨 [NET_TRACKER] ==========================================\n');
-        
-        if (!options.host || options.host === 'localhost' || options.host === '127.0.0.1') {
-            console.log('❌ [NET_TRACKER] WARNING: Localhost Redis connection detected!');
-        }
-    }
-    
-    return originalCreateConnection.apply(this, args);
-};
-
-// Also enhance module tracking to catch Redis imports
-const Module = require('module');
-const originalRequire = Module.prototype.require;
-
-Module.prototype.require = function(id) {
-    if (id === 'ioredis' || id === 'redis' || id.includes('redis') || id === 'bull' || id === 'bullmq') {
-        console.log('\n📦 [MODULE_TRACKER] ==========================================');
-        console.log('📦 [MODULE_TRACKER] Redis/Queue module being imported:', id);
-        console.log('📦 [MODULE_TRACKER] From file:', this.filename);
-        
-        if (this.filename && this.filename.includes('/backend/')) {
-            const relativePath = this.filename.replace(process.cwd(), '');
-            console.log('📦 [MODULE_TRACKER] Relative path:', relativePath);
-            
-            if (relativePath.includes('/services/')) {
-                console.log('🎯 [MODULE_TRACKER] SERVICE FILE:', path.basename(this.filename));
-            } else if (relativePath.includes('/middleware/')) {
-                console.log('🎯 [MODULE_TRACKER] MIDDLEWARE FILE:', path.basename(this.filename));
-            }
-        }
-        
-        console.log('📦 [MODULE_TRACKER] ==========================================\n');
-    }
-    return originalRequire.apply(this, arguments);
-};
-
-console.log('🔍 [ENHANCED_TRACKER] Enhanced file detection enabled');
-console.log('🔍 [ENHANCED_TRACKER] Will identify exact files causing localhost Redis connections');
-
-
-////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 // Backend/index.js - UPDATED WITH PROPER WEBSOCKET INITIALIZATION
 
@@ -341,43 +229,43 @@ const setupAppRoutes = () => {
 };
 
 // =================== WEBSOCKET INITIALIZATION ===================
-//const { initializeWebSocket } = require('./services/websocketService');
+const { initializeWebSocket } = require('./services/websocketService');
 
 // Initialize WebSocket only after Redis is connected
-//const initializeWebSocketWithRedis = async () => {
-    //try {
+const initializeWebSocketWithRedis = async () => {
+    try {
         // Wait for Redis connection
         // The unifiedRedis.isConnected() check is removed as it's not a function.
         // Assuming Redis is initialized and available globally or via a different mechanism.
         // If Redis is truly a dependency, this block needs to be re-evaluated.
         // For now, we'll proceed assuming Redis is ready.
-        //console.log('✅ Redis connection assumed ready for WebSocket initialization.');
+        console.log('✅ Redis connection assumed ready for WebSocket initialization.');
         
-        //console.log('✅ Redis connected, initializing WebSocket...');
+        console.log('✅ Redis connected, initializing WebSocket...');
         // Only pass the server argument, do not start any tick system
-        //const io = initializeWebSocket(server);
+        const io = initializeWebSocket(server);
         
         // Initialize admin exposure monitoring
-        //try {
-           //const adminExposureService = require('./services/adminExposureService');
-            //adminExposureService.startExposureMonitoring(io);
-            //console.log('✅ Admin exposure monitoring initialized');
-        //} catch (adminError) {
-            //console.warn('⚠️ Admin exposure monitoring setup failed:', adminError.message);
-        //}
+        try {
+           const adminExposureService = require('./services/adminExposureService');
+            adminExposureService.startExposureMonitoring(io);
+            console.log('✅ Admin exposure monitoring initialized');
+        } catch (adminError) {
+            console.warn('⚠️ Admin exposure monitoring setup failed:', adminError.message);
+        }
         
         // Start monitoring after WebSocket is initialized
-        //startDiagnostic();
+        startDiagnostic();
         
         // Check manually anytime
-        //performManualCheck();
+        performManualCheck();
         
-        //return io;
-    //} catch (error) {
-        //console.error('❌ Failed to initialize WebSocket:', error);
-        //throw error;
-    //}
-//};
+        return io;
+    } catch (error) {
+        console.error('❌ Failed to initialize WebSocket:', error);
+        throw error;
+    }
+};
 
 // Additional services setup
 const setupAdditionalServices = async () => {
@@ -448,6 +336,12 @@ const startServer = async () => {
         await unifiedRedis.initialize();
         console.log('✅ Unified Redis Manager initialized');
         
+        // After initializing unifiedRedis, set redisHelper for middlewares
+        const { setRedisHelper: setRateLimiterRedisHelper } = require('./middleware/rateLimiter');
+        const { setRedisHelper: setAttackProtectionRedisHelper } = require('./middleware/attackProtection');
+        setRateLimiterRedisHelper(unifiedRedis.getHelper());
+        setAttackProtectionRedisHelper(unifiedRedis.getHelper());
+        
         // OPTIMIZATION: Initialize cache service for performance optimization
         try {
             const optimizedCacheService = require('./services/optimizedCacheService');
@@ -469,7 +363,7 @@ const startServer = async () => {
         console.log('DEBUG: Finished calling setupAppRoutes()');
 
         // Step 3: Initialize WebSocket with Redis
-        //await initializeWebSocketWithRedis();
+        await initializeWebSocketWithRedis();
 
         // Step 4: Setup additional services
         await setupAdditionalServices();

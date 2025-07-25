@@ -1,6 +1,14 @@
 require('dotenv').config();
 const { initializeWorkerModels } = require('./workerInit');
 const queueConnections = require('../config/queueConfig');
+const Redis = require('ioredis');
+const origRedis = Redis.prototype.constructor;
+Redis.prototype.constructor = function(...args) {
+  console.log('🔍 [REDIS DEBUG] New Redis connection created!');
+  console.log('🔍 [REDIS DEBUG] Args:', args);
+  console.log('🔍 [REDIS DEBUG] Stack:', new Error().stack);
+  return origRedis.apply(this, args);
+};
 
 console.log('🚀 Starting Enhanced BullMQ Worker Manager...');
 console.log('==================================================');

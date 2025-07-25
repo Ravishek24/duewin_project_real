@@ -17,10 +17,9 @@ class UserRebateLevel extends Model {
                     key: 'id'
                 }
             },
-            rebate_level: {
-                type: DataTypes.STRING,
-                allowNull: false,
-                defaultValue: 'L0'
+            rebate_level_id: {
+                type: DataTypes.INTEGER,
+                allowNull: false
             },
             created_at: {
                 type: DataTypes.DATE,
@@ -50,8 +49,8 @@ class UserRebateLevel extends Model {
         
         if (models.RebateLevel) {
             this.belongsTo(models.RebateLevel, {
-                foreignKey: 'rebate_level',
-                targetKey: 'level',
+                foreignKey: 'rebate_level_id',
+                targetKey: 'id',
                 as: 'level'
             });
         }

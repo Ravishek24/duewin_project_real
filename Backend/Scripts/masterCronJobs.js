@@ -79,73 +79,43 @@ const getServices = () => {
 const autoRecordDailyAttendance = async () => {
     const lockKey = 'daily_attendance_cron_lock';
     const lockValue = `${Date.now()}_${process.pid}`;
-    
+    const BATCH_SIZE = 500;
     try {
         console.log('🕐 Starting daily attendance auto-record at 12:30 AM IST...');
-        
-        // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
-        
-        // Try to acquire lock (expires in 30 minutes)
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+        const redis = unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
-        
         if (!acquired) {
             console.log('⚠️ Daily attendance cron already running on another instance, skipping...');
             return;
         }
-
         console.log('🔒 Acquired attendance lock, proceeding with daily attendance recording');
-        
         const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
-        console.log('📅 Recording attendance for date:', today);
-
         // Get all active users
-        const users = await dbModels.User.findAll({
-            attributes: ['user_id', 'user_name'],
+        const users = await dbModels.User.findAll({ attributes: ['user_id', 'user_name'] });
+        // Get all user_ids who already have attendance for today
+        const existingRecords = await dbModels.AttendanceRecord.findAll({
+            where: { attendance_date: today },
+            attributes: ['user_id']
         });
-
-        console.log(`👥 Processing attendance for ${users.length} users`);
-
-        let successCount = 0;
-        let skipCount = 0;
-        let errorCount = 0;
-
+        const existingUserIds = new Set(existingRecords.map(r => r.user_id));
+        // Prepare new attendance records
+        const newRecords = [];
         for (const user of users) {
-            try {
-                // Check if attendance already recorded for today
-                const existingAttendance = await dbModels.AttendanceRecord.findOne({
-                    where: {
-                        user_id: user.user_id,
-                        attendance_date: today
-                    }
-                });
-
-                if (existingAttendance) {
-                    skipCount++;
-                    continue;
-                }
-
+            if (!existingUserIds.has(user.user_id)) {
                 // Get yesterday's attendance for streak calculation
                 const yesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').format('YYYY-MM-DD');
                 const yesterdayAttendance = await dbModels.AttendanceRecord.findOne({
-                    where: {
-                        user_id: user.user_id,
-                        attendance_date: yesterday
-                    }
+                    where: { user_id: user.user_id, attendance_date: yesterday }
                 });
-
-                // Calculate streak (continues only if user recharged yesterday)
                 let streak = 1;
                 if (yesterdayAttendance && yesterdayAttendance.has_recharged) {
                     streak = (yesterdayAttendance.streak_count || 0) + 1;
                 }
-
-                // Create attendance record (auto-record, no recharge yet)
-                await dbModels.AttendanceRecord.create({
+                newRecords.push({
                     user_id: user.user_id,
-                    date: today,
+                    date: today, // keep for legacy, but ensure attendance_date is set
                     attendance_date: today,
                     streak_count: streak,
                     has_recharged: false,
@@ -157,16 +127,22 @@ const redis = redisHelper;
                     created_at: new Date(),
                     updated_at: new Date()
                 });
-
-                successCount++;
-            } catch (userError) {
-                console.error(`❌ Error recording attendance for user ${user.user_id}:`, userError.message);
-                errorCount++;
             }
         }
-
+        // Insert in batches
+        let successCount = 0;
+        let errorCount = 0;
+        for (let i = 0; i < newRecords.length; i += BATCH_SIZE) {
+            try {
+                await dbModels.AttendanceRecord.bulkCreate(newRecords.slice(i, i + BATCH_SIZE));
+                successCount += Math.min(BATCH_SIZE, newRecords.length - i);
+            } catch (err) {
+                errorCount += Math.min(BATCH_SIZE, newRecords.length - i);
+                console.error('❌ Error in batch attendance insert:', err.message);
+            }
+        }
+        const skipCount = users.length - newRecords.length;
         console.log(`✅ Daily attendance recording completed: ${successCount} success, ${skipCount} skipped, ${errorCount} errors`);
-        
         logger.info('Daily attendance auto-record completed', {
             date: today,
             totalUsers: users.length,
@@ -175,7 +151,6 @@ const redis = redisHelper;
             errors: errorCount,
             timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
-
     } catch (error) {
         console.error('❌ Error in daily attendance cron:', error);
         logger.error('Error in daily attendance cron:', {
@@ -184,10 +159,9 @@ const redis = redisHelper;
             timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
     } finally {
-        // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+            const redis = unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -199,129 +173,137 @@ const redis = redisHelper;
     }
 };
 
+const ATTENDANCE_BONUS_RULES = [
+  { days: 1, amount: 300, bonus: 10 },
+  { days: 2, amount: 1000, bonus: 30 },
+  { days: 3, amount: 3000, bonus: 130 },
+  { days: 4, amount: 8000, bonus: 300 },
+  { days: 5, amount: 20000, bonus: 650 },
+  { days: 6, amount: 80000, bonus: 3150 },
+  { days: 7, amount: 200000, bonus: 7500 }
+];
+
 /**
  * Process all attendance bonuses at 12:30 AM IST
  */
 const processAttendanceBonuses = async () => {
     const lockKey = 'attendance_bonus_cron_lock';
     const lockValue = `${Date.now()}_${process.pid}`;
-    
+    const BATCH_SIZE = 100;
     try {
         console.log('💰 Starting attendance bonus processing at 12:30 AM IST...');
-        
-        // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
-        
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+        const redis = unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
-        
         if (!acquired) {
             console.log('⚠️ Attendance bonus cron already running, skipping...');
             return;
         }
-
         console.log('🔒 Acquired bonus lock, processing attendance bonuses');
-        
-        const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
-
-        // Get all eligible attendance records
-        const eligibleRecords = await dbModels.AttendanceRecord.findAll({
-            where: {
-                attendance_date: today,
-                has_recharged: true,
-                claim_eligible: true,
-                bonus_claimed: false,
-                bonus_amount: { [Op.gt]: 0 }
-            },
-            include: [{
-                model: dbModels.User,
-                as: 'attendance_user',
-                attributes: ['user_id', 'user_name', 'wallet_balance']
-            }]
+        const todayIST = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const startOfDayIST = moment.tz(todayIST, 'Asia/Kolkata').startOf('day').utc().toDate();
+        const endOfDayIST = moment.tz(todayIST, 'Asia/Kolkata').endOf('day').utc().toDate();
+        // 1. Bulk query all attendance records for today (IST)
+        const attendanceRecords = await dbModels.AttendanceRecord.findAll({
+          where: { attendance_date: todayIST },
+          include: [{
+            model: dbModels.User,
+            as: 'attendance_user',
+            attributes: ['user_id', 'user_name', 'wallet_balance']
+          }]
         });
-
-        console.log(`🎁 Processing ${eligibleRecords.length} attendance bonuses`);
-
+        // 2. Bulk query all wallet recharges for today (IST)
+        const userIds = attendanceRecords.map(a => a.user_id);
+        const recharges = await dbModels.WalletRecharge.findAll({
+          where: {
+            user_id: { [Op.in]: userIds },
+            status: 'completed',
+            created_at: { [Op.between]: [startOfDayIST, endOfDayIST] }
+          },
+          attributes: ['user_id', 'amount']
+        });
+        // 3. In-memory aggregation: user_id -> total recharge
+        const rechargeMap = {};
+        for (const r of recharges) {
+          const uid = r.user_id;
+          rechargeMap[uid] = (rechargeMap[uid] || 0) + parseFloat(r.amount);
+        }
+        // 4. Prepare batch updates
         let successCount = 0;
         let errorCount = 0;
         let totalBonusAmount = 0;
-
-        for (const record of eligibleRecords) {
-            const userId = record.user_id;
-            const bonusAmount = parseFloat(record.bonus_amount);
-            
-            // Add deduplication key to prevent conflicts with BullMQ workers
-            const deduplicationKey = `attendance_bonus:${userId}:${today}`;
-            const isAlreadyProcessed = await redis.get(deduplicationKey);
-            
-            if (isAlreadyProcessed) {
-                console.log(`⏭️ Attendance bonus already processed for user ${userId} on ${today}`);
-                continue;
-            }
-            
-            const t = await db.transaction();
-            
-            try {
-                // Use atomic operation to prevent deadlocks
-                await dbModels.User.increment('wallet_balance', {
-                    by: bonusAmount,
-                    where: { user_id: userId },
-                    transaction: t
-                });
-
-                // Mark bonus as claimed
-                await record.update({
-                    bonus_claimed: true,
-                    claimed_at: new Date()
-                }, { transaction: t });
-
-                // Create transaction record
-                await dbModels.Transaction.create({
-                    user_id: userId,
-                    type: 'attendance_bonus',
-                    amount: bonusAmount,
-                    status: 'completed',
-                    description: `Daily attendance bonus - Day ${record.streak_count}`,
-                    reference_id: `attendance_${record.id}_${Date.now()}`,
-                    metadata: {
-                        attendance_id: record.id,
-                        streak_count: record.streak_count,
-                        attendance_date: record.attendance_date
-                    }
-                }, { transaction: t });
-
-                await t.commit();
-                
-                // Set deduplication flag (expires in 24 hours)
-                await redis.setex(deduplicationKey, 86400, '1');
-                
-                successCount++;
-                totalBonusAmount += bonusAmount;
-                
-                console.log(`✅ Attendance bonus processed for user ${userId}: ${bonusAmount}`);
-                
-            } catch (error) {
-                await t.rollback();
-                console.error(`❌ Failed to process attendance bonus for user ${userId}:`, error.message);
-                errorCount++;
-                
-                // Don't throw error to continue processing other users
-                continue;
-            }
+        const attendanceUpdates = [];
+        const transactionCreates = [];
+        const userBonusIncrements = {};
+        for (const attendance of attendanceRecords) {
+          const userId = attendance.user_id;
+          const totalRecharge = rechargeMap[userId] || 0;
+          const streak = attendance.streak_count || 1;
+          const rule = ATTENDANCE_BONUS_RULES.find(r => r.days === streak);
+          let eligible = false;
+          let bonusAmount = 0;
+          if (rule && totalRecharge >= rule.amount) {
+            eligible = true;
+            bonusAmount = rule.bonus;
+          }
+          // Prepare attendance update
+          attendanceUpdates.push({
+            id: attendance.id,
+            claim_eligible: eligible,
+            bonus_amount: bonusAmount,
+            recharge_amount: totalRecharge
+          });
+          // Prepare bonus processing if eligible and not already claimed
+          if (eligible && !attendance.bonus_claimed && bonusAmount > 0) {
+            userBonusIncrements[userId] = (userBonusIncrements[userId] || 0) + bonusAmount;
+            transactionCreates.push({
+              user_id: userId,
+              type: 'attendance_bonus',
+              amount: bonusAmount,
+              status: 'completed',
+              description: `Daily attendance bonus - Day ${streak}`,
+              reference_id: `attendance_${attendance.id}_${Date.now()}`,
+              metadata: {
+                attendance_id: attendance.id,
+                streak_count: streak,
+                attendance_date: attendance.attendance_date
+              },
+              created_at: new Date(),
+              updated_at: new Date()
+            });
+            attendance.bonus_claimed = true;
+            attendance.claimed_at = new Date();
+            successCount++;
+            totalBonusAmount += bonusAmount;
+          }
         }
-
+        // 5. Batch update attendance records
+        for (let i = 0; i < attendanceUpdates.length; i += BATCH_SIZE) {
+          const batch = attendanceUpdates.slice(i, i + BATCH_SIZE);
+          await dbModels.AttendanceRecord.bulkCreate(batch, { updateOnDuplicate: ['claim_eligible', 'bonus_amount', 'recharge_amount', 'bonus_claimed', 'claimed_at'] });
+        }
+        // 6. Batch increment user wallet balances
+        for (const userId in userBonusIncrements) {
+          await dbModels.User.increment('wallet_balance', {
+            by: userBonusIncrements[userId],
+            where: { user_id: userId }
+          });
+        }
+        // 7. Batch create transactions
+        for (let i = 0; i < transactionCreates.length; i += BATCH_SIZE) {
+          await dbModels.Transaction.bulkCreate(transactionCreates.slice(i, i + BATCH_SIZE));
+        }
         console.log(`✅ Attendance bonus processing completed: ${successCount} success, ${errorCount} errors, total: ${totalBonusAmount}`);
-        
         logger.info('Attendance bonus processing completed', {
-            date: today,
-            totalRecords: eligibleRecords.length,
-            successful: successCount,
-            errors: errorCount,
-            totalBonusAmount: totalBonusAmount,
-            timestamp: moment.tz('Asia/Kolkata').toISOString()
+          service: 'duewin-backend',
+          date: todayIST,
+          totalRecords: attendanceRecords.length,
+          successful: successCount,
+          errors: errorCount,
+          totalBonusAmount,
+          timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
-
     } catch (error) {
         console.error('❌ Error in attendance bonus cron:', error);
         logger.error('Error in attendance bonus cron:', {
@@ -330,10 +312,9 @@ const redis = redisHelper;
             timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
     } finally {
-        // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+            const redis = unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -359,7 +340,7 @@ const processDailyRebates = async () => {
         await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+        const redis = unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -385,7 +366,7 @@ const redis = redisHelper;
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+            const redis = unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -408,8 +389,9 @@ const processRebateCommissionType = async (gameType) => {
         console.log(`🎰 Processing ${gameType} rebates...`);
         
         const batchId = `${gameType}-${Date.now()}`;
-        const yesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').startOf('day').toDate();
-        const endOfYesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').endOf('day').toDate();
+        // Use IST for business logic, but convert to UTC for DB query
+        const yesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').startOf('day').utc().toDate();
+        const endOfYesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').endOf('day').utc().toDate();
 
         let betRecords;
 
@@ -418,16 +400,16 @@ const processRebateCommissionType = async (gameType) => {
                 SELECT user_id, SUM(bet_amount) as total_bet_amount
                 FROM (
                     SELECT user_id, bet_amount FROM bet_record_wingos 
-                    WHERE created_at BETWEEN :start AND :end AND status = 'completed'
+                    WHERE created_at BETWEEN :start AND :end AND status IN ('won', 'lost')
                     UNION ALL
                     SELECT user_id, bet_amount FROM bet_record_5ds
-                    WHERE created_at BETWEEN :start AND :end AND status = 'completed'
+                    WHERE created_at BETWEEN :start AND :end AND status IN ('won', 'lost')
                     UNION ALL
                     SELECT user_id, bet_amount FROM bet_record_k3s
-                    WHERE created_at BETWEEN :start AND :end AND status = 'completed'
+                    WHERE created_at BETWEEN :start AND :end AND status IN ('won', 'lost')
                     UNION ALL
                     SELECT user_id, bet_amount FROM bet_record_trx_wix
-                    WHERE created_at BETWEEN :start AND :end AND status = 'completed'
+                    WHERE created_at BETWEEN :start AND :end AND status IN ('won', 'lost')
                 ) as combined_bets
                 GROUP BY user_id
                 HAVING total_bet_amount > 0
@@ -470,7 +452,12 @@ const processRebateCommissionType = async (gameType) => {
                 model: dbModels.UserRebateLevel,
                 required: false,
                 as: 'userrebateleveluser',
-                attributes: ['rebate_level']
+                attributes: ['rebate_level_id'],
+                include: [{
+                    model: dbModels.RebateLevel,
+                    as: 'level',
+                    attributes: ['id', 'level', 'lottery_l1_rebate', 'casino_l1_rebate']
+                }]
             }],
             transaction: t
         });
@@ -502,9 +489,8 @@ const processRebateCommissionType = async (gameType) => {
                 const referrer = referrerMap.get(user.referral_code);
                 if (!referrer) continue;
 
-                const rebateLevel = referrer.userrebateleveluser?.rebate_level || 'L0';
-                const rebateLevelDetails = rebateLevelMap.get(rebateLevel);
-
+                const rebateLevelDetails = referrer.userrebateleveluser?.level;
+                const rebateLevel = rebateLevelDetails?.level || 'L0';
                 if (!rebateLevelDetails) continue;
 
                 const level1Rate = gameType === 'lottery' ? 
@@ -516,7 +502,7 @@ const processRebateCommissionType = async (gameType) => {
                 if (level1Commission > 0) {
                     // Add deduplication key to prevent conflicts
                     const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+                    const redis = unifiedRedis.getHelper();
                     const deduplicationKey = `rebate_commission:${referrer.user_id}:${batchId}:${userId}`;
                     const isAlreadyProcessed = await redis.get(deduplicationKey);
                     
@@ -562,7 +548,7 @@ const redis = redisHelper;
                     }, { transaction: t });
 
                     // Set deduplication flag (expires in 7 days)
-                    await redis.setex(deduplicationKey, 604800, '1');
+                    await redis.set(deduplicationKey, '1', 'EX', 604800);
 
                     processedCommissions++;
                     totalCommissionAmount += level1Commission;
@@ -602,7 +588,7 @@ const processVipLevelUpRewards = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+        const redis = unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -677,7 +663,7 @@ const redis = redisHelper;
                 await t.commit();
                 
                 // Set deduplication flag (expires in 30 days)
-                await redis.setex(deduplicationKey, 2592000, '1');
+                await redis.set(deduplicationKey, '1', 'EX', 2592000);
 
                 successCount++;
                 totalRewardAmount += rewardAmount;
@@ -714,7 +700,7 @@ const redis = redisHelper;
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+            const redis = unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -740,7 +726,7 @@ const processMonthlyVipRewards = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+        const redis = unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -846,7 +832,7 @@ const redis = redisHelper;
                 await t.commit();
                 
                 // Set deduplication flag (expires in 60 days)
-                await redis.setex(deduplicationKey, 5184000, '1');
+                await redis.set(deduplicationKey, '1', 'EX', 5184000);
 
                 successCount++;
                 totalRewardAmount += monthlyReward;
@@ -884,7 +870,7 @@ const redis = redisHelper;
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-const redis = redisHelper;
+            const redis = unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -982,5 +968,7 @@ module.exports = {
     processAttendanceBonuses,
     processDailyRebates,
     processVipLevelUpRewards,
-    processMonthlyVipRewards
+    processMonthlyVipRewards,
+    getDatabaseInstances,
+    initializeDatabaseForCron,
 };

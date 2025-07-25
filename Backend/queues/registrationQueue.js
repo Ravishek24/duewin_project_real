@@ -1,8 +1,7 @@
 const { Queue } = require('bullmq');
-const queueConnections = require('../config/queueConfig');
+const getQueueConnections = require('../config/queueConfig');
+const queueConnections = getQueueConnections();
 
-const registrationQueue = new Queue('registration', { 
-  connection: queueConnections.registration 
-});
+const registrationQueue = new Queue('registration', { connection: queueConnections.registration });
 
 module.exports = registrationQueue; 

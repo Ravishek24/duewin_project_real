@@ -1,8 +1,7 @@
 const { Queue } = require('bullmq');
-const queueConnections = require('../config/queueConfig');
+const getQueueConnections = require('../config/queueConfig');
+const queueConnections = getQueueConnections();
 
-const withdrawalQueue = new Queue('withdrawals', { 
-  connection: queueConnections.withdrawals 
-});
+const withdrawalQueue = new Queue('withdrawals', { connection: queueConnections.withdrawals });
 
 module.exports = withdrawalQueue; 

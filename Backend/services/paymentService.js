@@ -17,6 +17,8 @@ const { Op } = require('sequelize');
 const Transaction = require('../models/Transaction'); // Added this import for processRechargeAdminAction
 const SpribeTransaction = require('../models/SpribeTransaction');
 const SeamlessTransaction = require('../models/SeamlessTransaction');
+const AttendanceRecord = require('../models/AttendanceRecord');
+const moment = require('moment-timezone');
 
 /**
  * Creates a PayIn order (deposit)
@@ -968,6 +970,37 @@ const processPayInCallback = async (callbackData) => {
           if (rechargeRecord.status === 'pending') {
               await referralService.processFirstRechargeBonus(rechargeRecord.user_id, addAmount);
           }
+
+          // NEW: Update referral status for this user's referrer
+          await referralService.updateReferralOnRecharge(rechargeRecord.user_id, addAmount);
+          
+          // --- Attendance update logic ---
+          const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
+          const [attendance, created] = await AttendanceRecord.findOrCreate({
+            where: { user_id: rechargeRecord.user_id, attendance_date: todayIST },
+            defaults: {
+              user_id: rechargeRecord.user_id,
+              attendance_date: todayIST,
+              date: todayIST,
+              streak_count: 1,
+              has_recharged: true,
+              recharge_amount: addAmount,
+              claim_eligible: true,
+              bonus_amount: 0,
+              bonus_claimed: false,
+              created_at: new Date(),
+              updated_at: new Date()
+            }
+          });
+          if (!created) {
+            await attendance.update({
+              has_recharged: true,
+              recharge_amount: (parseFloat(attendance.recharge_amount) || 0) + addAmount,
+              claim_eligible: true,
+              updated_at: new Date()
+            });
+          }
+          // --- End Attendance update logic ---
           
           await t.commit();
           

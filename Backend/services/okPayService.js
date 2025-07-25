@@ -4,6 +4,8 @@
  */
 const axios = require('axios');
 const crypto = require('crypto');
+const AttendanceRecord = require('../models/AttendanceRecord');
+const moment = require('moment-timezone');
 
 // Try different import approaches for WalletRecharge
 let WalletRecharge;
@@ -304,10 +306,65 @@ const processOkPayCallback = async (callbackData) => {
         if (User && typeof User.findByPk === 'function') {
           const user = await User.findByPk(order.user_id);
           if (user) {
-            // Update wallet balance
+            // Update wallet balance and actual deposit amount
             const newBalance = parseFloat(user.wallet_balance) + parseFloat(order.amount);
-            await user.update({ wallet_balance: newBalance });
-            console.log(`✅ Updated wallet balance for user ${order.user_id}`);
+            const newActualDeposit = parseFloat(user.actual_deposit_amount || 0) + parseFloat(order.amount);
+            await user.update({ 
+              wallet_balance: newBalance,
+              actual_deposit_amount: newActualDeposit
+            });
+            console.log(`✅ Updated wallet balance and actual deposit for user ${order.user_id}`);
+
+            // --- Attendance update logic ---
+            const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
+            const [attendance, created] = await AttendanceRecord.findOrCreate({
+              where: { user_id: user.user_id, attendance_date: todayIST },
+              defaults: {
+                user_id: user.user_id,
+                attendance_date: todayIST,
+                date: todayIST,
+                streak_count: 1,
+                has_recharged: true,
+                recharge_amount: parseFloat(order.amount),
+                claim_eligible: true,
+                bonus_amount: 0,
+                bonus_claimed: false,
+                created_at: new Date(),
+                updated_at: new Date()
+              }
+            });
+            if (!created) {
+              await attendance.update({
+                has_recharged: true,
+                recharge_amount: (parseFloat(attendance.recharge_amount) || 0) + parseFloat(order.amount),
+                claim_eligible: true,
+                updated_at: new Date()
+              });
+            }
+            // --- End Attendance update logic ---
+
+            // --- First Recharge Bonus Logic ---
+            if (!user.has_received_first_bonus) {
+              const referralService = require('./referralService');
+              const result = await referralService.processFirstRechargeBonus(user.user_id, parseFloat(order.amount));
+              if (result.success) {
+                // Update has_received_first_bonus and bonus_amount
+                const newBonusAmount = parseFloat(user.bonus_amount || 0) + (result.bonusAmount || 0);
+                await user.update({ 
+                  has_received_first_bonus: true,
+                  bonus_amount: newBonusAmount
+                });
+                console.log(`🎁 First recharge bonus awarded to user ${user.user_id}: ${result.bonusAmount}`);
+              } else {
+                console.log(`ℹ️ First recharge bonus not awarded: ${result.message}`);
+              }
+            }
+            // --- End First Recharge Bonus Logic ---
+
+            // --- Update Valid Referral Status ---
+            const referralService = require('./referralService');
+            await referralService.updateReferralOnRecharge(user.user_id, parseFloat(order.amount));
+            // --- End Update Valid Referral Status ---
           }
         } else {
           console.error('User model not available for wallet update');

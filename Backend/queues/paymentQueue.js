@@ -1,8 +1,7 @@
 const { Queue } = require('bullmq');
-const queueConnections = require('../config/queueConfig');
+const getQueueConnections = require('../config/queueConfig');
+const queueConnections = getQueueConnections();
 
-const paymentQueue = new Queue('payments', { 
-  connection: queueConnections.payments 
-});
+const paymentQueue = new Queue('payments', { connection: queueConnections.payments });
 
 module.exports = paymentQueue; 

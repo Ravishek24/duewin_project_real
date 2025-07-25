@@ -295,6 +295,13 @@ class User extends Model {
             });
         }
 
+        if (models.UserRebateLevel) {
+            this.hasOne(models.UserRebateLevel, {
+                foreignKey: 'user_id',
+                as: 'userrebateleveluser'
+            });
+        }
+
         // 🚫 REMOVED: SPRIBE associations to prevent duplicates
         // These are now handled in models/index.js separately
     }
