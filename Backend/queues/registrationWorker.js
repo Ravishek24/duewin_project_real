@@ -111,6 +111,21 @@ async function startWorker() {
             },
             restriction_note: 'This bonus can only be used for house games (lottery games)'
           }, { transaction });
+
+          // Create RebateTeam entry for new user
+          await models.RebateTeam.create({
+            user_id: userId,
+            current_rebet_level: 0,
+            current_team_number: 0,
+            current_deposit: 0.00,
+            level_1_count: 0,
+            level_2_count: 0,
+            level_3_count: 0,
+            level_4_count: 0,
+            level_5_count: 0,
+            level_6_count: 0,
+            last_updated: new Date()
+          }, { transaction });
           
           await transaction.commit();
           finished = true;
@@ -204,6 +219,32 @@ async function startWorker() {
         
         // Update referrer's referral count (atomic increment)
         await models.User.increment('direct_referral_count', {
+          by: 1,
+          where: { user_id: referrer.user_id },
+          transaction
+        });
+
+        // Create or update RebateTeam entry for referrer
+        await models.RebateTeam.findOrCreate({
+          where: { user_id: referrer.user_id },
+          defaults: {
+            user_id: referrer.user_id,
+            current_rebet_level: 0,
+            current_team_number: 0,
+            current_deposit: 0.00,
+            level_1_count: 0,
+            level_2_count: 0,
+            level_3_count: 0,
+            level_4_count: 0,
+            level_5_count: 0,
+            level_6_count: 0,
+            last_updated: new Date()
+          },
+          transaction
+        });
+
+        // Increment level_1_count for referrer
+        await models.RebateTeam.increment('level_1_count', {
           by: 1,
           where: { user_id: referrer.user_id },
           transaction

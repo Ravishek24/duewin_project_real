@@ -20,7 +20,23 @@ const fiveDProtectionService = require('./fiveDProtectionService');
 const moment = require('moment');
 // CONSTANTS - Add to top of file
 const PLATFORM_FEE_RATE = 0.02; // 2% platform fee
-const ENHANCED_USER_THRESHOLD = 2; // Threshold for protection system
+
+/**
+ * Get user threshold based on game type
+ * @param {string} gameType - The game type (wingo, k3, 5d, etc.)
+ * @returns {number} - The threshold value for protection system
+ */
+const getUserThreshold = (gameType) => {
+    // 5D games have higher threshold (50000)
+    if (gameType && gameType.toLowerCase() === '5d') {
+        return 50000;
+    }
+    // All other games use default threshold (2)
+    return 2;
+};
+
+// Keep the old constant for backward compatibility (default for other games)
+const ENHANCED_USER_THRESHOLD = 2; // Default threshold for protection system
 
 const globalProcessingLocks = new Map();
 
@@ -56,6 +72,42 @@ const betDebugLogger = winston.createLogger({
 });
 
 const generateTraceId = () => crypto.randomBytes(8).toString('hex');
+
+/**
+ * Generate all possible 3-number combinations from given numbers
+ * @param {Array} numbers - Array of numbers to generate combinations from
+ * @returns {Array} Array of combination strings
+ */
+function generateAllDifferentCombinations(numbers) {
+    const combinations = [];
+    for (let i = 0; i < numbers.length - 2; i++) {
+        for (let j = i + 1; j < numbers.length - 1; j++) {
+            for (let k = j + 1; k < numbers.length; k++) {
+                combinations.push(`${numbers[i]},${numbers[j]},${numbers[k]}`);
+            }
+        }
+    }
+    return combinations;
+}
+
+/**
+ * Generate all combinations containing a specific number
+ * @param {number} number - The number that must be included in combinations
+ * @returns {Array} Array of combination strings
+ */
+function generateAllDifferentCombinationsWithNumber(number) {
+    const combinations = [];
+    for (let i = 1; i <= 6; i++) {
+        for (let j = i + 1; j <= 6; j++) {
+            if (i !== number && j !== number) {
+                // Sort to ensure consistent order
+                const combo = [number, i, j].sort((a, b) => a - b);
+                combinations.push(combo.join(','));
+            }
+        }
+    }
+    return [...new Set(combinations)]; // Remove duplicates
+}
 
 /**
  * Get K3 result type categorization for exposure logging
@@ -1272,12 +1324,13 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
 
         // Enhanced protection for low user count scenarios
         const userCountResult = await getUniqueUserCount('5d', duration, periodId, timeline);
-        const isLowUserCount = userCountResult.uniqueUserCount < ENHANCED_USER_THRESHOLD;
+        const threshold = getUserThreshold('5d');
+        const isLowUserCount = userCountResult.uniqueUserCount < threshold;
 
         if (isLowUserCount) {
             console.log('🛡️ [5D_LOW_USER_PROTECTION] Low user count detected:', {
                 userCount: userCountResult.uniqueUserCount,
-                threshold: ENHANCED_USER_THRESHOLD,
+                threshold: threshold,
                 shouldApplyProtection: true
             });
         }
@@ -2726,12 +2779,13 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         const userCountResult = await getUniqueUserCount(gameType, duration, periodId, timeline);
         console.log('👥 [USER_COUNT] Enhanced unique user count:', userCountResult);
 
-        const shouldUseProtectedResult = userCountResult.uniqueUserCount < ENHANCED_USER_THRESHOLD;
+        const threshold = getUserThreshold(gameType);
+        const shouldUseProtectedResult = userCountResult.uniqueUserCount < threshold;
         console.log('🔍 [RESULT_USERS] User count check result:', {
             gameType, periodId, timeline,
             uniqueUserCount: userCountResult.uniqueUserCount,
             shouldUseProtectedResult,
-            threshold: ENHANCED_USER_THRESHOLD
+            threshold: threshold
         });
 
         let result;
@@ -2739,7 +2793,7 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         if (shouldUseProtectedResult) {
             console.log('🛡️ [RESULT_PROTECTION] Using PROTECTED result selection');
             console.log('🛡️ [RESULT_PROTECTION] Reason: INSUFFICIENT_USERS');
-            console.log('🛡️ [RESULT_PROTECTION] User count:', userCountResult.uniqueUserCount, 'Threshold:', ENHANCED_USER_THRESHOLD);
+            console.log('🛡️ [RESULT_PROTECTION] User count:', userCountResult.uniqueUserCount, 'Threshold:', threshold);
 
             // Use our fixed protection logic for 5D games
             if (['5d', 'fived'].includes(gameType.toLowerCase())) {
@@ -3390,16 +3444,17 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
             }
         }
 
+        const threshold = getUserThreshold(gameType);
         const result = {
             gameType,
             periodId,
             timeline,
             uniqueUserCount: uniqueUsers.size,
             totalBets: Object.keys(betsData).length,
-            threshold: ENHANCED_USER_THRESHOLD,
+            threshold: threshold,
             uniqueUsers: Array.from(uniqueUsers),
             betHashKey: betHashKey,
-            meetsThreshold: uniqueUsers.size >= ENHANCED_USER_THRESHOLD
+            meetsThreshold: uniqueUsers.size >= threshold
         };
 
         console.log('👥 [USER_COUNT] Enhanced unique user count:', result);
@@ -3412,13 +3467,14 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
             periodId,
             timeline
         });
+        const threshold = getUserThreshold(gameType);
         return {
             gameType,
             periodId,
             timeline,
             uniqueUserCount: 0,
             totalBets: 0,
-            threshold: ENHANCED_USER_THRESHOLD,
+            threshold: threshold,
             uniqueUsers: [],
             betHashKey: `bets:${gameType}:${duration}:${timeline}:${periodId}`,
             meetsThreshold: false
@@ -4116,6 +4172,72 @@ const calculateK3Win = (bet, result, betType, betValue) => {
                 }
                 break;
 
+            case 'SUM_SIZE':
+                // Sum size betting - 2.0x payout (same as SUM_CATEGORY for K3)
+                console.log(`🎲 [K3_SUM_SIZE_CHECK] Checking SUM_SIZE bet: ${betValue} vs sum: ${sum}`);
+
+                if (betValue === 'big' && sum >= 11) {
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_SIZE_WIN] BIG bet WON! (sum ${sum} >= 11)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
+                } else if (betValue === 'small' && sum < 11) {
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_SIZE_WIN] SMALL bet WON! (sum ${sum} < 11)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
+                } else {
+                    console.log(`🎲 [K3_SUM_SIZE_LOSS] SUM_SIZE bet LOST:`, {
+                        betValue: betValue,
+                        sum: sum,
+                        isBig: sum >= 11
+                    });
+                }
+                break;
+
+            case 'SUM_PARITY':
+                // Sum parity betting - 2.0x payout (same as SUM_CATEGORY for K3)
+                console.log(`🎲 [K3_SUM_PARITY_CHECK] Checking SUM_PARITY bet: ${betValue} vs sum: ${sum}`);
+
+                if (betValue === 'odd' && sum % 2 === 1) {
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_PARITY_WIN] ODD bet WON! (sum ${sum} is odd)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
+                } else if (betValue === 'even' && sum % 2 === 0) {
+                    const payout = betAmount * 2.0;
+                    console.log(`🎲 [K3_SUM_PARITY_WIN] EVEN bet WON! (sum ${sum} is even)`, {
+                        betValue: betValue,
+                        sum: sum,
+                        multiplier: 2.0,
+                        betAmount: betAmount,
+                        payout: payout
+                    });
+                    return payout;
+                } else {
+                    console.log(`🎲 [K3_SUM_PARITY_LOSS] SUM_PARITY bet LOST:`, {
+                        betValue: betValue,
+                        sum: sum,
+                        isOdd: sum % 2 === 1
+                    });
+                }
+                break;
+
             case 'MATCHING_DICE':
                 console.log(`🎲 [K3_MATCHING_DICE_CHECK] Checking MATCHING_DICE bet: ${betValue}`, {
                     hasTriple: result.has_triple,
@@ -4203,6 +4325,116 @@ const calculateK3Win = (bet, result, betType, betValue) => {
                         hasTriple: result.has_triple,
                         hasPair: result.has_pair
                     });
+                }
+                break;
+
+            case 'TWO_DIFFERENT':
+                console.log(`🎲 [K3_TWO_DIFFERENT_PAYOUT_CHECK] Checking TWO_DIFFERENT bet: ${betValue}`, {
+                    dice: [result.dice_1, result.dice_2, result.dice_3],
+                    hasPair: result.has_pair,
+                    hasTriple: result.has_triple
+                });
+
+                if (betValue && betValue !== 'null') {
+                    // Specific 2-number combination bet (e.g., "1,2") - ORDER MATTERS!
+                    const targetCombo = betValue.split(',').map(n => parseInt(n.trim()));
+                    const resultCombo = [result.dice_1, result.dice_2, result.dice_3];
+                    
+                    // Check if the first two dice match the target combination
+                    const isSpecificComboWin = targetCombo.length === 2 && 
+                        targetCombo[0] === resultCombo[0] && 
+                        targetCombo[1] === resultCombo[1];
+                    
+                    console.log(`🎲 [K3_SPECIFIC_TWO_DIFFERENT_PAYOUT_CHECK] ${targetCombo.join(',')} vs first two dice:[${resultCombo[0]},${resultCombo[1]}] = ${isSpecificComboWin} (ORDER MATTERS!)`);
+
+                    if (isSpecificComboWin) {
+                        const payout = betAmount * 6.91;
+                        console.log(`🎲 [K3_TWO_DIFFERENT_WIN] Specific TWO_DIFFERENT bet WON!`, {
+                            betValue: betValue,
+                            targetCombo: targetCombo,
+                            resultCombo: resultCombo,
+                            multiplier: 6.91,
+                            betAmount: betAmount,
+                            payout: payout
+                        });
+                        return payout;
+                    } else {
+                        console.log(`🎲 [K3_TWO_DIFFERENT_LOSS] Specific TWO_DIFFERENT bet LOST: ${targetCombo.join(',')} !== first two dice:[${resultCombo[0]},${resultCombo[1]}] (positions don't match)`);
+                    }
+                } else {
+                    // Generic two_different bet (any pair, not triple)
+                    const isTwoDifferentWin = result.has_pair && !result.has_triple;
+                    
+                    console.log(`🎲 [K3_GENERIC_TWO_DIFFERENT_PAYOUT_CHECK] two_different vs has_pair:${result.has_pair}, has_triple:${result.has_triple} = ${isTwoDifferentWin}`);
+
+                    if (isTwoDifferentWin) {
+                        const payout = betAmount * 6.91;
+                        console.log(`🎲 [K3_TWO_DIFFERENT_WIN] Generic TWO_DIFFERENT bet WON!`, {
+                            betValue: betValue,
+                            dice: [result.dice_1, result.dice_2, result.dice_3],
+                            hasPair: result.has_pair,
+                            hasTriple: result.has_triple,
+                            multiplier: 6.91,
+                            betAmount: betAmount,
+                            payout: payout
+                        });
+                        return payout;
+                    } else {
+                        console.log(`🎲 [K3_TWO_DIFFERENT_LOSS] Generic TWO_DIFFERENT bet LOST: has_pair:${result.has_pair}, has_triple:${result.has_triple}`);
+                    }
+                }
+                break;
+
+            case 'ALL_DIFFERENT':
+                console.log(`🎲 [K3_ALL_DIFFERENT_PAYOUT_CHECK] Checking ALL_DIFFERENT bet: ${betValue}`, {
+                    dice: [result.dice_1, result.dice_2, result.dice_3],
+                    hasPair: result.has_pair,
+                    hasTriple: result.has_triple
+                });
+
+                if (betValue && betValue !== 'null') {
+                    // Specific combination bet (e.g., "1,2,3") - ORDER MATTERS!
+                    const targetCombo = betValue.split(',').map(n => parseInt(n.trim()));
+                    const resultCombo = [result.dice_1, result.dice_2, result.dice_3];
+                    const isSpecificComboWin = targetCombo.every((val, idx) => val === resultCombo[idx]);
+                    
+                    console.log(`🎲 [K3_SPECIFIC_ALL_DIFFERENT_PAYOUT_CHECK] ${targetCombo.join(',')} vs ${resultCombo.join(',')} = ${isSpecificComboWin} (ORDER MATTERS!)`);
+
+                    if (isSpecificComboWin) {
+                        const payout = betAmount * 34.56;
+                        console.log(`🎲 [K3_ALL_DIFFERENT_WIN] Specific ALL_DIFFERENT bet WON!`, {
+                            betValue: betValue,
+                            targetCombo: targetCombo,
+                            resultCombo: resultCombo,
+                            multiplier: 34.56,
+                            betAmount: betAmount,
+                            payout: payout
+                        });
+                        return payout;
+                    } else {
+                        console.log(`🎲 [K3_ALL_DIFFERENT_LOSS] Specific ALL_DIFFERENT bet LOST: ${targetCombo.join(',')} !== ${resultCombo.join(',')} (positions don't match)`);
+                    }
+                } else {
+                    // Generic all_different bet (any 3 different numbers)
+                    const unique = new Set([result.dice_1, result.dice_2, result.dice_3]);
+                    const isAllDifferentWin = unique.size === 3;
+                    
+                    console.log(`🎲 [K3_GENERIC_ALL_DIFFERENT_PAYOUT_CHECK] all_different vs dice:[${result.dice_1},${result.dice_2},${result.dice_3}] unique:${unique.size} = ${isAllDifferentWin}`);
+
+                    if (isAllDifferentWin) {
+                        const payout = betAmount * 34.56;
+                        console.log(`🎲 [K3_ALL_DIFFERENT_WIN] Generic ALL_DIFFERENT bet WON!`, {
+                            betValue: betValue,
+                            dice: [result.dice_1, result.dice_2, result.dice_3],
+                            uniqueCount: unique.size,
+                            multiplier: 34.56,
+                            betAmount: betAmount,
+                            payout: payout
+                        });
+                        return payout;
+                    } else {
+                        console.log(`🎲 [K3_ALL_DIFFERENT_LOSS] Generic ALL_DIFFERENT bet LOST: unique count ${unique.size} !== 3`);
+                    }
                 }
                 break;
 
@@ -4852,6 +5084,43 @@ const checkK3Win = (betType, betValue, result) => {
             }
             console.log(`❓ [K3_UNKNOWN_MATCHING_DICE] Unknown matching dice: ${betValue} (normalized: ${normalizedMatchingValue})`);
             return false;
+
+        case 'TWO_DIFFERENT':
+            if (betValue && betValue !== 'null') {
+                // Specific 2-number combination bet (e.g., "1,2") - ORDER MATTERS!
+                const targetCombo = betValue.split(',').map(n => parseInt(n.trim()));
+                const resultCombo = [result.dice_1, result.dice_2, result.dice_3];
+                
+                // Check if the first two dice match the target combination
+                const isSpecificComboWin = targetCombo.length === 2 && 
+                    targetCombo[0] === resultCombo[0] && 
+                    targetCombo[1] === resultCombo[1];
+                
+                console.log(`🎲 [K3_SPECIFIC_TWO_DIFFERENT_CHECK] ${targetCombo.join(',')} vs first two dice:[${resultCombo[0]},${resultCombo[1]}] = ${isSpecificComboWin} (ORDER MATTERS!)`);
+                return isSpecificComboWin;
+            } else {
+                // Generic two_different bet (any pair, not triple)
+                const isTwoDifferentWin = result.has_pair && !result.has_triple;
+                
+                console.log(`🎲 [K3_GENERIC_TWO_DIFFERENT_CHECK] two_different vs has_pair:${result.has_pair}, has_triple:${result.has_triple} = ${isTwoDifferentWin}`);
+                return isTwoDifferentWin;
+            }
+
+        case 'ALL_DIFFERENT':
+            if (betValue && betValue !== 'null') {
+                // Specific combination bet (e.g., "1,2,3") - ORDER MATTERS!
+                const targetCombo = betValue.split(',').map(n => parseInt(n.trim()));
+                const resultCombo = [result.dice_1, result.dice_2, result.dice_3];
+                const isSpecificComboWin = targetCombo.every((val, idx) => val === resultCombo[idx]);
+                console.log(`🎲 [K3_SPECIFIC_ALL_DIFFERENT_CHECK] ${targetCombo.join(',')} vs ${resultCombo.join(',')} = ${isSpecificComboWin} (ORDER MATTERS!)`);
+                return isSpecificComboWin;
+            } else {
+                // Generic all_different bet (any 3 different numbers)
+                const unique = new Set([result.dice_1, result.dice_2, result.dice_3]);
+                const isAllDifferentWin = unique.size === 3;
+                console.log(`🎲 [K3_ALL_DIFFERENT_CHECK] all_different vs dice:[${result.dice_1},${result.dice_2},${result.dice_3}] unique:${unique.size} = ${isAllDifferentWin}`);
+                return isAllDifferentWin;
+            }
 
         case 'PATTERN':
             const normalizedPatternValue = betValue.toLowerCase().replace('_', '');
@@ -6089,6 +6358,10 @@ const storeBetInRedisWithTimeline = async (betData) => {
                 duration === 180 ? '3m' :
                     duration === 300 ? '5m' : '10m';
 
+        // 🚀 OPTIMIZATION: Use Redis pipeline for batch operations
+        const redis = getRedisHelper().getClient();
+        const pipeline = redis.pipeline();
+
         // Store bet in hash structure
         const betId = await indexBetInHash(gameType, duration, periodId, timeline, {
             userId,
@@ -6100,25 +6373,32 @@ const storeBetInRedisWithTimeline = async (betData) => {
             odds
         });
 
-        // Update totals
+        // 🚀 OPTIMIZATION: Batch all Redis operations in pipeline
         const totalKey = `${gameType}:${durationKey}:${timeline}:${periodId}:total`;
-        const currentTotal = await getRedisHelper().get(totalKey) || '0';
-        const newTotal = parseFloat(currentTotal) + parseFloat(netBetAmount);
-        await getRedisHelper().set(totalKey, newTotal.toString());
-
-        // Track platform fees
         const feeKey = `${gameType}:${durationKey}:${timeline}:${periodId}:fees`;
-        const currentFees = await getRedisHelper().get(feeKey) || '0';
-        const newFees = parseFloat(currentFees) + parseFloat(platformFee);
-        await getRedisHelper().set(feeKey, newFees.toString());
-
-        // Track gross amounts
         const grossKey = `${gameType}:${durationKey}:${timeline}:${periodId}:gross`;
-        const currentGross = await getRedisHelper().get(grossKey) || '0';
-        const newGross = parseFloat(currentGross) + parseFloat(grossBetAmount);
-        await getRedisHelper().set(grossKey, newGross.toString());
 
-        // Update exposure tracking - FIXED: Pass production format that actually works
+        // Get current values in parallel
+        const [currentTotal, currentFees, currentGross] = await Promise.all([
+            redis.get(totalKey).catch(() => '0'),
+            redis.get(feeKey).catch(() => '0'),
+            redis.get(grossKey).catch(() => '0')
+        ]);
+
+        // Add operations to pipeline
+        pipeline.set(totalKey, (parseFloat(currentTotal) + parseFloat(netBetAmount)).toString());
+        pipeline.set(feeKey, (parseFloat(currentFees) + parseFloat(platformFee)).toString());
+        pipeline.set(grossKey, (parseFloat(currentGross) + parseFloat(grossBetAmount)).toString());
+
+        // Set expiry for all keys
+        pipeline.expire(totalKey, 86400);
+        pipeline.expire(feeKey, 86400);
+        pipeline.expire(grossKey, 86400);
+
+        // 🚀 OPTIMIZATION: Execute all Redis operations in single pipeline
+        await pipeline.exec();
+
+        // Update exposure tracking (separate operation due to complexity)
         await updateBetExposure(gameType, duration, periodId, {
             bet_type: `${betType}:${betValue}`,    // Use production format: "COLOR:red"
             amount_after_tax: netBetAmount,         // Use production field name
@@ -6126,12 +6406,7 @@ const storeBetInRedisWithTimeline = async (betData) => {
             odds
         }, timeline);
 
-        // Set expiry for all keys
-        await getRedisHelper().expire(totalKey, 86400);
-        await getRedisHelper().expire(feeKey, 86400);
-        await getRedisHelper().expire(grossKey, 86400);
-
-        console.log(`✅ Bet stored in Redis with exposure tracking for ${gameType} ${duration}s ${timeline}`);
+        console.log(`✅ Bet stored in Redis with optimized pipeline for ${gameType} ${duration}s ${timeline}`);
         return true;
     } catch (error) {
         console.error('❌ Error storing bet in Redis:', error);
@@ -6901,6 +7176,9 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
  * REPLACE existing processBet function
  */
 const processBet = async (betData) => {
+    const startTime = Date.now();
+    const performanceMonitor = require('../scripts/monitor_performance');
+    
     try {
         console.log('🎯 [BET_START] ==========================================');
         console.log('🎯 [BET_START] NEW BET RECEIVED:', betData);
@@ -6968,9 +7246,31 @@ const processBet = async (betData) => {
             console.log(`🎲 [K3_MULTIPLE_SUM_PROCESSING] Processing SUM_MULTIPLE bet: ${betValue}`);
 
             const sumValues = betValue.split(',').map(s => s.trim());
-            const amountPerValue = netBetAmount / sumValues.length;
+            
+            // FIXED: Calculate amount per value BEFORE tax deduction
+            const grossAmountPerValue = grossBetAmount / sumValues.length;
+            const platformFeePerValue = grossAmountPerValue * 0.02; // 2% platform fee
+            const netAmountPerValue = grossAmountPerValue - platformFeePerValue;
 
-            console.log(`🎲 [K3_MULTIPLE_SUM_DISTRIBUTION] Total amount: ₹${netBetAmount}, Values: ${sumValues.length}, Amount per value: ₹${amountPerValue}`);
+            console.log(`🎲 [K3_MULTIPLE_SUM_DISTRIBUTION] Total gross amount: ₹${grossBetAmount}, Values: ${sumValues.length}`);
+            console.log(`🎲 [K3_MULTIPLE_SUM_DISTRIBUTION] Per value: Gross ₹${grossAmountPerValue}, Net ₹${netAmountPerValue}`);
+
+            // Validate minimum bet requirement for each value
+            if (netAmountPerValue < 0.95) {
+                console.log(`❌ [K3_MULTIPLE_SUM_MINIMUM_FAIL] Amount per value (₹${netAmountPerValue}) is below minimum (₹0.95)`);
+                return {
+                    success: false,
+                    message: `Amount per value (₹${netAmountPerValue.toFixed(2)}) is below minimum requirement (₹0.95). Please increase total bet amount to at least ₹${(0.95 * sumValues.length / 0.98).toFixed(2)}`,
+                    code: 'MINIMUM_BET_PER_VALUE',
+                    breakdown: {
+                        totalValues: sumValues.length,
+                        grossAmountPerValue: grossAmountPerValue,
+                        netAmountPerValue: netAmountPerValue,
+                        minimumRequired: 0.95,
+                        suggestedTotalAmount: (0.95 * sumValues.length / 0.98).toFixed(2)
+                    }
+                };
+            }
 
             // Create individual bet records for each sum value
             const individualBets = [];
@@ -6980,7 +7280,7 @@ const processBet = async (betData) => {
                     ...betData,
                     betType: 'SUM',
                     betValue: sumValue,
-                    betAmount: amountPerValue,
+                    betAmount: grossAmountPerValue, // Use gross amount for individual bets
                     odds: individualOdds
                 });
             }
@@ -7007,6 +7307,197 @@ const processBet = async (betData) => {
                     betValue: betValue,
                     expectedWin: totalExpectedWin,
                     individualBets: results.length,
+                    breakdown: results.map(r => r.data)
+                }
+            };
+        }
+
+        // Handle TWO_DIFFERENT_MULTIPLE bets by creating individual bet records
+        if (betType === 'TWO_DIFFERENT_MULTIPLE') {
+            console.log(`🎲 [K3_MULTIPLE_TWO_DIFFERENT_PROCESSING] Processing TWO_DIFFERENT_MULTIPLE bet: ${betValue}`);
+
+            // Parse pipe-separated combinations (e.g., "1,2|1,3|1,4|...")
+            const combinations = betValue.split('|').map(combo => combo.trim());
+            
+            // FIXED: Calculate amount per combination BEFORE tax deduction
+            const grossAmountPerCombination = grossBetAmount / combinations.length;
+            const platformFeePerCombination = grossAmountPerCombination * 0.02; // 2% platform fee
+            const netAmountPerCombination = grossAmountPerCombination - platformFeePerCombination;
+
+            console.log(`🎲 [K3_MULTIPLE_TWO_DIFFERENT_DISTRIBUTION] Total gross amount: ₹${grossBetAmount}, Combinations: ${combinations.length}`);
+            console.log(`🎲 [K3_MULTIPLE_TWO_DIFFERENT_DISTRIBUTION] Per combination: Gross ₹${grossAmountPerCombination}, Net ₹${netAmountPerCombination}`);
+            console.log(`🎲 [K3_MULTIPLE_TWO_DIFFERENT_COMBINATIONS] Generated combinations: ${combinations.join(' | ')}`);
+
+            // Validate minimum bet requirement for each combination
+            if (netAmountPerCombination < 0.95) {
+                console.log(`❌ [K3_MULTIPLE_TWO_DIFFERENT_MINIMUM_FAIL] Amount per combination (₹${netAmountPerCombination}) is below minimum (₹0.95)`);
+                return {
+                    success: false,
+                    message: `Amount per combination (₹${netAmountPerCombination.toFixed(2)}) is below minimum requirement (₹0.95). Please increase total bet amount to at least ₹${(0.95 * combinations.length / 0.98).toFixed(2)}`,
+                    code: 'MINIMUM_BET_PER_COMBINATION',
+                    breakdown: {
+                        totalCombinations: combinations.length,
+                        grossAmountPerCombination: grossAmountPerCombination,
+                        netAmountPerCombination: netAmountPerCombination,
+                        minimumRequired: 0.95,
+                        suggestedTotalAmount: (0.95 * combinations.length / 0.98).toFixed(2)
+                    }
+                };
+            }
+
+            // Create individual bet records for each combination
+            const individualBets = [];
+            for (const combination of combinations) {
+                individualBets.push({
+                    ...betData,
+                    betType: 'TWO_DIFFERENT',
+                    betValue: combination,
+                    betAmount: grossAmountPerCombination, // Use gross amount for individual bets
+                    odds: 6.91  // Correct odds for TWO_DIFFERENT (one pair)
+                });
+            }
+
+            console.log(`🎲 [K3_MULTIPLE_TWO_DIFFERENT_CREATED] Created ${individualBets.length} individual bets:`, individualBets.map(bet => `${bet.betType}:${bet.betValue} (₹${bet.betAmount})`));
+
+            // Process each individual bet
+            const results = [];
+            for (const individualBet of individualBets) {
+                const result = await processBet(individualBet);
+                results.push(result);
+            }
+
+            // Return combined result
+            const allSuccessful = results.every(r => r.success);
+            const totalExpectedWin = results.reduce((sum, r) => sum + (r.data?.expectedWin || 0), 0);
+
+            return {
+                success: allSuccessful,
+                message: allSuccessful ? 'Multiple two_different bets placed successfully' : 'Some bets failed',
+                data: {
+                    ...betData,
+                    betType: 'TWO_DIFFERENT_MULTIPLE',
+                    betValue: betValue,
+                    expectedWin: totalExpectedWin,
+                    individualBets: results.length,
+                    originalSelection: betValue, // Keep original for frontend display
+                    combinationsGenerated: combinations.length,
+                    breakdown: results.map(r => r.data)
+                }
+            };
+        }
+
+        // Handle ALL_DIFFERENT_MULTIPLE bets by creating individual bet records
+        if (betType === 'ALL_DIFFERENT_MULTIPLE') {
+            console.log(`🎲 [K3_MULTIPLE_ALL_DIFFERENT_PROCESSING] Processing ALL_DIFFERENT_MULTIPLE bet: ${betValue}`);
+
+            let combinations = [];
+            
+            // Generate combinations based on betValue
+            if (betValue.includes(',')) {
+                // Multiple numbers selected (e.g., "1,2,3,4,5,6")
+                const numbers = betValue.split(',').map(n => parseInt(n.trim()));
+                
+                // Validate that all numbers are within K3 range (1-6)
+                const invalidNumbers = numbers.filter(n => n < 1 || n > 6);
+                if (invalidNumbers.length > 0) {
+                    console.log(`❌ [K3_INVALID_NUMBERS] Invalid numbers detected: ${invalidNumbers.join(',')}. K3 only supports numbers 1-6.`);
+                    return {
+                        success: false,
+                        message: `Invalid numbers detected: ${invalidNumbers.join(',')}. K3 only supports numbers 1-6.`,
+                        code: 'INVALID_K3_NUMBERS',
+                        breakdown: {
+                            invalidNumbers: invalidNumbers,
+                            validRange: '1-6',
+                            receivedNumbers: numbers
+                        }
+                    };
+                }
+                
+                combinations = generateAllDifferentCombinations(numbers);
+            } else {
+                // Single number selected (e.g., "1")
+                const number = parseInt(betValue);
+                
+                // Validate that the number is within K3 range (1-6)
+                if (number < 1 || number > 6) {
+                    console.log(`❌ [K3_INVALID_NUMBER] Invalid number detected: ${number}. K3 only supports numbers 1-6.`);
+                    return {
+                        success: false,
+                        message: `Invalid number detected: ${number}. K3 only supports numbers 1-6.`,
+                        code: 'INVALID_K3_NUMBER',
+                        breakdown: {
+                            invalidNumber: number,
+                            validRange: '1-6'
+                        }
+                    };
+                }
+                
+                combinations = generateAllDifferentCombinationsWithNumber(number);
+            }
+
+            // FIXED: Calculate amount per combination BEFORE tax deduction
+            // This ensures each individual bet meets minimum requirements
+            const grossAmountPerCombination = grossBetAmount / combinations.length;
+            const platformFeePerCombination = grossAmountPerCombination * 0.02; // 2% platform fee
+            const netAmountPerCombination = grossAmountPerCombination - platformFeePerCombination;
+
+            console.log(`🎲 [K3_MULTIPLE_ALL_DIFFERENT_DISTRIBUTION] Total gross amount: ₹${grossBetAmount}, Combinations: ${combinations.length}`);
+            console.log(`🎲 [K3_MULTIPLE_ALL_DIFFERENT_DISTRIBUTION] Per combination: Gross ₹${grossAmountPerCombination}, Net ₹${netAmountPerCombination}`);
+            console.log(`🎲 [K3_MULTIPLE_ALL_DIFFERENT_COMBINATIONS] Generated combinations: ${combinations.join(' | ')}`);
+
+            // Validate minimum bet requirement for each combination
+            if (netAmountPerCombination < 0.95) {
+                console.log(`❌ [K3_MULTIPLE_ALL_DIFFERENT_MINIMUM_FAIL] Amount per combination (₹${netAmountPerCombination}) is below minimum (₹0.95)`);
+                return {
+                    success: false,
+                    message: `Amount per combination (₹${netAmountPerCombination.toFixed(2)}) is below minimum requirement (₹0.95). Please increase total bet amount to at least ₹${(0.95 * combinations.length / 0.98).toFixed(2)}`,
+                    code: 'MINIMUM_BET_PER_COMBINATION',
+                    breakdown: {
+                        totalCombinations: combinations.length,
+                        grossAmountPerCombination: grossAmountPerCombination,
+                        netAmountPerCombination: netAmountPerCombination,
+                        minimumRequired: 0.95,
+                        suggestedTotalAmount: (0.95 * combinations.length / 0.98).toFixed(2)
+                    }
+                };
+            }
+
+            // Create individual bet records for each combination
+            const individualBets = [];
+            for (const combination of combinations) {
+                individualBets.push({
+                    ...betData,
+                    betType: 'ALL_DIFFERENT',
+                    betValue: combination,
+                    betAmount: grossAmountPerCombination, // Use gross amount for individual bets
+                    odds: 34.56  // Correct odds for ALL_DIFFERENT
+                });
+            }
+
+            console.log(`🎲 [K3_MULTIPLE_ALL_DIFFERENT_CREATED] Created ${individualBets.length} individual bets:`, individualBets.map(bet => `${bet.betType}:${bet.betValue} (₹${bet.betAmount})`));
+
+            // Process each individual bet
+            const results = [];
+            for (const individualBet of individualBets) {
+                const result = await processBet(individualBet);
+                results.push(result);
+            }
+
+            // Return combined result
+            const allSuccessful = results.every(r => r.success);
+            const totalExpectedWin = results.reduce((sum, r) => sum + (r.data?.expectedWin || 0), 0);
+
+            return {
+                success: allSuccessful,
+                message: allSuccessful ? 'Multiple all_different bets placed successfully' : 'Some bets failed',
+                data: {
+                    ...betData,
+                    betType: 'ALL_DIFFERENT_MULTIPLE',
+                    betValue: betValue,
+                    expectedWin: totalExpectedWin,
+                    individualBets: results.length,
+                    originalSelection: betValue, // Keep original for frontend display
+                    combinationsGenerated: combinations.length,
                     breakdown: results.map(r => r.data)
                 }
             };
@@ -7108,6 +7599,7 @@ const processBet = async (betData) => {
                 });
             }
 
+            // 🚀 OPTIMIZATION: Batch Redis operations for better performance
             const redisStored = await storeBetInRedisWithTimeline({
                 ...betData,
                 grossBetAmount,
@@ -7179,26 +7671,46 @@ const processBet = async (betData) => {
 
             await t.commit();
 
-            // Record VIP experience
-            try {
-                await recordVipExperience(userId, grossBetAmount, gameType, betRecord.bet_id);
-            } catch (vipError) {
-                console.error('⚠️ Error recording VIP experience:', vipError);
-            }
+            // 🚀 OPTIMIZATION: Batch all post-bet operations for better performance
+            const postBetOperations = async () => {
+                try {
+                    // Update total_bet_amount (critical - keep in main thread)
+                    await models.User.increment('total_bet_amount', {
+                        by: grossBetAmount,
+                        where: { user_id: userId }
+                    });
+                    console.log(`💰 [BET_TOTAL_UPDATE] Updated total_bet_amount for user ${userId}: +₹${grossBetAmount}`);
+                } catch (totalBetError) {
+                    console.error('⚠️ Error updating total_bet_amount:', totalBetError);
+                }
 
-            // Process self rebate
-            try {
-                await processSelfRebate(userId, grossBetAmount, gameType, betRecord.bet_id);
-            } catch (rebateError) {
-                console.error('⚠️ Error processing self rebate:', rebateError);
-            }
+                // 🚀 OPTIMIZATION: Process non-critical operations asynchronously
+                setImmediate(async () => {
+                    try {
+                        // Record VIP experience (non-critical)
+                        await recordVipExperience(userId, grossBetAmount, gameType, betRecord.bet_id);
+                    } catch (vipError) {
+                        console.error('⚠️ Error recording VIP experience:', vipError);
+                    }
 
-            // Process activity reward
-            try {
-                await processBetForActivityReward(userId, grossBetAmount, gameType);
-            } catch (activityError) {
-                console.error('⚠️ Error processing activity reward:', activityError);
-            }
+                    try {
+                        // Process self rebate (non-critical)
+                        await processSelfRebate(userId, grossBetAmount, gameType, betRecord.bet_id);
+                    } catch (rebateError) {
+                        console.error('⚠️ Error processing self rebate:', rebateError);
+                    }
+
+                    try {
+                        // Process activity reward (non-critical)
+                        await processBetForActivityReward(userId, grossBetAmount, gameType);
+                    } catch (activityError) {
+                        console.error('⚠️ Error processing activity reward:', activityError);
+                    }
+                });
+            };
+
+            // Execute post-bet operations
+            await postBetOperations();
 
             const response = {
                 success: true,
@@ -7233,6 +7745,9 @@ const processBet = async (betData) => {
             });
             console.log('🎯 [BET_END] ==========================================');
 
+            // 🚀 Record performance metrics
+            performanceMonitor.recordBetProcessing(startTime, true);
+
             return response;
 
         } catch (error) {
@@ -7242,6 +7757,10 @@ const processBet = async (betData) => {
 
     } catch (error) {
         console.error('❌ [BET_PROCESS] Error in processBet:', error);
+        
+        // 🚀 Record performance metrics for failed bet
+        performanceMonitor.recordBetProcessing(startTime, false);
+        
         return {
             success: false,
             message: 'Failed to process bet',
@@ -7355,7 +7874,7 @@ const calculateResultBasedOdds = (gameType, betType, betValue, result) => {
                             case 'straight':
                                 return 8.64;
                             case 'two_different':
-                                return 69.12;
+                                return 6.91;
                             default:
                                 return 1.0;
                         }
@@ -7484,6 +8003,14 @@ const calculateOdds = (gameType, betType, betValue) => {
                         // SUM_PARITY bets - 2.0x payout
                         return 2.0;
 
+                                case 'TWO_DIFFERENT':
+                // TWO_DIFFERENT bets - always 6.91x
+                return 6.91;
+
+            case 'ALL_DIFFERENT':
+                // ALL_DIFFERENT bets - always 34.56x
+                return 34.56;
+
                     case 'PATTERN':
                         // Pattern bets with specific payouts
                         switch (betValue) {
@@ -7492,7 +8019,7 @@ const calculateOdds = (gameType, betType, betValue) => {
                             case 'straight':
                                 return 8.64;
                             case 'two_different':
-                                return 69.12;
+                                return 6.91;
                             default:
                                 return 1.0;
                         }
@@ -8212,6 +8739,7 @@ module.exports = {
     //constants
     PLATFORM_FEE_RATE,
     ENHANCED_USER_THRESHOLD,
+    getUserThreshold,
 
     // Initialization
     initializeGameCombinations,

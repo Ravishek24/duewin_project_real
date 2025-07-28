@@ -377,7 +377,8 @@ class WebSocketDiagnostic {
                         continue;
                     }
 
-                    const period = JSON.parse(periodData);
+                    // unifiedRedis.get() already parses JSON, so periodData is already an object
+                    const period = typeof periodData === 'string' ? JSON.parse(periodData) : periodData;
                     
                     // Check if time remaining is valid
                     if (typeof period.timeRemaining !== 'number' || period.timeRemaining < 0) {

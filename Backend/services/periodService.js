@@ -537,7 +537,8 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
         const periodId = `${dateStr}${currentPeriodNumber.toString().padStart(9, '0')}`;
         
         // Check if we need to move to the next period
-        if (timeRemaining <= 0) {
+        // CRITICAL FIX: Make this more precise to avoid cutting off at 1
+        if (timeRemaining < 0.5) { // Use 0.5 to account for timing precision
             console.log(`Period ${periodId} has expired, getting next period`);
             const nextPeriodNumber = currentPeriodNumber + 1;
             const nextPeriodId = `${dateStr}${nextPeriodNumber.toString().padStart(9, '0')}`;
@@ -547,8 +548,11 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
             const nextPeriodEnd = nextPeriodStart.clone().add(duration, 'seconds');
             const nextTimeRemaining = Math.max(0, nextPeriodEnd.diff(istMoment, 'seconds'));
             
-            // Only return next period if it's valid
-            if (nextTimeRemaining > 0) {
+            // CRITICAL FIX: Always show current period with 0 time remaining first
+            // This ensures the countdown shows 2, 1, 0 before transitioning to new period
+            // Only transition to next period when it has its full duration remaining
+            // CRITICAL FIX: Make transition more precise to avoid cutting off at 1
+            if (nextTimeRemaining >= duration) { // Only transition when next period has full duration
                 const nextPeriodInfo = {
                     periodId: nextPeriodId,
                     gameType,
@@ -557,10 +561,10 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
                     endTime: nextPeriodEnd.toDate(),
                     timeRemaining: nextTimeRemaining,
                     active: true,
-                    bettingOpen: nextTimeRemaining > 5
+                    bettingOpen: nextTimeRemaining >= 5000
                 };
                 
-                console.log(`Next period for ${gameType} ${duration}s:`, {
+                console.log(`🔄 [PERIOD_TRANSITION] ${gameType} ${duration}s: Transitioning to next period`, {
                     periodId: nextPeriodId,
                     timeRemaining: Math.floor(nextTimeRemaining),
                     bettingOpen: nextPeriodInfo.bettingOpen,
@@ -570,7 +574,32 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
                 
                 return nextPeriodInfo;
             }
-            return null;
+            
+            // If next period is not ready yet, keep current period active with 0 time remaining
+            // This allows the countdown to show 0 before transitioning
+            const currentPeriodInfo = {
+                periodId,
+                gameType,
+                duration,
+                startTime: currentPeriodStart.toDate(),
+                endTime: currentPeriodEnd.toDate(),
+                timeRemaining: 0,
+                active: true,
+                bettingOpen: false
+            };
+            
+            console.log(`⏸️ [PERIOD_HOLD] Current period ${periodId} at 0s remaining, keeping active until next period starts (next period has ${Math.floor(nextTimeRemaining)}s remaining, need ${Math.floor(duration)}s)`);
+            return currentPeriodInfo;
+        }
+        
+        // Add debugging for countdown issue
+        if (timeRemaining <= 10) {
+            console.log(`⏰ [PERIOD_SERVICE_DEBUG] ${gameType} ${duration}s: Current period ${periodId} has ${timeRemaining.toFixed(2)}s remaining`);
+        }
+        
+        // CRITICAL DEBUG: Log when we're about to transition
+        if (timeRemaining < 1 && timeRemaining >= 0) {
+            console.log(`🔍 [PERIOD_TRANSITION_DEBUG] ${gameType} ${duration}s: Period ${periodId} at ${timeRemaining.toFixed(2)}s - checking transition conditions`);
         }
         
         const periodInfo = {
@@ -581,7 +610,7 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
             endTime: currentPeriodEnd.toDate(),
             timeRemaining,
             active: true,
-            bettingOpen: timeRemaining > 5
+            bettingOpen: timeRemaining >= 5000
         };
         
         // FIXED: Remove excessive logging - only log period transitions, not every tick

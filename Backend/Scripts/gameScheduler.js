@@ -118,14 +118,24 @@ const setupSchedulerCommunication = async () => {
  */
 const handlePeriodRequest = async (gameType, duration) => {
     try {
-        //console.log(`📋 [PERIOD_REQUEST] Creating period for ${gameType}_${duration}`);
+        console.log(`📋 [PERIOD_REQUEST] Handling period request for ${gameType}_${duration} at ${new Date().toISOString()}`);
         
         // Get current period and ensure it's broadcasted
         const currentPeriod = await periodService.getCurrentPeriod(gameType, duration);
         if (currentPeriod) {
             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriod);
-            await broadcastPeriodStart(gameType, duration, currentPeriod);
-            //console.log(`✅ [PERIOD_REQUEST] Broadcasted current period ${currentPeriod.periodId}`);
+            
+            // CRITICAL FIX: Only broadcast if this is actually a new period
+            const endTime = calculatePeriodEndTime(currentPeriod.periodId, duration);
+            const timeRemaining = Math.max(0, (endTime - new Date()) / 1000);
+            const isNewPeriod = timeRemaining >= (duration - 1);
+            
+            if (isNewPeriod) {
+                await broadcastPeriodStart(gameType, duration, currentPeriod);
+                console.log(`✅ [PERIOD_REQUEST] Broadcasted NEW period ${currentPeriod.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
+            } else {
+                console.log(`⚠️ [PERIOD_REQUEST] Skipping broadcast for EXISTING period ${currentPeriod.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
+            }
         } else {
             console.warn(`⚠️ [PERIOD_REQUEST] No active period found for ${gameType}_${duration}`);
         }
@@ -140,17 +150,33 @@ const handlePeriodRequest = async (gameType, duration) => {
  */
 const broadcastPeriodStart = async (gameType, duration, periodData) => {
     try {
+        // Calculate timeRemaining for the new period
+        const now = new Date();
+        const endTime = periodData.endTime ? new Date(periodData.endTime) : new Date(now.getTime() + duration * 1000);
+        let timeRemaining = Math.max(0, (endTime - now) / 1000);
+        timeRemaining = Math.min(timeRemaining, duration); // Cap to duration
+        
+        // CRITICAL FIX: Only broadcast if this is actually a new period with full duration
+        // Allow for small timing variations (within 1 second of full duration)
+        const isNewPeriod = timeRemaining >= (duration - 1);
+        
+        if (!isNewPeriod) {
+            console.log(`⚠️ [PERIOD_START] Skipping broadcast for ${gameType}_${duration}: period ${periodData.periodId} has ${timeRemaining.toFixed(3)}s remaining (not a new period)`);
+            return;
+        }
+        
         const broadcastData = {
             gameType,
             duration,
             periodId: periodData.periodId,
-            endTime: periodData.endTime ? periodData.endTime.toISOString() : new Date(Date.now() + duration * 1000).toISOString(),
-            startTime: periodData.startTime ? periodData.startTime.toISOString() : new Date().toISOString(),
-            timestamp: new Date().toISOString(),
+            endTime: endTime.toISOString(),
+            startTime: periodData.startTime ? periodData.startTime.toISOString() : now.toISOString(),
+            timeRemaining: timeRemaining, // CRITICAL FIX: Include timeRemaining in broadcast
+            timestamp: now.toISOString(),
             source: 'game_scheduler_instance'
         };
         
-        //console.log(`📤 [PERIOD_START] Broadcasting period start: ${periodData.periodId}`);
+        console.log(`📤 [PERIOD_START] Broadcasting NEW period start: ${periodData.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
         
         // Broadcast to all possible channels WebSocket might be listening to
         const channels = [
@@ -501,10 +527,14 @@ const startSchedulerGameTicks = async () => {
                             
                             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriod);
                             
-                            // CRITICAL FIX: Use new broadcasting function
-                            await broadcastPeriodStart(gameType, duration, currentPeriod);
-                            
-                            //console.log(`📅 SCHEDULER loaded [${gameType}|${duration}s]: Period ${currentPeriod.periodId} (${Math.ceil(timeRemaining)}s remaining)`);
+                            // CRITICAL FIX: Only broadcast if this is a new period with full duration
+                            const isNewPeriod = timeRemaining >= (duration - 1);
+                            if (isNewPeriod) {
+                                await broadcastPeriodStart(gameType, duration, currentPeriod);
+                                console.log(`📅 SCHEDULER loaded [${gameType}|${duration}s]: NEW Period ${currentPeriod.periodId} (${Math.ceil(timeRemaining)}s remaining)`);
+                            } else {
+                                console.log(`📅 SCHEDULER loaded [${gameType}|${duration}s]: EXISTING Period ${currentPeriod.periodId} (${Math.ceil(timeRemaining)}s remaining) - skipping broadcast`);
+                            }
                         } else {
                             console.warn(`⚠️ Period ${currentPeriod.periodId} has already ended, getting next period`);
                             // Get next period
@@ -576,7 +606,29 @@ const schedulerGameTick = async (gameType, duration) => {
         const key = `${gameType}_${duration}`;
         
         // Get current period using duration-based calculation
-        const currentPeriodInfo = await periodService.getCurrentPeriod(gameType, duration);
+        // CRITICAL FIX: Use a more conservative approach to prevent premature transitions
+        let currentPeriodInfo = await periodService.getCurrentPeriod(gameType, duration);
+        
+        // If the current period has very little time remaining (< 1 second), 
+        // check if we should still be using the previous period to avoid race conditions
+        if (currentPeriodInfo && currentPeriodInfo.timeRemaining < 1) {
+            const cachedCurrent = schedulerCurrentPeriods.get(key);
+            if (cachedCurrent && cachedCurrent.periodId !== currentPeriodInfo.periodId) {
+                // We're transitioning, but let's be more conservative
+                // Only transition if the current period has actually ended (negative time remaining)
+                const now = new Date();
+                const currentPeriodEndTime = calculatePeriodEndTime(cachedCurrent.periodId, duration);
+                const timeSinceEnd = (now - currentPeriodEndTime) / 1000;
+                
+                if (timeSinceEnd < 0) {
+                    // Current period hasn't actually ended yet, keep using it
+                    console.log(`⏸️ [SCHEDULER_CONSERVATIVE] Keeping current period ${cachedCurrent.periodId} (${timeSinceEnd.toFixed(2)}s before end) instead of transitioning to ${currentPeriodInfo.periodId}`);
+                    currentPeriodInfo = cachedCurrent;
+                } else {
+                    console.log(`✅ [SCHEDULER_TRANSITION] Period ${cachedCurrent.periodId} has ended (${timeSinceEnd.toFixed(2)}s after end), transitioning to ${currentPeriodInfo.periodId}`);
+                }
+            }
+        }
         
         if (!currentPeriodInfo || !currentPeriodInfo.active) {
             // No active period, try to get next period
@@ -632,26 +684,42 @@ const schedulerGameTick = async (gameType, duration) => {
             // Store new period in Redis for WebSocket service
             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriodInfo);
             
-            // CRITICAL FIX: Use new broadcasting function
-            await broadcastPeriodStart(gameType, duration, currentPeriodInfo);
+            // CRITICAL FIX: Don't auto-broadcast new periods - let WebSocket request them
+            // This prevents racing between scheduler and WebSocket
+            const endTime = calculatePeriodEndTime(currentPeriodInfo.periodId, duration);
+            const timeRemaining = Math.max(0, (endTime - now) / 1000);
+            const isNewPeriod = timeRemaining >= (duration - 1);
             
-            //console.log(`📢 SCHEDULER: Broadcasted new period start: ${currentPeriodInfo.periodId}`);
+            if (isNewPeriod) {
+                console.log(`⏸️ SCHEDULER: New period ${currentPeriodInfo.periodId} ready but waiting for WebSocket request (${timeRemaining.toFixed(3)}s remaining)`);
+                // Don't broadcast - let WebSocket request it after proper delays
+            } else {
+                console.log(`⚠️ SCHEDULER: Skipping broadcast for EXISTING period ${currentPeriodInfo.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
+            }
         }
         
         // Update cached period with latest time info
         const currentPeriod = schedulerCurrentPeriods.get(key);
         if (currentPeriod) {
             const endTime = calculatePeriodEndTime(currentPeriod.periodId, duration);
-            const timeRemaining = Math.max(0, (endTime - now) / 1000);
+            let timeRemaining = Math.max(0, (endTime - now) / 1000);
+            
+            // Cap time remaining to duration to prevent values like 61s for 60s game
+            timeRemaining = Math.min(timeRemaining, duration);
             
             currentPeriod.timeRemaining = timeRemaining;
-            currentPeriod.bettingOpen = timeRemaining > 5;
+            currentPeriod.bettingOpen = timeRemaining >= 5;
+            
+            // Add debugging for countdown issue
+            if (timeRemaining <= 10) {
+                console.log(`⏰ [SCHEDULER_TICK] ${gameType}_${duration}: Calculated timeRemaining: ${timeRemaining}s, periodId: ${currentPeriod.periodId}`);
+            }
             
             // Update Redis for WebSocket service
             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriod);
             
             // Handle betting closure notification
-            if (timeRemaining <= 5 && timeRemaining > 0 && currentPeriod.bettingOpen) {
+            if (timeRemaining <= 5 && timeRemaining > 0 && !currentPeriod.bettingOpen) {
                 // CRITICAL FIX: Use new broadcasting function
                 await broadcastBettingClosed(gameType, duration, currentPeriod.periodId);
                 //console.log(`🔒 SCHEDULER: Betting closed for ${currentPeriod.periodId} (${timeRemaining.toFixed(1)}s remaining)`);
@@ -718,22 +786,62 @@ const storePeriodInRedisForWebSocket = async (gameType, duration, periodInfo) =>
     try {
         const redisKey = `game_scheduler:${gameType}:${duration}:current`;
         
+        // CRITICAL FIX: Use the timeRemaining that was already calculated in schedulerGameTick
+        // instead of recalculating it here, which can cause the time to get stuck
+        let timeRemaining = periodInfo.timeRemaining !== undefined ? periodInfo.timeRemaining : duration;
+        
+        // If timeRemaining wasn't set, fallback to calculation from endTime
+        if (timeRemaining === duration && periodInfo.endTime) {
+            timeRemaining = Math.max(0, (periodInfo.endTime - new Date()) / 1000);
+        }
+        
+        // Cap time remaining to duration to prevent values like 61s for 60s game
+        timeRemaining = Math.min(timeRemaining, duration);
+        
         const periodData = {
             periodId: periodInfo.periodId,
             gameType,
             duration,
             startTime: periodInfo.startTime ? periodInfo.startTime.toISOString() : new Date().toISOString(),
             endTime: periodInfo.endTime ? periodInfo.endTime.toISOString() : new Date(Date.now() + duration * 1000).toISOString(),
-            timeRemaining: periodInfo.endTime ? Math.max(0, (periodInfo.endTime - new Date()) / 1000) : duration,
+            timeRemaining: timeRemaining,
             bettingOpen: periodInfo.bettingOpen !== false,
             updatedAt: new Date().toISOString(),
             source: 'game_scheduler'
         };
         
+        // CRITICAL FIX: Add extensive logging to debug JSON parsing issue
+        console.log(`🔍 [SCHEDULER_STORE_DEBUG] ${gameType}_${duration}: About to store in Redis`);
+        console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodInfo type:`, typeof periodInfo);
+        console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodInfo keys:`, Object.keys(periodInfo || {}));
+        console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodData:`, JSON.stringify(periodData, null, 2));
+        
         const redisConnection = schedulerPublisher || schedulerHelper;
         if (redisConnection) {
-            await redisConnection.set(redisKey, JSON.stringify(periodData));
-            await redisConnection.expire(redisKey, 3600);
+            try {
+                const jsonString = JSON.stringify(periodData);
+                console.log(`🔍 [SCHEDULER_STORE_DEBUG] JSON string to store:`, jsonString);
+                
+                await redisConnection.set(redisKey, jsonString);
+                await redisConnection.expire(redisKey, 3600);
+                
+                console.log(`✅ [SCHEDULER_STORE_SUCCESS] ${gameType}_${duration}: Successfully stored in Redis`);
+            } catch (jsonError) {
+                console.error(`❌ [SCHEDULER_STORE_ERROR] ${gameType}_${duration}: JSON serialization error:`, jsonError.message);
+                console.error(`❌ [SCHEDULER_STORE_ERROR] periodData:`, periodData);
+                console.error(`❌ [SCHEDULER_STORE_ERROR] periodInfo:`, periodInfo);
+            }
+            
+            // CRITICAL FIX: Add logging for new period stuck issue
+            if (timeRemaining === duration) {
+                console.log(`🔍 [SCHEDULER_STORE_DEBUG] ${gameType}_${duration}: Storing period with stuck timeRemaining!`);
+                console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodData:`, JSON.stringify(periodData, null, 2));
+            }
+            
+            // Add logging for debugging the countdown issue
+            if (timeRemaining <= 10) {
+                console.log(`⏰ [SCHEDULER_TICK_DEBUG] ${gameType}_${duration}: Storing timeRemaining: ${timeRemaining}s, periodId: ${periodInfo.periodId}`);
+            }
         }
         
     } catch (error) {

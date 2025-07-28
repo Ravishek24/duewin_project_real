@@ -350,11 +350,39 @@ const processDailyRebates = async () => {
 
         console.log('🔒 Acquired rebate lock, processing daily rebates');
         
-        // Process lottery rebates (internal games)
-        await processRebateCommissionType('lottery');
+        // Use enhanced rebate service with all fixes:
+        // - UTC conversion for bet data
+        // - Corrected rate calculation (no division by 100)
+        // - Proper level upgrade logic
+        const enhancedRebateService = require('../services/enhancedRebateService');
         
-        // Process casino rebates (third-party games)
-        await processRebateCommissionType('casino');
+        // Check if we're testing with a specific date
+        const testDate = process.env.FORCE_REBATE_DATE;
+        
+        console.log(`📅 Processing rebates for date: ${testDate || 'yesterday (IST)'}`);
+        console.log('🕐 Using UTC conversion to capture full IST day bets');
+        
+        const result = await enhancedRebateService.processDailyRebateCommissions(testDate);
+        
+        if (result.success) {
+            console.log(`✅ Enhanced rebate processing completed:`);
+            console.log(`   📊 Processed users: ${result.processedUsers}`);
+            console.log(`   💰 Total commission: ₹${result.totalCommission.toFixed(2)}`);
+            console.log(`   ⏱️  Processing time: ${result.processingTime}ms`);
+            console.log(`   ❌ Errors: ${result.errors.length}`);
+            
+            if (result.errors.length > 0) {
+                console.log('⚠️ Some errors occurred during processing:');
+                result.errors.slice(0, 5).forEach((error, index) => {
+                    console.log(`   ${index + 1}. User ${error.userId}: ${error.error}`);
+                });
+                if (result.errors.length > 5) {
+                    console.log(`   ... and ${result.errors.length - 5} more errors`);
+                }
+            }
+        } else {
+            console.error(`❌ Enhanced rebate processing failed: ${result.error}`);
+        }
 
     } catch (error) {
         console.error('❌ Error in daily rebate cron:', error);

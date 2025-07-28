@@ -38,12 +38,13 @@ const createSequelizeInstance = () => {
                 updatedAt: 'updated_at'
             },
             pool: {
-                max: 50,        // Increased for scheduler load
-                min: 10,        // Increased minimum connections
-                acquire: 60000, // Increased timeout to 60 seconds for scheduler
-                idle: 30000,    // Increased idle timeout
-                evict: 60000,   // Increased eviction timeout
+                max: 100,       // 🚀 Double the connections for bet processing
+                min: 20,        // 🚀 Increase minimum for better availability
+                acquire: 30000, // 🚀 Reduce timeout for faster connection acquisition
+                idle: 15000,    // 🚀 Reduce idle time for better resource utilization
+                evict: 30000,   // 🚀 Reduce eviction time
                 handleDisconnects: true
+                // Removed validate: true as it's not supported in this Sequelize version
             },
             retry: {
                 max: 5,            // Increased retry attempts

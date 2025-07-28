@@ -146,6 +146,7 @@ const initializeModels = async () => {
                 'VipExperienceHistory',
                 'RebateLevel',
                 'UserRebateLevel',
+                'RebateTeam',
 
                 // Attendance & Bonus Models
                 'AttendanceRecord',
@@ -443,6 +444,12 @@ module.exports = {
             throw new Error('Models not initialized. Call initializeModels() first.');
         }
         return models.VipReward;
+    },
+    get RebateTeam() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.RebateTeam;
     },
     get GameSession() {
         if (!isInitialized) {
