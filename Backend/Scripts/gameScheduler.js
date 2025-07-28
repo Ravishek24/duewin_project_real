@@ -148,20 +148,38 @@ const handlePeriodRequest = async (gameType, duration) => {
 /**
  * CRITICAL FIX: Enhanced period start broadcasting
  */
+// Global tracking for scheduler events
+if (!global.schedulerEventTracker) {
+    global.schedulerEventTracker = {
+        sentEvents: new Map(),
+        lastBroadcasts: new Map()
+    };
+}
+
+/**
+ * CRITICAL FIX: Enhanced period start broadcasting with deduplication
+ */
 const broadcastPeriodStart = async (gameType, duration, periodData) => {
     try {
+        const dedupeKey = `start_${gameType}_${duration}_${periodData.periodId}`;
+        
+        // Check if already sent
+        if (global.schedulerEventTracker.sentEvents.has(dedupeKey)) {
+            console.log(`⏭️ [SCHEDULER_DUPLICATE] Already sent periodStart for ${periodData.periodId}`);
+            return;
+        }
+        
         // Calculate timeRemaining for the new period
         const now = new Date();
         const endTime = periodData.endTime ? new Date(periodData.endTime) : new Date(now.getTime() + duration * 1000);
         let timeRemaining = Math.max(0, (endTime - now) / 1000);
-        timeRemaining = Math.min(timeRemaining, duration); // Cap to duration
+        timeRemaining = Math.min(timeRemaining, duration);
         
-        // CRITICAL FIX: Only broadcast if this is actually a new period with full duration
-        // Allow for small timing variations (within 1 second of full duration)
-        const isNewPeriod = timeRemaining >= (duration - 1);
+        // Only broadcast if this is actually a new period with sufficient time
+        const isNewPeriod = timeRemaining >= (duration - 2); // Allow 2 second tolerance
         
         if (!isNewPeriod) {
-            console.log(`⚠️ [PERIOD_START] Skipping broadcast for ${gameType}_${duration}: period ${periodData.periodId} has ${timeRemaining.toFixed(3)}s remaining (not a new period)`);
+            console.log(`⚠️ [SCHEDULER] Skipping periodStart for ${periodData.periodId}: only ${timeRemaining.toFixed(1)}s remaining`);
             return;
         }
         
@@ -171,14 +189,14 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
             periodId: periodData.periodId,
             endTime: endTime.toISOString(),
             startTime: periodData.startTime ? periodData.startTime.toISOString() : now.toISOString(),
-            timeRemaining: timeRemaining, // CRITICAL FIX: Include timeRemaining in broadcast
+            timeRemaining: timeRemaining,
             timestamp: now.toISOString(),
-            source: 'game_scheduler_instance'
+            source: 'game_scheduler_start'
         };
         
-        console.log(`📤 [PERIOD_START] Broadcasting NEW period start: ${periodData.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
+        console.log(`📤 [SCHEDULER_START] Broadcasting NEW period: ${periodData.periodId} with ${timeRemaining.toFixed(1)}s`);
         
-        // Broadcast to all possible channels WebSocket might be listening to
+        // Broadcast to channels
         const channels = [
             'game_scheduler:period_start',
             'scheduler:period_start',
@@ -188,19 +206,23 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
         for (const channel of channels) {
             if (schedulerPublisher) {
                 await schedulerPublisher.publish(channel, JSON.stringify(broadcastData));
-                //console.log(`✅ [PERIOD_START] Published to ${channel}`);
             }
         }
         
-        // Also store current period info in Redis for WebSocket to read
+        // Store current period info
         const currentPeriodKey = `game_scheduler:${gameType}:${duration}:current`;
         if (schedulerPublisher) {
             await schedulerPublisher.setex(currentPeriodKey, duration + 10, JSON.stringify(broadcastData));
-            //console.log(`✅ [PERIOD_START] Stored current period info: ${currentPeriodKey}`);
         }
         
+        // Mark as sent with expiry
+        global.schedulerEventTracker.sentEvents.set(dedupeKey, Date.now());
+        setTimeout(() => {
+            global.schedulerEventTracker.sentEvents.delete(dedupeKey);
+        }, 60000); // 1 minute expiry
+        
     } catch (error) {
-        console.error(`❌ [PERIOD_START] Error broadcasting period start:`, error);
+        console.error(`❌ [SCHEDULER_START_ERROR] Error broadcasting period start:`, error);
     }
 };
 
@@ -209,19 +231,26 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
  */
 const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
     try {
+        const dedupeKey = `result_${gameType}_${duration}_${periodId}`;
+        
+        // Check if already sent
+        if (global.schedulerEventTracker.sentEvents.has(dedupeKey)) {
+            console.log(`⏭️ [SCHEDULER_DUPLICATE] Already sent periodResult for ${periodId}`);
+            return;
+        }
+        
         const broadcastData = {
             gameType,
             duration,
             periodId,
             result,
             timestamp: new Date().toISOString(),
-            source: 'game_scheduler_instance'
+            source: 'game_scheduler_result'
         };
         
-        //console.log(`📤 [PERIOD_RESULT] Broadcasting period result: ${periodId}`);
-        //console.log(`📊 [PERIOD_RESULT] Result:`, JSON.stringify(result, null, 2));
+        console.log(`📤 [SCHEDULER_RESULT] Broadcasting result for: ${periodId}`);
         
-        // Broadcast to all possible channels
+        // Broadcast to channels
         const channels = [
             'game_scheduler:period_result',
             'scheduler:period_result', 
@@ -231,7 +260,6 @@ const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
         for (const channel of channels) {
             if (schedulerPublisher) {
                 await schedulerPublisher.publish(channel, JSON.stringify(broadcastData));
-                //console.log(`✅ [PERIOD_RESULT] Published to ${channel}`);
             }
         }
         
@@ -239,31 +267,45 @@ const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
         const currentPeriodKey = `game_scheduler:${gameType}:${duration}:current`;
         if (schedulerPublisher) {
             await schedulerPublisher.del(currentPeriodKey);
-            //console.log(`🗑️ [PERIOD_RESULT] Cleared current period info`);
         }
         
+        // Mark as sent with expiry
+        global.schedulerEventTracker.sentEvents.set(dedupeKey, Date.now());
+        setTimeout(() => {
+            global.schedulerEventTracker.sentEvents.delete(dedupeKey);
+        }, 60000);
+        
     } catch (error) {
-        console.error(`❌ [PERIOD_RESULT] Error broadcasting period result:`, error);
+        console.error(`❌ [SCHEDULER_RESULT_ERROR] Error broadcasting period result:`, error);
     }
 };
+
 
 /**
  * CRITICAL FIX: Enhanced betting closed broadcasting
  */
 const broadcastBettingClosed = async (gameType, duration, periodId) => {
     try {
+        const dedupeKey = `betting_${gameType}_${duration}_${periodId}`;
+        
+        // Check if already sent
+        if (global.schedulerEventTracker.sentEvents.has(dedupeKey)) {
+            console.log(`⏭️ [SCHEDULER_DUPLICATE] Already sent bettingClosed for ${periodId}`);
+            return;
+        }
+        
         const broadcastData = {
             gameType,
             duration,
             periodId,
             message: `Betting closed for ${gameType} ${duration}s`,
             timestamp: new Date().toISOString(),
-            source: 'game_scheduler_instance'
+            source: 'game_scheduler_betting'
         };
         
-        //console.log(`📤 [BETTING_CLOSED] Broadcasting betting closed: ${periodId}`);
+        console.log(`📤 [SCHEDULER_BETTING] Broadcasting betting closed: ${periodId}`);
         
-        // Broadcast to all possible channels
+        // Broadcast to channels
         const channels = [
             'game_scheduler:betting_closed',
             'scheduler:betting_closed',
@@ -273,12 +315,17 @@ const broadcastBettingClosed = async (gameType, duration, periodId) => {
         for (const channel of channels) {
             if (schedulerPublisher) {
                 await schedulerPublisher.publish(channel, JSON.stringify(broadcastData));
-                //console.log(`✅ [BETTING_CLOSED] Published to ${channel}`);
             }
         }
         
+        // Mark as sent with expiry
+        global.schedulerEventTracker.sentEvents.set(dedupeKey, Date.now());
+        setTimeout(() => {
+            global.schedulerEventTracker.sentEvents.delete(dedupeKey);
+        }, 30000); // 30 second expiry
+        
     } catch (error) {
-        console.error(`❌ [BETTING_CLOSED] Error broadcasting betting closed:`, error);
+        console.error(`❌ [SCHEDULER_BETTING_ERROR] Error broadcasting betting closed:`, error);
     }
 };
 
@@ -598,6 +645,29 @@ const startSchedulerTicksForGame = (gameType, duration) => {
 };
 
 /**
+ * CRITICAL FIX: Cleanup function for scheduler tracking
+ */
+const cleanupSchedulerTracking = () => {
+    const now = Date.now();
+    const maxAge = 300000; // 5 minutes
+    let cleaned = 0;
+    
+    for (const [key, timestamp] of global.schedulerEventTracker.sentEvents.entries()) {
+        if (now - timestamp > maxAge) {
+            global.schedulerEventTracker.sentEvents.delete(key);
+            cleaned++;
+        }
+    }
+    
+    if (cleaned > 0) {
+        console.log(`🧹 [SCHEDULER_CLEANUP] Cleaned ${cleaned} tracking entries`);
+    }
+};
+
+// Run cleanup every 2 minutes
+setInterval(cleanupSchedulerTracking, 120000);
+
+/**
  * CRITICAL FIX: Enhanced scheduler game tick with multi-instance broadcasting
  */
 const schedulerGameTick = async (gameType, duration) => {
@@ -605,97 +675,43 @@ const schedulerGameTick = async (gameType, duration) => {
         const now = new Date();
         const key = `${gameType}_${duration}`;
         
-        // Get current period using duration-based calculation
-        // CRITICAL FIX: Use a more conservative approach to prevent premature transitions
+        // Get current period
         let currentPeriodInfo = await periodService.getCurrentPeriod(gameType, duration);
         
-        // If the current period has very little time remaining (< 1 second), 
-        // check if we should still be using the previous period to avoid race conditions
-        if (currentPeriodInfo && currentPeriodInfo.timeRemaining < 1) {
-            const cachedCurrent = schedulerCurrentPeriods.get(key);
-            if (cachedCurrent && cachedCurrent.periodId !== currentPeriodInfo.periodId) {
-                // We're transitioning, but let's be more conservative
-                // Only transition if the current period has actually ended (negative time remaining)
-                const now = new Date();
-                const currentPeriodEndTime = calculatePeriodEndTime(cachedCurrent.periodId, duration);
-                const timeSinceEnd = (now - currentPeriodEndTime) / 1000;
-                
-                if (timeSinceEnd < 0) {
-                    // Current period hasn't actually ended yet, keep using it
-                    console.log(`⏸️ [SCHEDULER_CONSERVATIVE] Keeping current period ${cachedCurrent.periodId} (${timeSinceEnd.toFixed(2)}s before end) instead of transitioning to ${currentPeriodInfo.periodId}`);
-                    currentPeriodInfo = cachedCurrent;
-                } else {
-                    console.log(`✅ [SCHEDULER_TRANSITION] Period ${cachedCurrent.periodId} has ended (${timeSinceEnd.toFixed(2)}s after end), transitioning to ${currentPeriodInfo.periodId}`);
-                }
-            }
-        }
-        
         if (!currentPeriodInfo || !currentPeriodInfo.active) {
-            // No active period, try to get next period
-            const cachedCurrent = schedulerCurrentPeriods.get(key);
-            if (cachedCurrent) {
-                const nextPeriod = await getNextPeriod(gameType, duration, cachedCurrent.periodId);
-                if (nextPeriod) {
-                    schedulerCurrentPeriods.set(key, nextPeriod);
-                    await storePeriodInRedisForWebSocket(gameType, duration, nextPeriod);
-                    
-                    // CRITICAL FIX: Use new broadcasting function
-                    await broadcastPeriodStart(gameType, duration, nextPeriod);
-                }
-            }
             return;
         }
         
         // Get cached period
         const cachedCurrent = schedulerCurrentPeriods.get(key);
         
-        // Enhanced period transition detection with validation
+        // Handle period transition
         if (!cachedCurrent || cachedCurrent.periodId !== currentPeriodInfo.periodId) {
-            //console.log(`⚡ SCHEDULER PERIOD TRANSITION [${gameType}|${duration}s]:`);
-            //console.log(`   - Previous: ${cachedCurrent?.periodId || 'NONE'}`);
-            //console.log(`   - Current: ${currentPeriodInfo.periodId}`);
-            //console.log(`   - Transition time: ${now.toISOString()}`);
+            console.log(`⚡ [SCHEDULER_TRANSITION] ${key}: ${cachedCurrent?.periodId || 'NONE'} → ${currentPeriodInfo.periodId}`);
             
-            // Process previous period if it exists
+            // Process previous period if exists
             if (cachedCurrent && cachedCurrent.periodId !== currentPeriodInfo.periodId) {
                 try {
                     const prevPeriodEndTime = calculatePeriodEndTime(cachedCurrent.periodId, duration);
                     const timeSincePrevEnd = (now - prevPeriodEndTime) / 1000;
                     
-                    //console.log(`⏰ Previous period ${cachedCurrent.periodId} validation:`);
-                    //console.log(`   - Should have ended: ${prevPeriodEndTime.toISOString()}`);
-                    //console.log(`   - Time since end: ${timeSincePrevEnd.toFixed(2)}s`);
-                    
-                    // Process previous period if timing is reasonable
                     if (timeSincePrevEnd >= -2 && timeSincePrevEnd <= 60) {
-                        //console.log(`✅ Processing previous period ${cachedCurrent.periodId} (valid timing)`);
+                        console.log(`✅ [SCHEDULER] Processing previous period ${cachedCurrent.periodId}`);
                         await processSchedulerPeriodEnd(gameType, duration, cachedCurrent.periodId);
-                    } else {
-                        console.warn(`⚠️ Skipping previous period ${cachedCurrent.periodId}: Invalid timing (${timeSincePrevEnd.toFixed(2)}s since end)`);
                     }
                 } catch (timingError) {
-                    console.error(`❌ Error validating previous period timing:`, timingError.message);
+                    console.error(`❌ [SCHEDULER] Error validating previous period timing:`, timingError.message);
                 }
             }
             
-            // Update cached period with new period info
+            // Update cached period
             schedulerCurrentPeriods.set(key, currentPeriodInfo);
             
-            // Store new period in Redis for WebSocket service
+            // Store new period in Redis
             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriodInfo);
             
-            // CRITICAL FIX: Don't auto-broadcast new periods - let WebSocket request them
-            // This prevents racing between scheduler and WebSocket
-            const endTime = calculatePeriodEndTime(currentPeriodInfo.periodId, duration);
-            const timeRemaining = Math.max(0, (endTime - now) / 1000);
-            const isNewPeriod = timeRemaining >= (duration - 1);
-            
-            if (isNewPeriod) {
-                console.log(`⏸️ SCHEDULER: New period ${currentPeriodInfo.periodId} ready but waiting for WebSocket request (${timeRemaining.toFixed(3)}s remaining)`);
-                // Don't broadcast - let WebSocket request it after proper delays
-            } else {
-                console.log(`⚠️ SCHEDULER: Skipping broadcast for EXISTING period ${currentPeriodInfo.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
-            }
+            // Let WebSocket request periods instead of auto-broadcasting
+            console.log(`⏸️ [SCHEDULER] New period ${currentPeriodInfo.periodId} ready for WebSocket request`);
         }
         
         // Update cached period with latest time info
@@ -703,48 +719,35 @@ const schedulerGameTick = async (gameType, duration) => {
         if (currentPeriod) {
             const endTime = calculatePeriodEndTime(currentPeriod.periodId, duration);
             let timeRemaining = Math.max(0, (endTime - now) / 1000);
-            
-            // Cap time remaining to duration to prevent values like 61s for 60s game
             timeRemaining = Math.min(timeRemaining, duration);
             
             currentPeriod.timeRemaining = timeRemaining;
             currentPeriod.bettingOpen = timeRemaining >= 5;
             
-            // Add debugging for countdown issue
-            if (timeRemaining <= 10) {
-                console.log(`⏰ [SCHEDULER_TICK] ${gameType}_${duration}: Calculated timeRemaining: ${timeRemaining}s, periodId: ${currentPeriod.periodId}`);
-            }
-            
-            // Update Redis for WebSocket service
+            // Update Redis
             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriod);
             
-            // Handle betting closure notification
-            if (timeRemaining <= 5 && timeRemaining > 0 && !currentPeriod.bettingOpen) {
-                // CRITICAL FIX: Use new broadcasting function
-                await broadcastBettingClosed(gameType, duration, currentPeriod.periodId);
-                //console.log(`🔒 SCHEDULER: Betting closed for ${currentPeriod.periodId} (${timeRemaining.toFixed(1)}s remaining)`);
-                
-                // Trigger 5D pre-calculation during bet freeze
-                if (gameType.toLowerCase() === '5d' || gameType.toLowerCase() === 'fived') {
-                    try {
-                        //console.log(`⚡ [5D_PRE_CALC_TRIGGER] Starting pre-calculation for ${currentPeriod.periodId}`);
-                        
-                        await gameLogicService.preCalculate5DResult(
-                            gameType, duration, currentPeriod.periodId, 'default'
-                        );
-                        
-                        //console.log(`✅ [5D_PRE_CALC_TRIGGER] Pre-calculation completed for ${currentPeriod.periodId}`);
-                    } catch (error) {
-                        console.error(`❌ [5D_PRE_CALC_TRIGGER] Error in pre-calculation:`, error.message);
-                    }
+            // CRITICAL FIX: Only send betting closed once when it hits exactly 5 seconds
+            if (Math.floor(timeRemaining) === 5 && currentPeriod.bettingOpen) {
+                // Check if we already sent betting closed for this period
+                const bettingKey = `betting_sent_${currentPeriod.periodId}`;
+                if (!global.schedulerEventTracker.sentEvents.has(bettingKey)) {
+                    await broadcastBettingClosed(gameType, duration, currentPeriod.periodId);
+                    
+                    // Mark as sent
+                    global.schedulerEventTracker.sentEvents.set(bettingKey, Date.now());
+                    setTimeout(() => {
+                        global.schedulerEventTracker.sentEvents.delete(bettingKey);
+                    }, 30000);
                 }
             }
         }
         
     } catch (error) {
-        console.error(`❌ Error in scheduler game tick [${gameType}|${duration}s]:`, error.message);
+        console.error(`❌ [SCHEDULER_TICK_ERROR] ${gameType}_${duration}:`, error.message);
     }
 };
+
 
 /**
  * FIXED: Get next period for a game/duration
@@ -1420,6 +1423,8 @@ module.exports = {
     broadcastPeriodResult,
     broadcastBettingClosed,
     broadcastPeriodError,
+    schedulerGameTick,
+    cleanupSchedulerTracking,
     startSchedulerHealthBroadcast,
     
     // Status functions

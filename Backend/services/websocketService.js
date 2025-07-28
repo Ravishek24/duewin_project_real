@@ -434,81 +434,117 @@ const testClientBroadcasting = () => {
 
 
 /**
- * CRITICAL FIX: Enhanced broadcast tick with actual client broadcasting
+ * CRITICAL FIX: Enhanced broadcast tick with proper period transition handling
+ */
+/**
+ * COMPLETE FIX: Enhanced WebSocket service with proper event deduplication and sequencing
+ */
+
+// Global event tracking to prevent duplicates
+if (!global.eventTracker) {
+    global.eventTracker = {
+        processedEvents: new Map(),
+        lastPeriodUpdates: new Map(),
+        periodTransitions: new Map()
+    };
+}
+
+/**
+ * CRITICAL FIX: Enhanced broadcast tick with proper timing and no skipping
  */
 const broadcastTick = async (gameType, duration) => {
     try {
         if (!io) return;
         
-        // Add simple counter for debugging
         const key = `${gameType}_${duration}`;
-        global[`broadcast_tick_count_${key}`] = (global[`broadcast_tick_count_${key}`] || 0) + 1;
-        
-        // Log every 10th call to avoid spam
-        if (global[`broadcast_tick_count_${key}`] % 10 === 0) {
-            console.log(`⏰ [BROADCAST_TICK_COUNT] ${key}: Called ${global[`broadcast_tick_count_${key}`]} times`);
-        }
-
         const roomId = `${gameType}_${duration}`;
 
-        // CRITICAL DEBUG: Add logging before Redis read
-        console.log(`🔍 [BROADCAST_TICK_START] ${roomId}: Starting broadcast tick #${global[`broadcast_tick_count_${key}`]}`);
-
-        // Get period info from Redis (set by scheduler instance)
+        // Get period info from Redis
         const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
 
-        // CRITICAL DEBUG: Add logging after Redis read
         if (!periodInfo) {
-            console.log(`❌ [BROADCAST_TICK_NULL] ${roomId}: No period info from Redis, requesting from scheduler`);
-            // No period info - request from scheduler
-            await requestPeriodFromScheduler(gameType, duration);
+            // No period info - request from scheduler (debounced)
+            await requestPeriodFromSchedulerDebounced(gameType, duration);
             return;
-        } else {
-            console.log(`✅ [BROADCAST_TICK_SUCCESS] ${roomId}: Got period info, periodId: ${periodInfo.periodId}, timeRemaining: ${periodInfo.timeRemaining || 'N/A'}`);
         }
 
         const now = new Date();
-
-        // Calculate time remaining
         let actualTimeRemaining;
-        let actualEndTime;
+
+        // Calculate time remaining with proper precision
         try {
-            actualEndTime = calculatePeriodEndTime(periodInfo.periodId, duration);
-            actualTimeRemaining = Math.max(0, Math.ceil((actualEndTime - now) / 1000));
+            const actualEndTime = calculatePeriodEndTime(periodInfo.periodId, duration);
+            // Use floor instead of ceil to ensure countdown goes 3->2->1->0 smoothly
+            actualTimeRemaining = Math.max(0, Math.floor((actualEndTime - now) / 1000));
         } catch (timeError) {
             const redisEndTime = new Date(periodInfo.endTime);
-            actualTimeRemaining = Math.max(0, Math.ceil((redisEndTime - now) / 1000));
+            actualTimeRemaining = Math.max(0, Math.floor((redisEndTime - now) / 1000));
         }
 
-        // CRITICAL DEBUG: Add logging for time calculation
-        console.log(`🔍 [TIME_CALCULATION] ${roomId}: Calculated actualTimeRemaining: ${actualTimeRemaining}s, duration: ${duration}s`);
-
-        // Validate time remaining - allow 0 but not negative values
-        // CRITICAL FIX: Be more lenient with validation to allow countdown to reach 0
-        if (actualTimeRemaining < 0) {
-            console.log(`⚠️ [VALIDATION_FAILED] ${roomId}: actualTimeRemaining ${actualTimeRemaining}s is negative, requesting new period`);
-            await requestPeriodFromScheduler(gameType, duration);
+        // Validate time remaining
+        if (actualTimeRemaining > duration + 1) {
+            console.warn(`⚠️ [TIME_VALIDATION] Invalid time ${actualTimeRemaining}s for ${roomId}, requesting fresh period`);
+            await requestPeriodFromSchedulerDebounced(gameType, duration);
             return;
-        } else if (actualTimeRemaining > duration + 1) { // Allow small overflow for timing precision
-            console.log(`⚠️ [VALIDATION_FAILED] ${roomId}: actualTimeRemaining ${actualTimeRemaining}s is too high (duration: ${duration}s), requesting new period`);
-            await requestPeriodFromScheduler(gameType, duration);
-            return;
-        } else {
-            console.log(`✅ [VALIDATION_PASSED] ${roomId}: actualTimeRemaining ${actualTimeRemaining}s is valid`);
         }
 
-        // Cap time remaining to duration to prevent showing values like 31s for 30s game
+        // Cap to duration
         actualTimeRemaining = Math.min(actualTimeRemaining, duration);
 
-        // CRITICAL FIX: Calculate betting status consistently (5 seconds = 5000ms)
+        // CRITICAL FIX: Enhanced period transition detection
+        const lastPeriodKey = `last_period_${key}`;
+        const lastSentPeriodId = global.eventTracker.lastPeriodUpdates.get(lastPeriodKey);
+        
+        // Detect period transition
+        if (lastSentPeriodId && lastSentPeriodId !== periodInfo.periodId) {
+            console.log(`🔄 [PERIOD_TRANSITION] ${roomId}: Transitioning from ${lastSentPeriodId} to ${periodInfo.periodId}`);
+            
+            // CRITICAL FIX: Send final 0 update for old period (only once)
+            const zeroKey = `zero_sent_${lastSentPeriodId}`;
+            if (!global.eventTracker.processedEvents.has(zeroKey)) {
+                const zeroTimeUpdate = {
+                    gameType,
+                    duration,
+                    periodId: lastSentPeriodId,
+                    timeRemaining: 0,
+                    endTime: calculatePeriodEndTime(lastSentPeriodId, duration).toISOString(),
+                    bettingOpen: false,
+                    bettingCloseTime: true,
+                    timestamp: now.toISOString(),
+                    roomId,
+                    source: 'websocket_final_zero'
+                };
+
+                io.to(roomId).emit('timeUpdate', zeroTimeUpdate);
+                console.log(`📤 [FINAL_ZERO] ${roomId}: Sent final 0 for period ${lastSentPeriodId}`);
+                
+                // Mark as sent with expiry
+                global.eventTracker.processedEvents.set(zeroKey, Date.now());
+                setTimeout(() => global.eventTracker.processedEvents.delete(zeroKey), 30000);
+                
+                // Add small delay before continuing with new period
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+
+        // Update tracking for current period
+        global.eventTracker.lastPeriodUpdates.set(lastPeriodKey, periodInfo.periodId);
+
+        // CRITICAL FIX: Prevent duplicate timeUpdate for same second
+        const updateKey = `update_${periodInfo.periodId}_${actualTimeRemaining}`;
+        if (global.eventTracker.processedEvents.has(updateKey)) {
+            return; // Skip duplicate
+        }
+
+        // Calculate betting status
         const bettingOpen = actualTimeRemaining >= 5;
         const bettingCloseTime = actualTimeRemaining < 5;
 
-        // CRITICAL FIX: Get room info for debugging
+        // Get room info
         const room = io.sockets.adapter.rooms.get(roomId);
         const clientCount = room ? room.size : 0;
 
-        // CRITICAL FIX: Actually broadcast time update to clients
+        // Prepare time update data
         const timeUpdateData = {
             gameType,
             duration,
@@ -519,147 +555,49 @@ const broadcastTick = async (gameType, duration) => {
             bettingCloseTime,
             timestamp: now.toISOString(),
             roomId,
-            source: 'websocket_multi_instance_tick',
-            clientCount // Add for debugging
+            source: 'websocket_tick',
+            clientCount
         };
 
-        // CRITICAL FIX: Add detailed logging for debugging betting status
-        if (actualTimeRemaining <= 10) {
-            console.log(`🔧 [BROADCAST_TICK_DEBUG] ${roomId}: timeRemaining: ${actualTimeRemaining}s, bettingOpen: ${bettingOpen}, bettingCloseTime: ${bettingCloseTime}`);
-        }
-
-        // CRITICAL FIX: Add comprehensive time logging for debugging
-        console.log(`⏰ [TIME_LOGGING] ${roomId}: periodId: ${periodInfo.periodId}, timeRemaining: ${actualTimeRemaining}s, duration: ${duration}s, bettingOpen: ${bettingOpen}, bettingCloseTime: ${bettingCloseTime}, timestamp: ${now.toISOString()}`);
-        
-        // CRITICAL FIX: Add detailed debugging for new period stuck issue
-        if (actualTimeRemaining === duration) {
-            console.log(`🔍 [NEW_PERIOD_DEBUG] ${roomId}: Period appears to be stuck at start time!`);
-            console.log(`🔍 [NEW_PERIOD_DEBUG] periodInfo from Redis:`, JSON.stringify(periodInfo, null, 2));
-            console.log(`🔍 [NEW_PERIOD_DEBUG] calculated endTime: ${actualEndTime?.toISOString() || 'N/A'}`);
-            console.log(`🔍 [NEW_PERIOD_DEBUG] redis endTime: ${periodInfo.endTime}`);
-        }
-        
-        // Add debugging for countdown stopping issue
-        if (actualTimeRemaining <= 10) {
-            console.log(`🔍 [COUNTDOWN_DEBUG] ${roomId}: Broadcasting timeUpdate with timeRemaining: ${actualTimeRemaining}s, periodId: ${periodInfo.periodId}`);
-        }
-
-        // CRITICAL DEBUG: Add logging before emission
-        console.log(`📤 [EMITTING_TIMEUPDATE] ${roomId}: About to emit timeUpdate with timeRemaining: ${actualTimeRemaining}s, periodId: ${periodInfo.periodId}`);
-
-        // Emit to room
-        console.log(`📤 [BROADCAST_TICK_EMIT] ${roomId}: Emitting timeUpdate with data:`, JSON.stringify(timeUpdateData, null, 2));
+        // Emit timeUpdate
         io.to(roomId).emit('timeUpdate', timeUpdateData);
         
-        // CRITICAL DEBUG: Add logging after emission
-        console.log(`✅ [TIMEUPDATE_EMITTED] ${roomId}: Successfully emitted timeUpdate with timeRemaining: ${actualTimeRemaining}s`);
+        // Mark this update as sent with expiry
+        global.eventTracker.processedEvents.set(updateKey, Date.now());
+        setTimeout(() => global.eventTracker.processedEvents.delete(updateKey), 2000);
 
-        // Log time update for Wingo 30s
-        if (gameType === 'wingo' && duration === 30) {
-            console.log(`⏰ [WINGO_30S_TIME_UPDATE] periodId: ${periodInfo.periodId}, timeRemaining: ${actualTimeRemaining}s, timestamp: ${now.toISOString()}`);
+        // Log important transitions
+        if (actualTimeRemaining <= 5 || actualTimeRemaining % 10 === 0) {
+            console.log(`⏰ [TIME_UPDATE] ${roomId}: ${actualTimeRemaining}s (period: ${periodInfo.periodId})`);
         }
 
-        // Debug logging for time calculation issues
-        if (actualTimeRemaining > duration) {
-            console.warn(`⚠️ [TIME_DEBUG] ${gameType}_${duration}: Calculated time ${actualTimeRemaining}s exceeds duration ${duration}s - this should be capped`);
-        }
-
-        // Log every 10 seconds to avoid spam
-        if (actualTimeRemaining % 10 === 0 || actualTimeRemaining <= 10) {
-            console.log(`⏰ [TIME_BROADCAST] ${roomId}: ${actualTimeRemaining}s remaining, ${clientCount} clients, betting: ${bettingOpen ? 'OPEN' : 'CLOSED'}`);
-        }
-
-        // Handle betting closure notification
-        // CRITICAL FIX: Only send bettingClosed if we haven't already sent it for this period
-        const bettingClosedKey = `betting_closed_sent_${periodInfo.periodId}`;
-        if (actualTimeRemaining === 5 && !global[bettingClosedKey]) {
-            const bettingClosedData = {
-                gameType,
-                duration,
-                periodId: periodInfo.periodId,
-                message: `Betting closed for ${gameType} ${duration}s`,
-                timeRemaining: 5,
-                bettingOpen: false,
-                bettingCloseTime: true,
-                roomId,
-                timestamp: now.toISOString(),
-                clientCount
-            };
-
-            console.log(`📤 [BROADCAST_TICK_BETTING_CLOSED_EMIT] ${roomId}: Emitting bettingClosed with data:`, JSON.stringify(bettingClosedData, null, 2));
-            io.to(roomId).emit('bettingClosed', bettingClosedData);
-            console.log(`🔒 [BETTING_CLOSED] ${roomId}: Betting closed, notified ${clientCount} clients`);
-            
-            // Mark that we've sent the betting closed event for this period
-            global[bettingClosedKey] = true;
-            
-            // Clean up the flag after 10 seconds
-            setTimeout(() => {
-                delete global[bettingClosedKey];
-            }, 10000);
-        }
-
-        // CRITICAL FIX: Always send timeUpdate event, even when timeRemaining is 0
-        // This ensures the client receives the 0 second countdown before the new period
-        // But only if we haven't already sent it from the scheduler
-        const zeroUpdateKey = `zero_update_sent_${periodInfo.periodId}`;
-        if (actualTimeRemaining === 0 && !global[zeroUpdateKey]) {
-            console.log(`🔍 [ZERO_UPDATE_CHECK] ${roomId}: actualTimeRemaining is 0, zeroUpdateKey: ${zeroUpdateKey}, already sent: ${global[zeroUpdateKey]}`);
-            console.log(`🔄 [PERIOD_REQUEST] ${roomId}: Requesting next period, current period ended at 0s`);
-            
-            // Send the 0 second timeUpdate first
-            const zeroTimeUpdateData = {
-                gameType,
-                duration,
-                periodId: periodInfo.periodId,
-                timeRemaining: 0,
-                endTime: periodInfo.endTime,
-                bettingOpen: false,
-                bettingCloseTime: true,
-                timestamp: now.toISOString(),
-                roomId,
-                source: 'websocket_multi_instance_tick_zero',
-                clientCount
-            };
-            
-            console.log(`📤 [BROADCAST_TICK_ZERO_EMIT] ${roomId}: Emitting timeUpdate with data:`, JSON.stringify(zeroTimeUpdateData, null, 2));
-            io.to(roomId).emit('timeUpdate', zeroTimeUpdateData);
-            console.log(`📤 [ZERO_TIMEUPDATE] ${roomId}: Sent timeUpdate with timeRemaining: 0s, periodId: ${periodInfo.periodId}`);
-            
-            // Mark that we've sent the zero update for this period
-            global[zeroUpdateKey] = true;
-            
-            // Clean up the flag after 5 seconds
-            setTimeout(() => {
-                delete global[zeroUpdateKey];
-            }, 5000);
-            
-            // CRITICAL FIX: Add a delay before requesting next period to ensure proper sequencing
-            // This prevents the transition from 1 → 0 → 30 from happening too quickly
-            setTimeout(async () => {
-                console.log(`🔄 [PERIOD_REQUEST_START] ${roomId}: Starting next period request after delay, current periodId: ${periodInfo.periodId}`);
+        // CRITICAL FIX: Handle period end (when timeRemaining reaches 0)
+        if (actualTimeRemaining === 0) {
+            const periodEndKey = `end_handled_${periodInfo.periodId}`;
+            if (!global.eventTracker.processedEvents.has(periodEndKey)) {
+                console.log(`🏁 [PERIOD_END] ${roomId}: Period ${periodInfo.periodId} ended`);
                 
-                // Then request next period
-                await getPublisherRedis().publish('game_scheduler:period_request', JSON.stringify({
-                    gameType,
-                    duration,
-                    roomId,
-                    currentPeriodId: periodInfo.periodId,
-                    timestamp: new Date().toISOString()
-                }));
-                console.log(`✅ [PERIOD_REQUEST_COMPLETE] ${roomId}: Requested next period after delay, current periodId: ${periodInfo.periodId}`);
-            }, 1000); // 1 second delay to ensure proper sequencing
+                // Mark as handled
+                global.eventTracker.processedEvents.set(periodEndKey, Date.now());
+                setTimeout(() => global.eventTracker.processedEvents.delete(periodEndKey), 30000);
+                
+                // Request next period after a delay to ensure proper sequencing
+                setTimeout(async () => {
+                    await requestPeriodFromSchedulerDebounced(gameType, duration);
+                }, 1500); // 1.5 second delay
+            }
         }
 
     } catch (error) {
-        const errorKey = `broadcast_error_${gameType}_${duration}`;
-        const lastError = global[errorKey] || 0;
+        const errorKey = `error_${gameType}_${duration}`;
+        const lastError = global.eventTracker.processedEvents.get(errorKey) || 0;
         if (Date.now() - lastError > 60000) {
-            console.error(`❌ WebSocket broadcast tick error [${gameType}|${duration}s]:`, error.message);
-            global[errorKey] = Date.now();
+            console.error(`❌ [BROADCAST_ERROR] ${gameType}_${duration}:`, error.message);
+            global.eventTracker.processedEvents.set(errorKey, Date.now());
         }
     }
 };
+
 
 /**
  * CRITICAL: Add this function to your initializeWebSocket function
@@ -2037,10 +1975,110 @@ const stopRedisSubscriptions = () => {
     }
 };
 
+/**
+ * CRITICAL FIX: Enhanced cleanup function
+ */
+const cleanupEventTracking = () => {
+    const now = Date.now();
+    const maxAge = 300000; // 5 minutes
+    let cleaned = 0;
+    
+    // Clean processed events
+    for (const [key, timestamp] of global.eventTracker.processedEvents.entries()) {
+        if (now - timestamp > maxAge) {
+            global.eventTracker.processedEvents.delete(key);
+            cleaned++;
+        }
+    }
+    
+    // Clean period updates
+    for (const [key, value] of global.eventTracker.lastPeriodUpdates.entries()) {
+        // Keep only recent period tracking
+        if (typeof value === 'string' && value.length === 17) {
+            const periodDate = value.substring(0, 8);
+            const today = new Date().toISOString().substring(0, 10).replace(/-/g, '');
+            if (periodDate < today) {
+                global.eventTracker.lastPeriodUpdates.delete(key);
+                cleaned++;
+            }
+        }
+    }
+    
+    if (cleaned > 0) {
+        console.log(`🧹 [CLEANUP] Cleaned ${cleaned} tracking entries`);
+    }
+    
+    // Log current tracking stats
+    console.log(`📊 [TRACKING_STATS] Events: ${global.eventTracker.processedEvents.size}, Periods: ${global.eventTracker.lastPeriodUpdates.size}`);
+};
+
+// Run cleanup every 2 minutes
+setInterval(cleanupEventTracking, 120000);
+
 
 /**
- * EXISTING: Handle events from game scheduler process with validation
+ * Enhanced system health monitoring
  */
+const monitorWebSocketHealth = () => {
+    const health = {
+        timestamp: new Date().toISOString(),
+        websocket: !!io,
+        connectedClients: io ? io.sockets.sockets.size : 0,
+        activeBroadcasts: gameIntervals ? gameIntervals.size : 0,
+        trackedEvents: global.eventTracker.processedEvents.size,
+        trackedPeriods: global.eventTracker.lastPeriodUpdates.size
+    };
+    
+    // Log every 5 minutes
+    if (!global.lastHealthReport || Date.now() - global.lastHealthReport > 300000) {
+        console.log(`💓 [WEBSOCKET_HEALTH]`, health);
+        global.lastHealthReport = Date.now();
+    }
+    
+    return health;
+};
+
+setInterval(monitorWebSocketHealth, 60000);
+
+/**
+ * CRITICAL FIX: Debounced period request to prevent spam
+ */
+const requestPeriodFromSchedulerDebounced = async (gameType, duration) => {
+    const key = `request_${gameType}_${duration}`;
+    const now = Date.now();
+    
+    // Check last request time
+    const lastRequest = global.eventTracker.processedEvents.get(key);
+    if (lastRequest && now - lastRequest < 3000) { // 3 second debounce
+        console.log(`⏭️ [REQUEST_DEBOUNCE] Skipping ${key}, last request ${now - lastRequest}ms ago`);
+        return;
+    }
+    
+    global.eventTracker.processedEvents.set(key, now);
+    
+    try {
+        const requestData = {
+            action: 'request_period',
+            gameType,
+            duration,
+            timestamp: new Date().toISOString(),
+            source: 'websocket_debounced'
+        };
+
+        await getPublisherRedis().publish('scheduler:period_request', JSON.stringify(requestData));
+        console.log(`📤 [PERIOD_REQUEST] Sent for ${gameType}_${duration}`);
+        
+        // Auto-cleanup
+        setTimeout(() => {
+            global.eventTracker.processedEvents.delete(key);
+        }, 10000);
+        
+    } catch (error) {
+        console.error(`❌ [PERIOD_REQUEST_ERROR] ${gameType}_${duration}:`, error.message);
+        global.eventTracker.processedEvents.delete(key);
+    }
+};
+
 
 /**
  * FIXED: Enhanced game scheduler event handler with proper channel mapping
@@ -2048,133 +2086,68 @@ const stopRedisSubscriptions = () => {
 // Track processed events to prevent duplicates
 const processedEvents = new Set();
 
+/**
+ * FIXED: Enhanced game scheduler event handler with better deduplication
+ */
 const handleGameSchedulerEvent = (channel, data) => {
     try {
         const { gameType, duration, periodId } = data;
-        const timestamp = new Date().toISOString();
+        const eventType = channel.split(':').pop();
         
-        // CRITICAL FIX: Improve deduplication key to be more robust
-        // Include eventType in the key to prevent conflicts between different event types
-        const rawEventType = channel.split(':').pop();
-        const eventKey = `${rawEventType}_${data.source || 'unknown'}_${periodId}_${data.timestamp || timestamp}`;
+        // CRITICAL FIX: Enhanced deduplication key
+        const dedupeKey = `${eventType}_${gameType}_${duration}_${periodId}_${data.source || 'unknown'}`;
         
-        if (processedEvents.has(eventKey)) {
-            console.log(`⏭️ [DUPLICATE_EVENT] Skipping duplicate event: ${eventKey} from channel: ${channel}`);
+        // Check for duplicates with timestamp tolerance
+        if (global.eventTracker.processedEvents.has(dedupeKey)) {
+            console.log(`⏭️ [DUPLICATE_BLOCKED] ${dedupeKey}`);
             return;
         }
         
-        // Add to processed set and clean up old entries (keep last 100 events)
-        processedEvents.add(eventKey);
-        if (processedEvents.size > 100) {
-            const firstKey = processedEvents.values().next().value;
-            processedEvents.delete(firstKey);
-        }
-        
-        console.log(`🔍 [EVENT_PROCESSING] Processing event: ${eventKey} from channel: ${channel}`);
-        
-        console.log(`\n📢 [WEBSOCKET_BROADCAST_START] ==========================================`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Broadcasting scheduler event: ${channel}`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Game: ${gameType} ${duration}s`);
-        console.log(`📢 [WEBSOCKET_BROADCAST_START] Period: ${periodId}`);
+        // Mark as processed with expiry
+        global.eventTracker.processedEvents.set(dedupeKey, Date.now());
+        setTimeout(() => global.eventTracker.processedEvents.delete(dedupeKey), 30000);
 
-        // CRITICAL FIX: Check if io is available
         if (!io) {
-            console.error(`❌ [WEBSOCKET_BROADCAST] Socket.io instance not available!`);
+            console.error(`❌ [NO_IO] Socket.io not available for ${dedupeKey}`);
             return;
         }
 
-        // Ensure correct room ID format
-        const expectedRoomId = `${gameType}_${duration}`;
-        const finalRoomId = data.roomId || expectedRoomId;
-
-        // Get room info for debugging (less verbose)
-        const room = io.sockets.adapter.rooms.get(finalRoomId);
+        const roomId = `${gameType}_${duration}`;
+        const room = io.sockets.adapter.rooms.get(roomId);
         const clientCount = room ? room.size : 0;
-        console.log(`👥 [WEBSOCKET_BROADCAST] Room ${finalRoomId}: ${clientCount} clients`);
 
-        // FIXED: Normalize channel name with proper mapping
-        let eventType = channel.split(':').pop();
+        console.log(`📢 [SCHEDULER_EVENT] ${eventType} for ${roomId} (${clientCount} clients)`);
+
+        // Normalize event type
+        const normalizedType = eventType === 'start' ? 'period_start' : 
+                              eventType === 'result' ? 'period_result' : 
+                              eventType;
         
-        // Handle different channel naming conventions
-        const eventTypeMapping = {
-            'result': 'period_result',
-            'start': 'period_start',
-            'betting_closed': 'betting_closed',
-            'error': 'period_error'
-        };
-        
-        // Apply mapping if needed
-        if (eventTypeMapping[eventType]) {
-            console.log(`🔄 [EVENT_MAPPING] Mapped '${eventType}' to '${eventTypeMapping[eventType]}'`);
-            eventType = eventTypeMapping[eventType];
-        }
-        
-        switch (eventType) {
+        switch (normalizedType) {
             case 'period_start':
-                console.log(`📢 [PERIOD_START_BROADCAST] Broadcasting to room: ${finalRoomId}`);
-                
-                // CRITICAL FIX: Only send periodStart if we haven't already sent it for this period
-                const periodStartKey = `period_start_sent_${periodId}`;
-                if (global[periodStartKey]) {
-                    console.log(`⏭️ [DUPLICATE_PERIOD_START] ${finalRoomId}: Skipping duplicate periodStart for periodId: ${periodId}`);
-                    break;
-                }
-                
-                // CRITICAL FIX: Use the timeRemaining provided by the scheduler, don't recalculate
-                // This prevents the delay issue where periodStart events show 2s instead of 30s
-                let timeRemaining = data.timeRemaining !== undefined ? data.timeRemaining : duration;
-                
-                // CRITICAL FIX: Cap timeRemaining to duration to prevent showing 61s for 60s games
-                timeRemaining = Math.min(timeRemaining, duration);
-                
-                // CRITICAL FIX: Calculate betting status based on timeRemaining (5 seconds = 5000ms)
-                const bettingOpen = timeRemaining >= 5;
-                const bettingCloseTime = timeRemaining < 5;
-                
-                console.log(`🔧 [PERIOD_START_DEBUG] timeRemaining: ${timeRemaining}s, bettingOpen: ${bettingOpen}, bettingCloseTime: ${bettingCloseTime}`);
-                console.log(`📢 [PERIOD_START_LOGGING] ${gameType}_${duration}: periodId: ${periodId}, timeRemaining: ${timeRemaining}s, duration: ${duration}s, bettingOpen: ${bettingOpen}, bettingCloseTime: ${bettingCloseTime}, timestamp: ${timestamp}`);
-                
+                // CRITICAL FIX: Only send periodStart, don't interfere with timeUpdate
                 const periodStartData = {
                     gameType,
                     duration,
                     periodId,
-                    timeRemaining,
+                    timeRemaining: Math.min(data.timeRemaining || duration, duration),
                     endTime: data.endTime,
-                    bettingOpen,
-                    bettingCloseTime,
-                    roomId: finalRoomId,
-                    source: 'scheduler_multi_instance',
-                    timestamp,
-                    ...data
+                    bettingOpen: (data.timeRemaining || duration) >= 5,
+                    bettingCloseTime: (data.timeRemaining || duration) < 5,
+                    roomId,
+                    source: 'scheduler_start',
+                    timestamp: data.timestamp || new Date().toISOString()
                 };
                 
-                // Broadcast period start
-                console.log(`📤 [PERIOD_START_EMIT] ${finalRoomId}: Emitting periodStart with data:`, JSON.stringify(periodStartData, null, 2));
-                io.to(finalRoomId).emit('periodStart', periodStartData);
+                io.to(roomId).emit('periodStart', periodStartData);
+                console.log(`✅ [PERIOD_START] Sent to ${clientCount} clients: ${periodId}`);
                 
-                // Mark that we've sent the period start for this period
-                global[periodStartKey] = true;
-                
-                // Clean up the flag after 10 seconds
-                setTimeout(() => {
-                    delete global[periodStartKey];
-                }, 10000);
-                
-                // CRITICAL FIX: Remove duplicate timeUpdate emission - broadcastTick will handle this
-                // This prevents duplicate timeUpdate: 30 events for new periods
-                console.log(`✅ [PERIOD_START_BROADCAST] Broadcasted to ${clientCount} clients`);
+                // Update WebSocket tracking to new period
+                const trackingKey = `last_period_${gameType}_${duration}`;
+                global.eventTracker.lastPeriodUpdates.set(trackingKey, periodId);
                 break;
                 
             case 'period_result':
-                console.log(`📢 [PERIOD_RESULT_BROADCAST] Broadcasting to room: ${finalRoomId}`);
-                
-                // CRITICAL FIX: Only send periodResult if we haven't already sent it for this period
-                const periodResultKey = `period_result_sent_${periodId}`;
-                if (global[periodResultKey]) {
-                    console.log(`⏭️ [DUPLICATE_PERIOD_RESULT] ${finalRoomId}: Skipping duplicate periodResult for periodId: ${periodId}`);
-                    break;
-                }
-                
                 const periodResultData = {
                     gameType,
                     duration,
@@ -2187,147 +2160,68 @@ const handleGameSchedulerEvent = (channel, data) => {
                     timeRemaining: 0,
                     bettingOpen: false,
                     bettingCloseTime: true,
-                    roomId: finalRoomId,
-                    source: 'scheduler_multi_instance',
-                    timestamp,
-                    ...data
+                    roomId,
+                    source: 'scheduler_result',
+                    timestamp: data.timestamp || new Date().toISOString()
                 };
                 
-                console.log(`📤 [PERIOD_RESULT_EMIT] ${finalRoomId}: Emitting periodResult with data:`, JSON.stringify(periodResultData, null, 2));
-                io.to(finalRoomId).emit('periodResult', periodResultData);
-                console.log(`✅ [PERIOD_RESULT_BROADCAST] Broadcasted to ${clientCount} clients`);
-                
-                // Mark that we've sent the period result for this period
-                global[periodResultKey] = true;
-                
-                // Clean up the flag after 10 seconds
-                setTimeout(() => {
-                    delete global[periodResultKey];
-                }, 10000);
-                
-                // CRITICAL FIX: Add a small delay before sending timeUpdate: 0 to ensure proper sequencing
-                // This prevents the result and 0-second update from being sent too quickly together
-                setTimeout(() => {
-                    // CRITICAL FIX: Also emit a timeUpdate event with 0 seconds when periodResult is received
-                    // This ensures the client receives the 0 second countdown even if periodResult arrives before broadcastTick
-                    // IMPORTANT: Use the periodId from the periodResult event, not the current period
-                    const resultPeriodId = data.periodId || periodId;
-                    
-                    // Check if we've already sent a zero update for this period
-                    const zeroUpdateKey = `zero_update_sent_${resultPeriodId}`;
-                    if (global[zeroUpdateKey]) {
-                        console.log(`⏭️ [DUPLICATE_ZERO_UPDATE] ${finalRoomId}: Skipping duplicate timeUpdate: 0 for periodId: ${resultPeriodId}`);
-                        return;
-                    }
-                    const zeroTimeUpdateFromScheduler = {
-                        gameType,
-                        duration,
-                        periodId: resultPeriodId, // Use the periodId from the result event
-                        timeRemaining: 0,
-                        endTime: data.endTime, // Use endTime from original data
-                        bettingOpen: false,
-                        bettingCloseTime: true,
-                        timestamp: new Date().toISOString(), // Use current timestamp
-                        roomId: finalRoomId,
-                        source: 'scheduler_result_time_update'
-                    };
-                    console.log(`📤 [TIMEUPDATE_EMIT] ${finalRoomId}: Emitting timeUpdate with data:`, JSON.stringify(zeroTimeUpdateFromScheduler, null, 2));
-                    io.to(finalRoomId).emit('timeUpdate', zeroTimeUpdateFromScheduler);
-                    console.log(`📤 [SCHEDULER_RESULT_TIMEUPDATE] ${finalRoomId}: Sent timeUpdate with timeRemaining: 0s from periodResult handler, periodId: ${resultPeriodId}`);
-                    
-                    // Mark that we've sent the zero update for this period
-                    global[zeroUpdateKey] = true;
-                    
-                    // Clean up the flag after 5 seconds
-                    setTimeout(() => {
-                        delete global[zeroUpdateKey];
-                    }, 5000);
-                }, 500); // 500ms delay to ensure proper sequencing
+                io.to(roomId).emit('periodResult', periodResultData);
+                console.log(`✅ [PERIOD_RESULT] Sent to ${clientCount} clients: ${periodId}`);
                 break;
                 
             case 'betting_closed':
-                console.log(`📢 [BETTING_CLOSED_BROADCAST] Broadcasting to room: ${finalRoomId}`);
-                
-                // CRITICAL FIX: Only send bettingClosed if we haven't already sent it for this period
-                const bettingClosedKey = `betting_closed_sent_${periodId}`;
-                if (global[bettingClosedKey]) {
-                    console.log(`⏭️ [DUPLICATE_BETTING_CLOSED] ${finalRoomId}: Skipping duplicate bettingClosed for periodId: ${periodId}`);
-                    break;
+                // CRITICAL FIX: Only send bettingClosed once per period
+                const bettingKey = `betting_${periodId}`;
+                if (!global.eventTracker.processedEvents.has(bettingKey)) {
+                    const bettingClosedData = {
+                        gameType,
+                        duration,
+                        periodId,
+                        timeRemaining: 5,
+                        bettingOpen: false,
+                        bettingCloseTime: true,
+                        message: `Betting closed for ${gameType} ${duration}s`,
+                        roomId,
+                        source: 'scheduler_betting_closed',
+                        timestamp: data.timestamp || new Date().toISOString()
+                    };
+                    
+                    io.to(roomId).emit('bettingClosed', bettingClosedData);
+                    console.log(`✅ [BETTING_CLOSED] Sent to ${clientCount} clients: ${periodId}`);
+                    
+                    // Mark as sent
+                    global.eventTracker.processedEvents.set(bettingKey, Date.now());
+                    setTimeout(() => global.eventTracker.processedEvents.delete(bettingKey), 30000);
+                } else {
+                    console.log(`⏭️ [BETTING_DUPLICATE] Already sent betting closed for ${periodId}`);
                 }
-                
-                const bettingClosedData = {
-                    gameType,
-                    duration,
-                    periodId,
-                    timeRemaining: 5,
-                    bettingOpen: false,
-                    bettingCloseTime: true,
-                    message: `Betting closed for ${gameType} ${duration}s`,
-                    roomId: finalRoomId,
-                    source: 'scheduler_multi_instance',
-                    timestamp,
-                    ...data
-                };
-                
-                console.log(`📤 [BETTING_CLOSED_EMIT] ${finalRoomId}: Emitting bettingClosed with data:`, JSON.stringify(bettingClosedData, null, 2));
-                io.to(finalRoomId).emit('bettingClosed', bettingClosedData);
-                console.log(`✅ [BETTING_CLOSED_BROADCAST] Broadcasted to ${clientCount} clients`);
-                
-                // Mark that we've sent the betting closed event for this period
-                global[bettingClosedKey] = true;
-                
-                // Clean up the flag after 10 seconds
-                setTimeout(() => {
-                    delete global[bettingClosedKey];
-                }, 10000);
                 break;
                 
             case 'period_error':
-                console.log(`📢 [PERIOD_ERROR_BROADCAST] Broadcasting to room: ${finalRoomId}`);
-                
-                const periodErrorData = {
+                const errorData = {
                     gameType,
                     duration,
                     periodId,
                     error: data.error || 'Period processing error',
-                    message: data.message || data.error || 'Period processing error',
-                    roomId: finalRoomId,
-                    source: 'scheduler_multi_instance',
-                    timestamp,
-                    ...data
+                    roomId,
+                    source: 'scheduler_error',
+                    timestamp: data.timestamp || new Date().toISOString()
                 };
                 
-                io.to(finalRoomId).emit('periodError', periodErrorData);
-                console.log(`✅ [PERIOD_ERROR_BROADCAST] Broadcasted to ${clientCount} clients`);
+                io.to(roomId).emit('periodError', errorData);
+                console.log(`✅ [PERIOD_ERROR] Sent to ${clientCount} clients: ${periodId}`);
                 break;
                 
             default:
-                console.log(`⚠️ [UNKNOWN_EVENT] Unhandled event type: '${eventType}' from channel '${channel}'`);
-                console.log(`⚠️ [UNKNOWN_EVENT] Available types: period_start, period_result, betting_closed, period_error`);
-                console.log(`⚠️ [UNKNOWN_EVENT] Raw data:`, JSON.stringify(data, null, 2));
-                
-                // Try to handle as generic event anyway
-                io.to(finalRoomId).emit('schedulerEvent', {
-                    channel,
-                    eventType,
-                    gameType,
-                    duration,
-                    periodId,
-                    data,
-                    timestamp,
-                    source: 'scheduler_unknown_event'
-                });
+                console.log(`⚠️ [UNKNOWN_EVENT] ${normalizedType} from ${channel}`);
                 break;
         }
         
-        console.log(`✅ [WEBSOCKET_BROADCAST_COMPLETE] Event '${eventType}' processed for ${finalRoomId}`);
-        
     } catch (error) {
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error broadcasting event: ${channel}`);
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Error:`, error.message);
-        console.log(`💥 [WEBSOCKET_BROADCAST_ERROR] Data:`, JSON.stringify(data, null, 2));
+        console.error(`❌ [SCHEDULER_EVENT_ERROR] ${channel}:`, error.message);
     }
 };
+
 
 /**
  * Generate all possible 3-number combinations from given numbers
@@ -2956,6 +2850,10 @@ module.exports = {
     sendCurrentPeriodFromRedisEnhanced,
     testClientBroadcasting,
     logRoomStatus,
+    requestPeriodFromSchedulerDebounced,
+    cleanupEventTracking,
+    monitorWebSocketHealth,
+
 
 };
 
