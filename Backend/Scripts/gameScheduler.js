@@ -156,37 +156,51 @@ if (!global.schedulerEventTracker) {
     };
 }
 
+// Enhanced global tracking for scheduler
+if (!global.schedulerSequencer) {
+    global.schedulerSequencer = {
+        sentEvents: new Map(),
+        periodStates: new Map(),
+        broadcastQueue: new Map()
+    };
+}
+
 /**
- * CRITICAL FIX: Enhanced period start broadcasting with deduplication
+ * CRITICAL FIX: Enhanced broadcastPeriodStart with exact duplicate prevention
  */
 const broadcastPeriodStart = async (gameType, duration, periodData) => {
     try {
-        const dedupeKey = `start_${gameType}_${duration}_${periodData.periodId}`;
+        const periodId = periodData.periodId;
         
-        // Check if already sent
-        if (global.schedulerEventTracker.sentEvents.has(dedupeKey)) {
-            console.log(`⏭️ [SCHEDULER_DUPLICATE] Already sent periodStart for ${periodData.periodId}`);
+        // CRITICAL FIX: Check for exact duplicate using multiple keys
+        const exactKey = `start_${gameType}_${duration}_${periodId}`;
+        const timestampKey = `start_${gameType}_${duration}_${periodId}_${Date.now()}`;
+        
+        // Check if already sent within last 10 seconds
+        const lastSent = global.schedulerSequencer.sentEvents.get(exactKey);
+        if (lastSent && Date.now() - lastSent < 10000) {
+            console.log(`⏭️ [SCHEDULER_DUPLICATE_START] Already sent within 10s: ${periodId} (${Date.now() - lastSent}ms ago)`);
             return;
         }
         
-        // Calculate timeRemaining for the new period
+        // Calculate timeRemaining
         const now = new Date();
         const endTime = periodData.endTime ? new Date(periodData.endTime) : new Date(now.getTime() + duration * 1000);
         let timeRemaining = Math.max(0, (endTime - now) / 1000);
         timeRemaining = Math.min(timeRemaining, duration);
         
-        // Only broadcast if this is actually a new period with sufficient time
-        const isNewPeriod = timeRemaining >= (duration - 2); // Allow 2 second tolerance
+        // Only broadcast if this is a genuinely new period
+        const isNewPeriod = timeRemaining >= (duration - 3); // Allow 3 second tolerance
         
         if (!isNewPeriod) {
-            console.log(`⚠️ [SCHEDULER] Skipping periodStart for ${periodData.periodId}: only ${timeRemaining.toFixed(1)}s remaining`);
+            console.log(`⚠️ [SCHEDULER_START_SKIP] Period ${periodId} has only ${timeRemaining.toFixed(1)}s remaining, skipping`);
             return;
         }
         
         const broadcastData = {
             gameType,
             duration,
-            periodId: periodData.periodId,
+            periodId,
             endTime: endTime.toISOString(),
             startTime: periodData.startTime ? periodData.startTime.toISOString() : now.toISOString(),
             timeRemaining: timeRemaining,
@@ -194,7 +208,15 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
             source: 'game_scheduler_start'
         };
         
-        console.log(`📤 [SCHEDULER_START] Broadcasting NEW period: ${periodData.periodId} with ${timeRemaining.toFixed(1)}s`);
+        console.log(`📤 [SCHEDULER_START] Broadcasting NEW period: ${periodId} with ${timeRemaining.toFixed(1)}s remaining`);
+        
+        // CRITICAL FIX: Add to broadcast queue to prevent rapid duplicates
+        const queueKey = `${gameType}_${duration}`;
+        global.schedulerSequencer.broadcastQueue.set(queueKey, {
+            type: 'period_start',
+            data: broadcastData,
+            timestamp: Date.now()
+        });
         
         // Broadcast to channels
         const channels = [
@@ -215,27 +237,43 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
             await schedulerPublisher.setex(currentPeriodKey, duration + 10, JSON.stringify(broadcastData));
         }
         
-        // Mark as sent with expiry
-        global.schedulerEventTracker.sentEvents.set(dedupeKey, Date.now());
+        // Mark as sent with timestamp
+        global.schedulerSequencer.sentEvents.set(exactKey, Date.now());
+        global.schedulerSequencer.sentEvents.set(timestampKey, Date.now());
+        
+        // Store period state
+        global.schedulerSequencer.periodStates.set(`${gameType}_${duration}`, {
+            currentPeriod: periodId,
+            startTime: Date.now(),
+            timeRemaining
+        });
+        
+        // Auto-cleanup after 2 minutes
         setTimeout(() => {
-            global.schedulerEventTracker.sentEvents.delete(dedupeKey);
-        }, 60000); // 1 minute expiry
+            global.schedulerSequencer.sentEvents.delete(exactKey);
+            global.schedulerSequencer.sentEvents.delete(timestampKey);
+            global.schedulerSequencer.broadcastQueue.delete(queueKey);
+        }, 120000);
         
     } catch (error) {
-        console.error(`❌ [SCHEDULER_START_ERROR] Error broadcasting period start:`, error);
+        console.error(`❌ [SCHEDULER_START_ERROR]`, error.message);
     }
 };
 
 /**
  * CRITICAL FIX: Enhanced period result broadcasting  
  */
+/**
+ * CRITICAL FIX: Enhanced broadcastPeriodResult with duplicate prevention
+ */
 const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
     try {
-        const dedupeKey = `result_${gameType}_${duration}_${periodId}`;
+        // Check for duplicates
+        const exactKey = `result_${gameType}_${duration}_${periodId}`;
+        const lastSent = global.schedulerSequencer.sentEvents.get(exactKey);
         
-        // Check if already sent
-        if (global.schedulerEventTracker.sentEvents.has(dedupeKey)) {
-            console.log(`⏭️ [SCHEDULER_DUPLICATE] Already sent periodResult for ${periodId}`);
+        if (lastSent && Date.now() - lastSent < 15000) { // 15 second window
+            console.log(`⏭️ [SCHEDULER_DUPLICATE_RESULT] Already sent within 15s: ${periodId} (${Date.now() - lastSent}ms ago)`);
             return;
         }
         
@@ -263,20 +301,30 @@ const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
             }
         }
         
-        // Clear current period info since period ended
+        // Clear current period info
         const currentPeriodKey = `game_scheduler:${gameType}:${duration}:current`;
         if (schedulerPublisher) {
             await schedulerPublisher.del(currentPeriodKey);
         }
         
-        // Mark as sent with expiry
-        global.schedulerEventTracker.sentEvents.set(dedupeKey, Date.now());
+        // Mark as sent
+        global.schedulerSequencer.sentEvents.set(exactKey, Date.now());
+        
+        // Update period state
+        const stateKey = `${gameType}_${duration}`;
+        const currentState = global.schedulerSequencer.periodStates.get(stateKey);
+        if (currentState && currentState.currentPeriod === periodId) {
+            currentState.endTime = Date.now();
+            currentState.hasResult = true;
+        }
+        
+        // Auto-cleanup
         setTimeout(() => {
-            global.schedulerEventTracker.sentEvents.delete(dedupeKey);
-        }, 60000);
+            global.schedulerSequencer.sentEvents.delete(exactKey);
+        }, 120000);
         
     } catch (error) {
-        console.error(`❌ [SCHEDULER_RESULT_ERROR] Error broadcasting period result:`, error);
+        console.error(`❌ [SCHEDULER_RESULT_ERROR]`, error.message);
     }
 };
 
@@ -286,11 +334,11 @@ const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
  */
 const broadcastBettingClosed = async (gameType, duration, periodId) => {
     try {
-        const dedupeKey = `betting_${gameType}_${duration}_${periodId}`;
+        // Strict duplicate prevention
+        const exactKey = `betting_${gameType}_${duration}_${periodId}`;
         
-        // Check if already sent
-        if (global.schedulerEventTracker.sentEvents.has(dedupeKey)) {
-            console.log(`⏭️ [SCHEDULER_DUPLICATE] Already sent bettingClosed for ${periodId}`);
+        if (global.schedulerSequencer.sentEvents.has(exactKey)) {
+            console.log(`⏭️ [SCHEDULER_DUPLICATE_BETTING] Already sent bettingClosed for: ${periodId}`);
             return;
         }
         
@@ -318,16 +366,19 @@ const broadcastBettingClosed = async (gameType, duration, periodId) => {
             }
         }
         
-        // Mark as sent with expiry
-        global.schedulerEventTracker.sentEvents.set(dedupeKey, Date.now());
+        // Mark as sent immediately to prevent any duplicates
+        global.schedulerSequencer.sentEvents.set(exactKey, Date.now());
+        
+        // Auto-cleanup after 1 minute
         setTimeout(() => {
-            global.schedulerEventTracker.sentEvents.delete(dedupeKey);
-        }, 30000); // 30 second expiry
+            global.schedulerSequencer.sentEvents.delete(exactKey);
+        }, 60000);
         
     } catch (error) {
-        console.error(`❌ [SCHEDULER_BETTING_ERROR] Error broadcasting betting closed:`, error);
+        console.error(`❌ [SCHEDULER_BETTING_ERROR]`, error.message);
     }
 };
+
 
 /**
  * CRITICAL FIX: Enhanced error broadcasting
@@ -667,8 +718,60 @@ const cleanupSchedulerTracking = () => {
 // Run cleanup every 2 minutes
 setInterval(cleanupSchedulerTracking, 120000);
 
+
+/**
+ * Enhanced cleanup for scheduler tracking
+ */
+const cleanupSchedulerSequencer = () => {
+    const now = Date.now();
+    const maxAge = 600000; // 10 minutes
+    let cleaned = 0;
+    
+    // Clean sent events
+    for (const [key, timestamp] of global.schedulerSequencer.sentEvents.entries()) {
+        if (now - timestamp > maxAge) {
+            global.schedulerSequencer.sentEvents.delete(key);
+            cleaned++;
+        }
+    }
+    
+    // Clean period states
+    for (const [key, state] of global.schedulerSequencer.periodStates.entries()) {
+        if (state.startTime && now - state.startTime > maxAge) {
+            global.schedulerSequencer.periodStates.delete(key);
+            cleaned++;
+        }
+    }
+    
+    // Clean broadcast queue
+    for (const [key, queueItem] of global.schedulerSequencer.broadcastQueue.entries()) {
+        if (now - queueItem.timestamp > 60000) { // 1 minute max
+            global.schedulerSequencer.broadcastQueue.delete(key);
+            cleaned++;
+        }
+    }
+    
+    if (cleaned > 0) {
+        console.log(`🧹 [SCHEDULER_CLEANUP] Cleaned ${cleaned} tracking entries`);
+    }
+    
+    const stats = {
+        sentEvents: global.schedulerSequencer.sentEvents.size,
+        periodStates: global.schedulerSequencer.periodStates.size,
+        broadcastQueue: global.schedulerSequencer.broadcastQueue.size
+    };
+    
+    console.log(`📊 [SCHEDULER_STATS]`, stats);
+};
+
+// Run cleanup every 2 minutes
+setInterval(cleanupSchedulerSequencer, 120000);
+
 /**
  * CRITICAL FIX: Enhanced scheduler game tick with multi-instance broadcasting
+ */
+/**
+ * CRITICAL FIX: Enhanced schedulerGameTick with better timing control
  */
 const schedulerGameTick = async (gameType, duration) => {
     try {
@@ -700,21 +803,29 @@ const schedulerGameTick = async (gameType, duration) => {
                         await processSchedulerPeriodEnd(gameType, duration, cachedCurrent.periodId);
                     }
                 } catch (timingError) {
-                    console.error(`❌ [SCHEDULER] Error validating previous period timing:`, timingError.message);
+                    console.error(`❌ [SCHEDULER] Error validating timing:`, timingError.message);
                 }
             }
             
             // Update cached period
             schedulerCurrentPeriods.set(key, currentPeriodInfo);
             
-            // Store new period in Redis
+            // Store in Redis for WebSocket
             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriodInfo);
             
-            // Let WebSocket request periods instead of auto-broadcasting
-            console.log(`⏸️ [SCHEDULER] New period ${currentPeriodInfo.periodId} ready for WebSocket request`);
+            // CRITICAL FIX: Only broadcast new period if timeRemaining is sufficient
+            const endTime = calculatePeriodEndTime(currentPeriodInfo.periodId, duration);
+            const timeRemaining = Math.max(0, (endTime - now) / 1000);
+            
+            if (timeRemaining >= (duration - 2)) { // Must have at least duration-2 seconds remaining
+                console.log(`📢 [SCHEDULER] Broadcasting new period ${currentPeriodInfo.periodId} with ${timeRemaining.toFixed(1)}s`);
+                await broadcastPeriodStart(gameType, duration, currentPeriodInfo);
+            } else {
+                console.log(`⏸️ [SCHEDULER] Not broadcasting period ${currentPeriodInfo.periodId}, only ${timeRemaining.toFixed(1)}s remaining`);
+            }
         }
         
-        // Update cached period with latest time info
+        // Update cached period with latest timing
         const currentPeriod = schedulerCurrentPeriods.get(key);
         if (currentPeriod) {
             const endTime = calculatePeriodEndTime(currentPeriod.periodId, duration);
@@ -727,18 +838,15 @@ const schedulerGameTick = async (gameType, duration) => {
             // Update Redis
             await storePeriodInRedisForWebSocket(gameType, duration, currentPeriod);
             
-            // CRITICAL FIX: Only send betting closed once when it hits exactly 5 seconds
-            if (Math.floor(timeRemaining) === 5 && currentPeriod.bettingOpen) {
-                // Check if we already sent betting closed for this period
-                const bettingKey = `betting_sent_${currentPeriod.periodId}`;
-                if (!global.schedulerEventTracker.sentEvents.has(bettingKey)) {
+            // CRITICAL FIX: Only send betting closed ONCE when it hits exactly 5 seconds
+            const bettingTime = Math.floor(timeRemaining);
+            if (bettingTime === 5 && currentPeriod.bettingOpen) {
+                const bettingKey = `betting_${currentPeriod.periodId}`;
+                const lastBettingBroadcast = global.schedulerSequencer.sentEvents.get(bettingKey);
+                
+                if (!lastBettingBroadcast) {
+                    console.log(`🔒 [SCHEDULER] Sending betting closed for ${currentPeriod.periodId} at ${bettingTime}s remaining`);
                     await broadcastBettingClosed(gameType, duration, currentPeriod.periodId);
-                    
-                    // Mark as sent
-                    global.schedulerEventTracker.sentEvents.set(bettingKey, Date.now());
-                    setTimeout(() => {
-                        global.schedulerEventTracker.sentEvents.delete(bettingKey);
-                    }, 30000);
                 }
             }
         }
@@ -747,6 +855,7 @@ const schedulerGameTick = async (gameType, duration) => {
         console.error(`❌ [SCHEDULER_TICK_ERROR] ${gameType}_${duration}:`, error.message);
     }
 };
+
 
 
 /**

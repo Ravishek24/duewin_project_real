@@ -57,16 +57,23 @@ const corsOptions = {
         const isSpribeIP = spribeIPs.some(ip => origin?.includes(ip));
         
         if (isAllowedOrigin || isSpribeIP) {
-            console.log(`✅ CORS: Allowed origin: ${origin} (Allowed: ${isAllowedOrigin}, Spribe: ${isSpribeIP})`);
+            // Remove excessive logging - only log in development or when debugging
+            if (process.env.NODE_ENV === 'development' && process.env.DEBUG_CORS === 'true') {
+                console.log(`✅ CORS: Allowed origin: ${origin} (Allowed: ${isAllowedOrigin}, Spribe: ${isSpribeIP})`);
+            }
             return callback(null, true);
         }
         
         // For development, allow all origins
         if (process.env.NODE_ENV !== 'production') {
-            console.log(`✅ CORS: Development mode - allowing origin: ${origin}`);
+            // Only log CORS in development when debugging
+            if (process.env.DEBUG_CORS === 'true') {
+                console.log(`✅ CORS: Development mode - allowing origin: ${origin}`);
+            }
             return callback(null, true);
         }
         
+        // Only log blocked origins in production for security monitoring
         console.log(`❌ CORS: Blocked origin: ${origin}`);
         console.log(`📋 Allowed origins: ${cleanAllowedOrigins.join(', ')}`);
         callback(new Error('Not allowed by CORS'));
