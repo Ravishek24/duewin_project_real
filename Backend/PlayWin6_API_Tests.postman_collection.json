@@ -1,0 +1,359 @@
+{
+  "info": {
+    "name": "PlayWin6 API Integration Tests",
+    "description": "Collection for testing PlayWin6 provider integration endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "health"]
+        },
+        "description": "Check if PlayWin6 service is healthy"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Providers",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/providers",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "providers"]
+        },
+        "description": "Get all available PlayWin6 providers"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Provider Games",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/games/JiliGaming?count=12&type=Slot Game",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "games", "JiliGaming"],
+          "query": [
+            {
+              "key": "count",
+              "value": "12",
+              "description": "Number of games to return"
+            },
+            {
+              "key": "type",
+              "value": "Slot Game",
+              "description": "Game type filter"
+            }
+          ]
+        },
+        "description": "Get games from a specific provider"
+      },
+      "response": []
+    },
+    {
+      "name": "Launch Game",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{authToken}}",
+            "description": "User authentication token"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"gameUid\": \"JiliGaming\",\n  \"walletAmount\": 1000,\n  \"token\": \"{{playwin6Token}}\",\n  \"additionalData\": {\n    \"language\": \"en\",\n    \"currency\": \"INR\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/launch",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "launch"]
+        },
+        "description": "Launch a PlayWin6 game"
+      },
+      "response": []
+    },
+    {
+      "name": "Get User Game History",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{authToken}}",
+            "description": "User authentication token"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/history?limit=50&offset=0",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "history"],
+          "query": [
+            {
+              "key": "limit",
+              "value": "50",
+              "description": "Number of records to return"
+            },
+            {
+              "key": "offset",
+              "value": "0",
+              "description": "Number of records to skip"
+            },
+            {
+              "key": "gameUid",
+              "value": "JiliGaming",
+              "description": "Filter by game provider (optional)"
+            },
+            {
+              "key": "startDate",
+              "value": "2024-01-01",
+              "description": "Start date filter (optional)"
+            },
+            {
+              "key": "endDate",
+              "value": "2024-12-31",
+              "description": "End date filter (optional)"
+            }
+          ]
+        },
+        "description": "Get user's PlayWin6 game history"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Game Session",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{authToken}}",
+            "description": "User authentication token"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/session/{{sessionToken}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "session", "{{sessionToken}}"]
+        },
+        "description": "Get details of a specific game session"
+      },
+      "response": []
+    },
+    {
+      "name": "End Game Session",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{authToken}}",
+            "description": "User authentication token"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/session/{{sessionToken}}/end",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "session", "{{sessionToken}}", "end"]
+        },
+        "description": "End a specific game session"
+      },
+      "response": []
+    },
+    {
+      "name": "PlayWin6 Callback",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"user_id\": \"player1\",\n  \"wallet_amount\": \"1000.00\",\n  \"game_uid\": \"JiliGaming\",\n  \"game_id\": \"slot_game_001\",\n  \"provider\": \"JiliGaming\",\n  \"token\": \"{{playwin6Token}}\",\n  \"timestamp\": \"{{timestamp}}\",\n  \"transaction_id\": \"tx_123456789\",\n  \"bet_amount\": \"10.00\",\n  \"win_amount\": \"0.00\",\n  \"game_result\": \"loss\",\n  \"session_id\": \"session_123456789\",\n  \"action\": \"bet\",\n  \"action_id\": \"action_001\",\n  \"old_balance\": \"990.00\",\n  \"new_balance\": \"1000.00\",\n  \"platform\": \"desktop\",\n  \"payload\": \"{{encryptedPayload}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/callback",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "callback"]
+        },
+        "description": "Handle callback from PlayWin6 provider"
+      },
+      "response": []
+    },
+    {
+      "name": "Admin - Cleanup Sessions",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminAuthToken}}",
+            "description": "Admin authentication token"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/admin/cleanup-sessions",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "admin", "cleanup-sessions"]
+        },
+        "description": "Clean up expired PlayWin6 sessions (admin only)"
+      },
+      "response": []
+    },
+    {
+      "name": "Admin - Get All Sessions",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{adminAuthToken}}",
+            "description": "Admin authentication token"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/admin/sessions?limit=50&offset=0",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "admin", "sessions"],
+          "query": [
+            {
+              "key": "limit",
+              "value": "50",
+              "description": "Number of records to return"
+            },
+            {
+              "key": "offset",
+              "value": "0",
+              "description": "Number of records to skip"
+            },
+            {
+              "key": "status",
+              "value": "launched",
+              "description": "Filter by session status (optional)"
+            }
+          ]
+        },
+        "description": "Get all PlayWin6 game sessions (admin only)"
+      },
+      "response": []
+    },
+    {
+      "name": "Debug - Launch Game (Development)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"userId\": 1,\n  \"gameUid\": \"JiliGaming\",\n  \"walletAmount\": 1000,\n  \"token\": \"{{playwin6Token}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/debug/launch",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "debug", "launch"]
+        },
+        "description": "Debug endpoint to test game launch without auth (development only)"
+      },
+      "response": []
+    },
+    {
+      "name": "Debug - Get Games (Development)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/playwin6/debug/games/JiliGaming?count=5&type=Slot Game",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "playwin6", "debug", "games", "JiliGaming"],
+          "query": [
+            {
+              "key": "count",
+              "value": "5",
+              "description": "Number of games to return"
+            },
+            {
+              "key": "type",
+              "value": "Slot Game",
+              "description": "Game type filter"
+            }
+          ]
+        },
+        "description": "Debug endpoint to test provider games (development only)"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "description": "Base URL for the API server"
+    },
+    {
+      "key": "authToken",
+      "value": "your_user_auth_token_here",
+      "description": "User authentication token"
+    },
+    {
+      "key": "adminAuthToken",
+      "value": "your_admin_auth_token_here",
+      "description": "Admin authentication token"
+    },
+    {
+      "key": "playwin6Token",
+      "value": "your_playwin6_api_token_here",
+      "description": "PlayWin6 API token"
+    },
+    {
+      "key": "sessionToken",
+      "value": "your_session_token_here",
+      "description": "Game session token"
+    },
+    {
+      "key": "timestamp",
+      "value": "{{$timestamp}}",
+      "description": "Current timestamp"
+    },
+    {
+      "key": "encryptedPayload",
+      "value": "your_encrypted_payload_here",
+      "description": "AES encrypted payload for callbacks"
+    }
+  ]
+} 

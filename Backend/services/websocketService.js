@@ -617,6 +617,26 @@ const broadcastTick = async (gameType, duration) => {
             ////console.log(`⏰ [TIME_UPDATE] ${roomId}: ${actualTimeRemaining}s (period: ${periodInfo.periodId})`);
         }
 
+        // Handle bet freeze (t = -5s) - Trigger pre-calculation for 5D
+        if (actualTimeRemaining === 5 && ['5d', 'fived'].includes(gameType.toLowerCase())) {
+            const preCalcKey = `precalc_triggered_${periodInfo.periodId}`;
+            if (!global.eventSequencer.processedEvents.has(preCalcKey)) {
+                console.log(`🔄 [5D_PRECALC_TRIGGER] ${roomId}: Triggering pre-calculation for period ${periodInfo.periodId}`);
+                
+                global.eventSequencer.processedEvents.set(preCalcKey, Date.now());
+                setTimeout(() => global.eventSequencer.processedEvents.delete(preCalcKey), 30000);
+                
+                // Import and trigger pre-calculation
+                try {
+                    const { preCalculate5DResultAtFreeze } = require('./gameLogicService');
+                    await preCalculate5DResultAtFreeze(gameType, duration, periodInfo.periodId, 'default');
+                    console.log(`✅ [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation completed for period ${periodInfo.periodId}`);
+                } catch (error) {
+                    console.error(`❌ [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation failed for period ${periodInfo.periodId}:`, error.message);
+                }
+            }
+        }
+
         // Handle period end
         if (actualTimeRemaining === 0) {
             const periodEndKey = `end_handled_${periodInfo.periodId}`;
@@ -625,6 +645,32 @@ const broadcastTick = async (gameType, duration) => {
                 
                 global.eventSequencer.processedEvents.set(periodEndKey, Date.now());
                 setTimeout(() => global.eventSequencer.processedEvents.delete(periodEndKey), 30000);
+                
+                // For 5D, use pre-calculated result if available
+                if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                    try {
+                        const { processGameResultsWithPreCalc } = require('./gameLogicService');
+                        console.log(`🎯 [5D_PERIOD_END] ${roomId}: Using pre-calculated result for period ${periodInfo.periodId}`);
+                        await processGameResultsWithPreCalc(gameType, duration, periodInfo.periodId, 'default');
+                    } catch (error) {
+                        console.error(`❌ [5D_PERIOD_END] ${roomId}: Error processing pre-calculated result for period ${periodInfo.periodId}:`, error.message);
+                        // Fallback to normal processing
+                        try {
+                            const { processGameResults } = require('./gameLogicService');
+                            await processGameResults(gameType, duration, periodInfo.periodId, 'default');
+                        } catch (fallbackError) {
+                            console.error(`❌ [5D_PERIOD_END_FALLBACK] ${roomId}: Fallback processing also failed:`, fallbackError.message);
+                        }
+                    }
+                } else {
+                    // For non-5D games, use normal processing
+                    try {
+                        const { processGameResults } = require('./gameLogicService');
+                        await processGameResults(gameType, duration, periodInfo.periodId, 'default');
+                    } catch (error) {
+                        console.error(`❌ [PERIOD_END] ${roomId}: Error processing result for period ${periodInfo.periodId}:`, error.message);
+                    }
+                }
                 
                 // Request next period with delay
                 setTimeout(async () => {

@@ -30,6 +30,7 @@ const gameMoveTransactionRoutes = require('./gameMoveTransactionRoutes');
 const transactionReportRoutes = require('./transactionReportRoutes');
 const giftRoutes = require('./giftRoutes');
 const ppayproRoutes = require('./ppayproRoutes'); // Add PPayPro routes
+const playwin6Routes = require('./playwin6Routes'); // Add PlayWin6 routes
 const { paymentCallbackWhitelist } = require('../middleware/paymentCallbackWhitelist');
 
 // Import middleware
@@ -128,6 +129,7 @@ router.use('/announcements', announcementRoutes); // Public route for latest ann
 
 // Payment callback routes (public, no auth required) - MUST BE BEFORE PROTECTED ROUTES
 router.use('/payments/ppaypro', ppayproRoutes); // PPayPro callback routes
+router.use('/playwin6', playwin6Routes); // PlayWin6 provider routes (public and protected)
 
 // OKPAY callback routes (public, no auth required)
 const { okPayCallbackController, payOutCallbackController } = require('../controllers/paymentController');

@@ -124,6 +124,10 @@ const initializeModels = async () => {
                 'SpribeGameSession',
                 'SpribeTransaction',
 
+                // PlayWin6 Game Models
+                'PlayWin6GameSession',
+                'PlayWin6Transaction',
+
                 // Payment & Wallet Models
                 'PaymentGateway',
                 'PaymentGatewaySettings',
@@ -522,5 +526,17 @@ module.exports = {
             throw new Error('Models not initialized. Call initializeModels() first.');
         }
         return models.Game5DSummaryStats;
+    },
+    get PlayWin6GameSession() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.PlayWin6GameSession;
+    },
+    get PlayWin6Transaction() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.PlayWin6Transaction;
     },
 };

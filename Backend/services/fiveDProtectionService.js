@@ -1,9 +1,11 @@
-function getredisHelper() {
-  if (!redisHelper) throw new Error('redisHelper not set!');
-  return getredisHelper();
+const unifiedRedis = require('../config/unifiedRedisManager');
+
+function getRedisHelper() {
+  if (!unifiedRedis.isInitialized) {
+    throw new Error('Unified Redis Manager not initialized!');
+  }
+  return unifiedRedis.getHelper();
 }
-let redisHelper = null;
-function setRedisHelper(helper) { redisHelper = helper; }
 
 
 
@@ -39,8 +41,9 @@ class FiveDProtectionService {
             const combinationKeys = combinations.map(combo => this.combinationToKey(combo));
             
             if (combinationKeys.length > 0) {
-                await redisHelper.sadd(setKey, ...combinationKeys);
-                await redisHelper.expire(setKey, 3600); // 1 hour TTL
+                const redis = getRedisHelper();
+                await redis.sadd(setKey, ...combinationKeys);
+                await redis.expire(setKey, 3600); // 1 hour TTL
                 
                 console.log(`✅ [5D_PROTECTION] Added ${combinationKeys.length} zero-exposure candidates to Redis set`);
             }
@@ -65,7 +68,8 @@ class FiveDProtectionService {
             
             // Remove all winning combinations from zero-exposure set
             if (winningCombinations.length > 0) {
-                const removedCount = await redisHelper.srem(setKey, ...winningCombinations);
+                const redis = getRedisHelper();
+                const removedCount = await redis.srem(setKey, ...winningCombinations);
                 console.log(`🗑️ [5D_PROTECTION] Removed ${removedCount} combinations from zero-exposure set for bet: ${betType}:${betValue}`);
             }
 
@@ -123,7 +127,8 @@ class FiveDProtectionService {
             const setKey = this.getZeroExposureSetKey(gameType, duration, periodId, timeline);
             
             // Get all remaining zero-exposure combinations
-            const zeroExposureCombinations = await redisHelper.smembers(setKey);
+            const redis = getRedisHelper();
+            const zeroExposureCombinations = await redis.smembers(setKey);
             
             if (!zeroExposureCombinations || zeroExposureCombinations.length === 0) {
                 console.log('⚠️ [5D_PROTECTION] No zero-exposure combinations left, falling back to lowest exposure');
@@ -186,7 +191,8 @@ class FiveDProtectionService {
             const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
             
             // Get all exposures
-            const allExposures = await redisHelper.hgetall(exposureKey);
+            const redis = getRedisHelper();
+            const allExposures = await redis.hgetall(exposureKey);
             
             if (!allExposures || Object.keys(allExposures).length === 0) {
                 console.log('⚠️ [5D_PROTECTION] No exposures found, using random result');
@@ -516,9 +522,10 @@ class FiveDProtectionService {
     async isSystemReady() {
         try {
             // Check if Redis is available
+            const redis = getRedisHelper();
             const testKey = '5d_health_check';
-            await redisHelper.set(testKey, 'test', 'EX', 10);
-            await redisHelper.del(testKey);
+            await redis.set(testKey, 'test', 'EX', 10);
+            await redis.del(testKey);
             
             // Check if database connection is available
             const GameCombinations5D = models.GameCombinations5D;
@@ -540,8 +547,9 @@ class FiveDProtectionService {
             const setKey = this.getZeroExposureSetKey(gameType, duration, periodId, timeline);
             const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
             
-            const zeroExposureCount = await redisHelper.scard(setKey);
-            const exposureCount = await redisHelper.hlen(exposureKey);
+            const redis = getRedisHelper();
+            const zeroExposureCount = await redis.scard(setKey);
+            const exposureCount = await redis.hlen(exposureKey);
             
             return {
                 zeroExposureCount,
@@ -556,5 +564,4 @@ class FiveDProtectionService {
     }
 }
 
-module.exports = new FiveDProtectionService(); 
-module.exports.setRedisHelper = setRedisHelper;
+module.exports = new FiveDProtectionService();

@@ -359,6 +359,16 @@ const startServer = async () => {
             console.log('🔄 Server will continue with standard performance (graceful fallback)');
         }
         
+        // 5D CACHE: Auto-initialize 5D combinations cache for fast protection
+        try {
+            const { autoInitialize5DCache } = require('./services/gameLogicService');
+            await autoInitialize5DCache();
+            console.log('✅ 5D cache auto-initialization started - fast protection mode enabled');
+        } catch (error) {
+            console.warn('⚠️ 5D cache auto-initialization failed:', error.message);
+            console.log('🔄 5D protection will fall back to database queries (graceful fallback)');
+        }
+        
         console.log('🚀 Starting server initialization...');
 
         // Initialize database and models first

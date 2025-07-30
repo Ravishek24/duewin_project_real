@@ -89,7 +89,10 @@ const rateLimiters = {
     payment: bypassMiddleware,
 
     // Withdrawal: 5 requests per minute per user
-    withdrawal: bypassMiddleware
+    withdrawal: bypassMiddleware,
+
+    // Game Launch: 20 requests per minute per user
+    gameLaunch: bypassMiddleware
 };
 
 // Rate limiter for game history API - bypassed for testing

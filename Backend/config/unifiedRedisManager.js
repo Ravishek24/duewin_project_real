@@ -351,6 +351,52 @@ class UnifiedRedisManager {
                 }
             },
 
+            // Set operations (for 5D protection service)
+            async sadd(key, ...members) {
+                try {
+                    return await mainConnection.sadd(key, ...members);
+                } catch (error) {
+                    console.error('Redis sadd error:', error);
+                    throw error;
+                }
+            },
+
+            async srem(key, ...members) {
+                try {
+                    return await mainConnection.srem(key, ...members);
+                } catch (error) {
+                    console.error('Redis srem error:', error);
+                    throw error;
+                }
+            },
+
+            async smembers(key) {
+                try {
+                    return await mainConnection.smembers(key);
+                } catch (error) {
+                    console.error('Redis smembers error:', error);
+                    throw error;
+                }
+            },
+
+            async scard(key) {
+                try {
+                    return await mainConnection.scard(key);
+                } catch (error) {
+                    console.error('Redis scard error:', error);
+                    throw error;
+                }
+            },
+
+            async hlen(key) {
+                try {
+                    return await mainConnection.hlen(key);
+                } catch (error) {
+                    console.error('Redis hlen error:', error);
+                    throw error;
+                }
+            },
+
             // Direct access to main connection (backward compatible)
             getClient() {
                 return mainConnection;

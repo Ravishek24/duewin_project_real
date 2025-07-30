@@ -492,6 +492,7 @@ const getPreCalculatedResults = async (gameType, duration, periodId) => {
  * @param {string} gameType - Game type
  * @param {number} duration - Duration in seconds
  * @param {string} periodId - Period ID
+ * @param {Object} validations - Validation results
  */
 const initializePeriod = periodService.initializePeriod;
 
@@ -758,8 +759,6 @@ function buildK3WinningConditions(d1, d2, d3, sum, counts) {
 function isK3Straight(sortedDice) {
     return sortedDice[0] + 1 === sortedDice[1] && sortedDice[1] + 1 === sortedDice[2];
 }
-
-
 async function lazy5DLoader(diceValue) {
     try {
         // Check Redis cache first
@@ -869,6 +868,327 @@ async function get5DCombinationsBatch(diceValues) {
         return results;
     } catch (error) {
         logger.error('Error loading 5D combinations batch', { error: error.message });
+        throw error;
+    }
+}
+
+/**
+ * Pre-load all 5D combinations into Redis for fast exposure calculation
+ * This loads all 100,000 combinations once and stores them permanently in Redis
+ * Uses existing unified Redis manager - no separate initialization needed
+ */
+async function preload5DCombinationsToRedis() {
+    try {
+        console.log('🔄 [5D_REDIS_PRELOAD] Starting 5D combinations pre-load to Redis...');
+        
+        // Use existing unified Redis manager
+        const redis = getRedisHelper();
+        const cacheKey = '5d_combinations_cache';
+        
+        // Check if already loaded
+        const cacheExists = await redis.exists(cacheKey);
+        if (cacheExists) {
+            console.log(`✅ [5D_REDIS_PRELOAD] Already loaded combinations in Redis`);
+            return 1; // Return 1 to indicate cache exists
+        }
+        
+        console.log('🔄 [5D_REDIS_PRELOAD] Loading combinations from database...');
+        
+        const models = await ensureModelsInitialized();
+        const { getSequelizeInstance } = require('../config/db');
+        const sequelize = await getSequelizeInstance();
+        
+        // Get all combinations from database
+        const combinations = await sequelize.query(`
+            SELECT dice_value, dice_a, dice_b, dice_c, dice_d, dice_e,
+                   sum_value, sum_size, sum_parity, winning_conditions
+            FROM game_combinations_5d
+            ORDER BY dice_value
+        `, { type: sequelize.QueryTypes.SELECT });
+        
+        console.log(`🔄 [5D_REDIS_PRELOAD] Found ${combinations.length} combinations in database`);
+        
+        // Process combinations in batches for Redis
+        const batchSize = 1000;
+        let loadedCount = 0;
+        
+        for (let i = 0; i < combinations.length; i += batchSize) {
+            const batch = combinations.slice(i, i + batchSize);
+            
+            // Use individual hset calls instead of pipeline
+            for (const combo of batch) {
+                const comboKey = `combo:${combo.dice_value}`;
+                const comboData = {
+                    dice_value: combo.dice_value,
+                    dice_a: combo.dice_a,
+                    dice_b: combo.dice_b,
+                    dice_c: combo.dice_c,
+                    dice_d: combo.dice_d,
+                    dice_e: combo.dice_e,
+                    sum_value: combo.sum_value,
+                    sum_size: combo.sum_size,
+                    sum_parity: combo.sum_parity,
+                    winning_conditions: combo.winning_conditions
+                };
+                
+                await redis.hset(cacheKey, comboKey, JSON.stringify(comboData));
+            }
+            
+            loadedCount += batch.length;
+            
+            if (i % 10000 === 0) {
+                console.log(`🔄 [5D_REDIS_PRELOAD] Loaded ${loadedCount}/${combinations.length} combinations...`);
+            }
+        }
+        
+        // Set expiration to never expire (permanent cache)
+        await redis.expire(cacheKey, 0); // 0 = never expire
+        
+        console.log(`✅ [5D_REDIS_PRELOAD] Successfully loaded ${loadedCount} combinations to Redis permanently`);
+        console.log('🎯 [5D_REDIS_PRELOAD] Fast protection mode is now enabled!');
+        console.log('🎯 [5D_REDIS_PRELOAD] All 5D result calculations will use Redis-cached combinations');
+        console.log('🎯 [5D_REDIS_PRELOAD] Expected performance: ~1 second for exposure calculation');
+        
+        return loadedCount;
+        
+    } catch (error) {
+        console.error('❌ [5D_REDIS_PRELOAD] Error pre-loading combinations:', error);
+        throw error;
+    }
+}
+
+/**
+ * Get 5D combination from Redis cache
+ */
+async function get5DCombinationFromRedis(diceValue) {
+    try {
+        const redis = getRedisHelper();
+        const cacheKey = '5d_combinations_cache';
+        const comboKey = `combo:${diceValue}`;
+        
+        const comboData = await redis.hget(cacheKey, comboKey);
+        if (comboData) {
+            return JSON.parse(comboData);
+        }
+        return null;
+    } catch (error) {
+        console.error('❌ [5D_REDIS_GET] Error getting combination from Redis:', error);
+        return null;
+    }
+}
+
+/**
+ * Get all 5D combinations from Redis cache
+ */
+async function getAll5DCombinationsFromRedis() {
+    try {
+        const redis = getRedisHelper();
+        const cacheKey = '5d_combinations_cache';
+        
+        const allCombinations = await redis.hgetall(cacheKey);
+        const combinations = [];
+        
+        for (const [key, value] of Object.entries(allCombinations)) {
+            if (key.startsWith('combo:')) {
+                combinations.push(JSON.parse(value));
+            }
+        }
+        
+        return combinations;
+    } catch (error) {
+        console.error('❌ [5D_REDIS_GET_ALL] Error getting all combinations from Redis:', error);
+        return [];
+    }
+}
+
+/**
+ * Fast exposure calculation using Redis-cached combinations
+ * FIXED: Direct win checking instead of relying on winning_conditions
+ */
+async function calculate5DExposureFast(combination, betExposures) {
+    try {
+        let totalExposure = 0;
+        
+        // Check each bet type for exposure
+        for (const [betKey, exposure] of Object.entries(betExposures)) {
+            if (!betKey.startsWith('bet:')) continue;
+            
+            const actualBetKey = betKey.replace('bet:', '');
+            const [betType, betValue] = actualBetKey.split(':');
+            
+            if (!betType || !betValue) continue;
+            
+            let wins = false;
+            
+            // Direct win checking based on combination properties
+            switch (betType) {
+                case 'SUM_SIZE':
+                    if (betValue === 'SUM_small' && combination.sum_value < 22) {
+                        wins = true;
+                    } else if (betValue === 'SUM_big' && combination.sum_value >= 22) {
+                        wins = true;
+                    }
+                    break;
+                    
+                case 'SUM_PARITY':
+                    if (betValue === 'SUM_even' && combination.sum_value % 2 === 0) {
+                        wins = true;
+                    } else if (betValue === 'SUM_odd' && combination.sum_value % 2 === 1) {
+                        wins = true;
+                    }
+                    break;
+                    
+                case 'SUM':
+                    if (combination.sum_value === parseInt(betValue)) {
+                        wins = true;
+                    }
+                    break;
+                    
+                case 'POSITION':
+                    // Handle position bets (A_0, A_1, etc.)
+                    const [position, value] = betValue.split('_');
+                    if (position && value !== undefined) {
+                        const diceValue = combination[`dice_${position.toLowerCase()}`];
+                        if (diceValue === parseInt(value)) {
+                            wins = true;
+                        }
+                    }
+                    break;
+                    
+                case 'POSITION_SIZE':
+                    // Handle position size bets (A_big, A_small, etc.)
+                    const [pos, size] = betValue.split('_');
+                    if (pos && size) {
+                        const diceValue = combination[`dice_${pos.toLowerCase()}`];
+                        if (size === 'big' && diceValue >= 5) {
+                            wins = true;
+                        } else if (size === 'small' && diceValue < 5) {
+                            wins = true;
+                        }
+                    }
+                    break;
+                    
+                case 'POSITION_PARITY':
+                    // Handle position parity bets (A_even, A_odd, etc.)
+                    const [pos2, parity] = betValue.split('_');
+                    if (pos2 && parity) {
+                        const diceValue = combination[`dice_${pos2.toLowerCase()}`];
+                        if (parity === 'even' && diceValue % 2 === 0) {
+                            wins = true;
+                        } else if (parity === 'odd' && diceValue % 2 === 1) {
+                            wins = true;
+                        }
+                    }
+                    break;
+            }
+            
+            if (wins) {
+                totalExposure += parseFloat(exposure);
+            }
+        }
+        
+        return totalExposure;
+    } catch (error) {
+        console.error('❌ [5D_EXPOSURE_FAST] Error calculating exposure:', error);
+        return Infinity;
+    }
+}
+
+/**
+ * Get optimal 5D result using Redis-cached combinations for fast exposure calculation
+ */
+async function getOptimal5DResultByExposureFast(duration, periodId, timeline = 'default') {
+    try {
+        const exposureKey = `exposure:5d:${duration}:${timeline}:${periodId}`;
+        const betExposures = await getRedisHelper().hgetall(exposureKey);
+        
+        // Get total bets amount
+        const totalBets = Object.values(betExposures).reduce((sum, val) => sum + parseFloat(val), 0);
+        
+        console.log('🎯 [5D_FAST_STRATEGY] Using Redis-cached combinations for fast exposure calculation:', {
+            totalBets,
+            periodId,
+            timeline
+        });
+        
+        // Get all combinations from Redis cache
+        const allCombinations = await getAll5DCombinationsFromRedis();
+        
+        if (allCombinations.length === 0) {
+            console.log('⚠️ [5D_FAST_STRATEGY] No combinations in Redis cache, falling back to database');
+            return await getOptimal5DResultByExposure(duration, periodId, timeline);
+        }
+        
+        console.log(`🔄 [5D_FAST_STRATEGY] Processing ${allCombinations.length} combinations for exposure calculation...`);
+        
+        // Calculate exposure for all combinations
+        const exposureMap = [];
+        
+        for (const combo of allCombinations) {
+            const exposure = await calculate5DExposureFast(combo, betExposures);
+            exposureMap.push({
+                combination: combo,
+                exposure: exposure
+            });
+        }
+        
+        // Sort by exposure (lowest first)
+        exposureMap.sort((a, b) => a.exposure - b.exposure);
+        
+        // Find zero exposure combinations
+        const zeroExposureCombinations = exposureMap.filter(item => item.exposure === 0);
+        
+        if (zeroExposureCombinations.length > 0) {
+            // Randomly select from zero exposure combinations
+            const randomIndex = Math.floor(Math.random() * zeroExposureCombinations.length);
+            const selectedCombo = zeroExposureCombinations[randomIndex].combination;
+            
+            console.log(`🛡️ [5D_FAST_PROTECTION] Selected zero-exposure result:`, {
+                dice_value: selectedCombo.dice_value,
+                exposure: 0,
+                zeroExposureCount: zeroExposureCombinations.length
+            });
+            
+            return format5DResult(selectedCombo);
+        } else {
+            // Select minimum exposure combination
+            const minExposureCombo = exposureMap[0];
+            
+            console.log(`🛡️ [5D_FAST_PROTECTION] Selected minimum-exposure result:`, {
+                dice_value: minExposureCombo.combination.dice_value,
+                exposure: minExposureCombo.exposure,
+                totalCombinations: exposureMap.length
+            });
+            
+            return format5DResult(minExposureCombo.combination);
+        }
+        
+    } catch (error) {
+        console.error('❌ [5D_FAST_STRATEGY] Error in fast exposure calculation:', error);
+        // Fallback to original method
+        return await getOptimal5DResultByExposure(duration, periodId, timeline);
+    }
+}
+
+/**
+ * Auto-initialize 5D cache if not already loaded
+ */
+async function autoInitialize5DCache() {
+    try {
+        const redis = getRedisHelper();
+        const cacheKey = '5d_combinations_cache';
+        
+        // Check if already loaded
+        const cacheExists = await redis.exists(cacheKey);
+        if (cacheExists) {
+            console.log(`✅ [5D_AUTO_INIT] Already loaded combinations in Redis`);
+            return 1; // Return 1 to indicate cache exists
+        }
+        
+        console.log('🔄 [5D_AUTO_INIT] Auto-initializing 5D combinations cache...');
+        return await preload5DCombinationsToRedis();
+    } catch (error) {
+        console.error('❌ [5D_AUTO_INIT] Error auto-initializing 5D cache:', error);
         throw error;
     }
 }
@@ -1290,9 +1610,26 @@ async function getOptimalResultByExposure(gameType, duration, periodId, timeline
         throw error;
     }
 }
-
 async function getOptimal5DResultByExposure(duration, periodId, timeline = 'default') {
     try {
+        // First, try to use the fast Redis-based approach
+        const redis = getRedisHelper();
+        const cacheKey = '5d_combinations_cache';
+        
+        // Check if cache exists using exists method
+        const cacheExists = await redis.exists(cacheKey);
+        
+        if (cacheExists) {
+            console.log(`🚀 [5D_FAST_MODE] Using Redis-cached combinations`);
+            return await getOptimal5DResultByExposureFast(duration, periodId, timeline);
+        } else {
+            console.log('⚠️ [5D_SLOW_MODE] Redis cache not available, using database queries');
+            // Try to populate cache in background
+            autoInitialize5DCache().catch(err => 
+                console.log('⚠️ [5D_CACHE] Background cache population failed:', err.message)
+            );
+        }
+        
         const exposureKey = `exposure:5d:${duration}:${timeline}:${periodId}`;
         const betExposures = await getRedisHelper().hgetall(exposureKey);
 
@@ -1314,13 +1651,64 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
             timeline
         });
 
-        // Check if protection should be applied (A_1-9 bet but A_0 not bet)
+        // ENHANCED PROTECTION LOGIC: Check for ALL types of conflicting bets
+        let shouldApplyProtection = false;
+        let protectionReason = '';
+        let protectionConditions = [];
+
+        // 1. Check position betting conflicts (A_0 vs A_1-9)
         const aBets = Object.keys(betExposures).filter(key =>
             key.startsWith('bet:POSITION:A_') && key !== 'bet:POSITION:A_0'
         );
         const hasA0Bet = Object.keys(betExposures).some(key => key === 'bet:POSITION:A_0');
         const hasA1to9Bets = aBets.some(bet => bet.match(/A_[1-9]/));
-        const shouldApplyProtection = hasA1to9Bets && !hasA0Bet;
+        if (hasA1to9Bets && !hasA0Bet) {
+            shouldApplyProtection = true;
+            protectionConditions.push('POSITION_A_CONFLICT');
+        }
+
+        // 2. Check SUM_SIZE conflicts (SUM_big vs SUM_small)
+        const hasSumBigBet = Object.keys(betExposures).some(key => 
+            key === 'bet:SUM_SIZE:SUM_big' || key === 'bet:SUM_SIZE:big'
+        );
+        const hasSumSmallBet = Object.keys(betExposures).some(key => 
+            key === 'bet:SUM_SIZE:SUM_small' || key === 'bet:SUM_SIZE:small'
+        );
+        if (hasSumBigBet && hasSumSmallBet) {
+            shouldApplyProtection = true;
+            protectionConditions.push('SUM_SIZE_CONFLICT');
+        } else if (hasSumBigBet && !hasSumSmallBet) {
+            shouldApplyProtection = true;
+            protectionConditions.push('SUM_SIZE_BIG_ONLY');
+        } else if (hasSumSmallBet && !hasSumBigBet) {
+            shouldApplyProtection = true;
+            protectionConditions.push('SUM_SIZE_SMALL_ONLY');
+        }
+
+        // 3. Check SUM_PARITY conflicts (SUM_even vs SUM_odd)
+        const hasSumEvenBet = Object.keys(betExposures).some(key => 
+            key === 'bet:SUM_PARITY:SUM_even' || key === 'bet:SUM_PARITY:even'
+        );
+        const hasSumOddBet = Object.keys(betExposures).some(key => 
+            key === 'bet:SUM_PARITY:SUM_odd' || key === 'bet:SUM_PARITY:odd'
+        );
+        if (hasSumEvenBet && hasSumOddBet) {
+            shouldApplyProtection = true;
+            protectionConditions.push('SUM_PARITY_CONFLICT');
+        } else if (hasSumEvenBet && !hasSumOddBet) {
+            shouldApplyProtection = true;
+            protectionConditions.push('SUM_PARITY_EVEN_ONLY');
+        } else if (hasSumOddBet && !hasSumEvenBet) {
+            shouldApplyProtection = true;
+            protectionConditions.push('SUM_PARITY_ODD_ONLY');
+        }
+
+        // 4. Check SUM conflicts (exact sum values)
+        const sumBets = Object.keys(betExposures).filter(key => key.startsWith('bet:SUM:'));
+        if (sumBets.length > 0) {
+            shouldApplyProtection = true;
+            protectionConditions.push('SUM_EXACT_CONFLICT');
+        }
 
         // Enhanced protection for low user count scenarios
         const userCountResult = await getUniqueUserCount('5d', duration, periodId, timeline);
@@ -1333,21 +1721,33 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                 threshold: threshold,
                 shouldApplyProtection: true
             });
+            shouldApplyProtection = true;
+            protectionConditions.push('LOW_USER_COUNT');
         }
 
-        console.log('🔍 [5D_PROTECTION_DEBUG] Exposure analysis:', {
+        // Set the primary protection reason (for backward compatibility)
+        protectionReason = protectionConditions.join('+');
+
+        console.log('🔍 [5D_PROTECTION_DEBUG] Enhanced exposure analysis:', {
             totalBets,
             strategy,
+            shouldApplyProtection,
+            protectionReason,
+            protectionConditions,
             aBets: aBets.length,
             hasA0Bet,
             hasA1to9Bets,
-            shouldApplyProtection,
-            exposureKeys: Object.keys(betExposures).filter(k => k.startsWith('bet:POSITION:A_')),
+            hasSumBigBet,
+            hasSumSmallBet,
+            hasSumEvenBet,
+            hasSumOddBet,
+            sumBets: sumBets.length,
+            exposureKeys: Object.keys(betExposures).filter(k => k.startsWith('bet:')),
             allExposureKeys: Object.keys(betExposures)
         });
 
         if (shouldApplyProtection) {
-            console.log('🛡️ [5D_PROTECTION] Protection condition detected: A_1-9 bet, A_0 not bet');
+            console.log(`🛡️ [5D_PROTECTION] Protection condition detected: ${protectionReason}`);
         }
 
         const models = await ensureModelsInitialized();
@@ -1363,10 +1763,64 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     FROM game_combinations_5d
                 `;
 
-                // Apply protection logic if needed
+                // Apply enhanced protection logic if needed
                 if (shouldApplyProtection) {
-                    console.log('🛡️ [5D_PROTECTION] Applying protection in FULL_SCAN: forcing A=0');
-                    fullScanQuery += ` WHERE dice_a = 0`;
+                    console.log(`🛡️ [5D_PROTECTION] Applying protection in FULL_SCAN: ${protectionReason}`);
+                    
+                    // Build comprehensive WHERE clause for multiple protection conditions
+                    let whereConditions = [];
+                    
+                    // Handle position conflicts
+                    if (protectionConditions.includes('POSITION_A_CONFLICT')) {
+                        whereConditions.push('dice_a = 0');
+                    }
+                    
+                    // Handle SUM_SIZE conflicts
+                    if (protectionConditions.includes('SUM_SIZE_CONFLICT')) {
+                        const sumBigExposure = parseFloat(betExposures['bet:SUM_SIZE:SUM_big'] || betExposures['bet:SUM_SIZE:big'] || 0);
+                        const sumSmallExposure = parseFloat(betExposures['bet:SUM_SIZE:SUM_small'] || betExposures['bet:SUM_SIZE:small'] || 0);
+                        
+                        if (sumBigExposure > sumSmallExposure) {
+                            whereConditions.push('sum_value < 22'); // Force small
+                        } else {
+                            whereConditions.push('sum_value >= 22'); // Force big
+                        }
+                    } else if (protectionConditions.includes('SUM_SIZE_BIG_ONLY')) {
+                        whereConditions.push('sum_value < 22'); // Force small to avoid big bet
+                    } else if (protectionConditions.includes('SUM_SIZE_SMALL_ONLY')) {
+                        whereConditions.push('sum_value >= 22'); // Force big to avoid small bet
+                    }
+                    
+                    // Handle SUM_PARITY conflicts
+                    if (protectionConditions.includes('SUM_PARITY_CONFLICT')) {
+                        const sumEvenExposure = parseFloat(betExposures['bet:SUM_PARITY:SUM_even'] || betExposures['bet:SUM_PARITY:even'] || 0);
+                        const sumOddExposure = parseFloat(betExposures['bet:SUM_PARITY:SUM_odd'] || betExposures['bet:SUM_PARITY:odd'] || 0);
+                        
+                        if (sumEvenExposure > sumOddExposure) {
+                            whereConditions.push('sum_value % 2 = 1'); // Force odd
+                        } else {
+                            whereConditions.push('sum_value % 2 = 0'); // Force even
+                        }
+                    } else if (protectionConditions.includes('SUM_PARITY_EVEN_ONLY')) {
+                        whereConditions.push('sum_value % 2 = 1'); // Force odd to avoid even bet
+                    } else if (protectionConditions.includes('SUM_PARITY_ODD_ONLY')) {
+                        whereConditions.push('sum_value % 2 = 0'); // Force even to avoid odd bet
+                    }
+                    
+                    // Handle exact SUM conflicts
+                    if (protectionConditions.includes('SUM_EXACT_CONFLICT')) {
+                        const excludeSums = sumBets.map(key => key.replace('bet:SUM:', '')).join(',');
+                        whereConditions.push(`sum_value NOT IN (${excludeSums})`);
+                    }
+                    
+                    // Apply all conditions
+                    if (whereConditions.length > 0) {
+                        fullScanQuery += ` WHERE ${whereConditions.join(' AND ')}`;
+                        console.log(`🛡️ [5D_PROTECTION] Applied conditions: ${whereConditions.join(' AND ')}`);
+                    } else {
+                        // For low user count or other conflicts, use general protection
+                        fullScanQuery += ` WHERE sum_value IN (0, 1, 2, 3, 4, 41, 42, 43, 44, 45)`;
+                    }
                 }
 
                 fullScanQuery += ` ORDER BY RAND() LIMIT 10000`;
@@ -1386,6 +1840,7 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     }
                 }
 
+                console.log(`🛡️ [5D_PROTECTION] Selected result with exposure ${minExposure}:`, optimalResult);
                 return format5DResult(optimalResult);
 
             case 'SMART_SAMPLING':
@@ -1402,10 +1857,55 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     )
                 `;
 
-                // Apply protection logic if needed
+                // Apply enhanced protection logic if needed
                 if (shouldApplyProtection) {
-                    console.log('🛡️ [5D_PROTECTION] Applying protection in SMART_SAMPLING: forcing A=0');
-                    smartSamplingQuery += ` AND dice_a = 0`;
+                    console.log(`🛡️ [5D_PROTECTION] Applying protection in SMART_SAMPLING: ${protectionReason}`);
+                    
+                    // Build comprehensive WHERE clause for multiple protection conditions
+                    let whereConditions = [];
+                    
+                    // Handle position conflicts
+                    if (protectionConditions.includes('POSITION_A_CONFLICT')) {
+                        whereConditions.push('dice_a = 0');
+                    }
+                    
+                    // Handle SUM_SIZE conflicts
+                    if (protectionConditions.includes('SUM_SIZE_CONFLICT')) {
+                        const sumBigExposure = parseFloat(betExposures['bet:SUM_SIZE:SUM_big'] || betExposures['bet:SUM_SIZE:big'] || 0);
+                        const sumSmallExposure = parseFloat(betExposures['bet:SUM_SIZE:SUM_small'] || betExposures['bet:SUM_SIZE:small'] || 0);
+                        
+                        if (sumBigExposure > sumSmallExposure) {
+                            whereConditions.push('sum_value < 22');
+                        } else {
+                            whereConditions.push('sum_value >= 22');
+                        }
+                    } else if (protectionConditions.includes('SUM_SIZE_BIG_ONLY')) {
+                        whereConditions.push('sum_value < 22');
+                    } else if (protectionConditions.includes('SUM_SIZE_SMALL_ONLY')) {
+                        whereConditions.push('sum_value >= 22');
+                    }
+                    
+                    // Handle SUM_PARITY conflicts
+                    if (protectionConditions.includes('SUM_PARITY_CONFLICT')) {
+                        const sumEvenExposure = parseFloat(betExposures['bet:SUM_PARITY:SUM_even'] || betExposures['bet:SUM_PARITY:even'] || 0);
+                        const sumOddExposure = parseFloat(betExposures['bet:SUM_PARITY:SUM_odd'] || betExposures['bet:SUM_PARITY:odd'] || 0);
+                        
+                        if (sumEvenExposure > sumOddExposure) {
+                            whereConditions.push('sum_value % 2 = 1');
+                        } else {
+                            whereConditions.push('sum_value % 2 = 0');
+                        }
+                    } else if (protectionConditions.includes('SUM_PARITY_EVEN_ONLY')) {
+                        whereConditions.push('sum_value % 2 = 1');
+                    } else if (protectionConditions.includes('SUM_PARITY_ODD_ONLY')) {
+                        whereConditions.push('sum_value % 2 = 0');
+                    }
+                    
+                    // Apply all conditions
+                    if (whereConditions.length > 0) {
+                        smartSamplingQuery += ` AND ${whereConditions.join(' AND ')}`;
+                        console.log(`🛡️ [5D_PROTECTION] Applied conditions: ${whereConditions.join(' AND ')}`);
+                    }
                 }
 
                 smartSamplingQuery += ` ORDER BY RAND() LIMIT 1000`;
@@ -1425,6 +1925,7 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     }
                 }
 
+                console.log(`🛡️ [5D_PROTECTION] Selected result with exposure ${minSampleExposure}:`, optimalSampleResult);
                 return format5DResult(optimalSampleResult);
 
             case 'STATISTICAL_SAMPLING':
@@ -1438,12 +1939,65 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     WHERE 1=1
                 `;
 
-                // Apply protection logic: if A_1-9 are bet but A_0 is not, prioritize A=0
-                if (shouldApplyProtection && unbetPositions.A.includes(0)) {
-                    console.log('🛡️ [5D_PROTECTION] Applying protection in STATISTICAL_SAMPLING: forcing A=0');
-                    query += ` AND dice_a = 0`;
+                // Apply enhanced protection logic if needed
+                if (shouldApplyProtection) {
+                    console.log(`🛡️ [5D_PROTECTION] Applying protection in STATISTICAL_SAMPLING: ${protectionReason}`);
+                    
+                    // Build comprehensive WHERE clause for multiple protection conditions
+                    let whereConditions = [];
+                    
+                    // Handle position conflicts
+                    if (protectionConditions.includes('POSITION_A_CONFLICT') && unbetPositions.A.includes(0)) {
+                        whereConditions.push('dice_a = 0');
+                    }
+                    
+                    // Handle SUM_SIZE conflicts
+                    if (protectionConditions.includes('SUM_SIZE_CONFLICT')) {
+                        const sumBigExposure = parseFloat(betExposures['bet:SUM_SIZE:SUM_big'] || betExposures['bet:SUM_SIZE:big'] || 0);
+                        const sumSmallExposure = parseFloat(betExposures['bet:SUM_SIZE:SUM_small'] || betExposures['bet:SUM_SIZE:small'] || 0);
+                        
+                        if (sumBigExposure > sumSmallExposure) {
+                            whereConditions.push('sum_value < 22');
                 } else {
-                    // Add conditions for unbet positions
+                            whereConditions.push('sum_value >= 22');
+                        }
+                    } else if (protectionConditions.includes('SUM_SIZE_BIG_ONLY')) {
+                        whereConditions.push('sum_value < 22');
+                    } else if (protectionConditions.includes('SUM_SIZE_SMALL_ONLY')) {
+                        whereConditions.push('sum_value >= 22');
+                    }
+                    
+                    // Handle SUM_PARITY conflicts
+                    if (protectionConditions.includes('SUM_PARITY_CONFLICT')) {
+                        const sumEvenExposure = parseFloat(betExposures['bet:SUM_PARITY:SUM_even'] || betExposures['bet:SUM_PARITY:even'] || 0);
+                        const sumOddExposure = parseFloat(betExposures['bet:SUM_PARITY:SUM_odd'] || betExposures['bet:SUM_PARITY:odd'] || 0);
+                        
+                        if (sumEvenExposure > sumOddExposure) {
+                            whereConditions.push('sum_value % 2 = 1');
+                        } else {
+                            whereConditions.push('sum_value % 2 = 0');
+                        }
+                    } else if (protectionConditions.includes('SUM_PARITY_EVEN_ONLY')) {
+                        whereConditions.push('sum_value % 2 = 1');
+                    } else if (protectionConditions.includes('SUM_PARITY_ODD_ONLY')) {
+                        whereConditions.push('sum_value % 2 = 0');
+                    }
+                    
+                    // Apply all conditions
+                    if (whereConditions.length > 0) {
+                        query += ` AND ${whereConditions.join(' AND ')}`;
+                        console.log(`🛡️ [5D_PROTECTION] Applied conditions: ${whereConditions.join(' AND ')}`);
+                    } else {
+                        // Add conditions for unbet positions when no protection needed
+                        if (unbetPositions.A.length > 0) {
+                            query += ` AND dice_a IN (${unbetPositions.A.join(',')})`;
+                        }
+                        if (unbetPositions.B.length > 0) {
+                            query += ` AND dice_b IN (${unbetPositions.B.join(',')})`;
+                        }
+                    }
+                } else {
+                    // Add conditions for unbet positions when no protection needed
                     if (unbetPositions.A.length > 0) {
                         query += ` AND dice_a IN (${unbetPositions.A.join(',')})`;
                     }
@@ -1459,6 +2013,8 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                 });
 
                 if (statResult.length > 0) {
+                    const exposure = await calculate5DExposure(statResult[0], betExposures);
+                    console.log(`🛡️ [5D_PROTECTION] Selected statistical result with exposure ${exposure}:`, statResult[0]);
                     return format5DResult(statResult[0]);
                 }
 
@@ -1472,6 +2028,9 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
                     LIMIT 1
                 `, { type: sequelize.QueryTypes.SELECT });
 
+                console.log(`🛡️ [5D_PROTECTION] Using fallback result:`, fallbackResult[0]);
+                const fallbackExposure = await calculate5DExposure(fallbackResult[0], betExposures);
+                console.log(`🛡️ [5D_PROTECTION] Fallback result exposure: ${fallbackExposure}`);
                 return format5DResult(fallbackResult[0]);
         }
 
@@ -1480,57 +2039,80 @@ async function getOptimal5DResultByExposure(duration, periodId, timeline = 'defa
         throw error;
     }
 }
-
 async function calculate5DExposure(combination, betExposures) {
     let totalExposure = 0;
 
-    // Debug logging to understand the issue
-    //console.log('🔍 [5D_EXPOSURE_DEBUG] calculate5DExposure called with:', {
-    //    combinationType: typeof combination,
-    //    winningConditionsType: typeof combination.winning_conditions,
-    //    winningConditionsValue: combination.winning_conditions,
-    //    betExposuresKeys: Object.keys(betExposures)
-    //});
-
-    let winningConditions;
-    if (typeof combination.winning_conditions === 'string') {
-        try {
-            winningConditions = JSON.parse(combination.winning_conditions);
-        } catch (parseError) {
-            console.error('Error parsing winning_conditions JSON:', parseError);
-            console.error('Raw winning_conditions:', combination.winning_conditions);
-            // Fallback to empty object
-            winningConditions = {};
-        }
-    } else {
-        winningConditions = combination.winning_conditions;
-    }
     // Check each bet type
     for (const [betKey, exposure] of Object.entries(betExposures)) {
         if (!betKey.startsWith('bet:')) continue;
 
         const actualBetKey = betKey.replace('bet:', '');
+        const [betType, betValue] = actualBetKey.split(':');
 
-        // Check if this combination wins for this bet
+        if (!betType || !betValue) continue;
+        
         let wins = false;
 
-        // Check exact positions
-        if (winningConditions.positions?.exact?.includes(actualBetKey)) {
+        // Direct win checking based on combination properties
+        switch (betType) {
+            case 'SUM_SIZE':
+                if (betValue === 'SUM_small' && combination.sum_value < 22) {
+                    wins = true;
+                } else if (betValue === 'SUM_big' && combination.sum_value >= 22) {
             wins = true;
         }
-        // Check size positions
-        else if (winningConditions.positions?.size?.includes(actualBetKey)) {
+                break;
+                
+            case 'SUM_PARITY':
+                if (betValue === 'SUM_even' && combination.sum_value % 2 === 0) {
+                    wins = true;
+                } else if (betValue === 'SUM_odd' && combination.sum_value % 2 === 1) {
             wins = true;
         }
-        // Check parity positions
-        else if (winningConditions.positions?.parity?.includes(actualBetKey)) {
+                break;
+                
+            case 'SUM':
+                if (combination.sum_value === parseInt(betValue)) {
             wins = true;
         }
-        // Check sum conditions
-        else if (winningConditions.sum?.value === actualBetKey ||
-            winningConditions.sum?.size === actualBetKey ||
-            winningConditions.sum?.parity === actualBetKey) {
+                break;
+                
+            case 'POSITION':
+                // Handle position bets (A_0, A_1, etc.)
+                const [position, value] = betValue.split('_');
+                if (position && value !== undefined) {
+                    const diceValue = combination[`dice_${position.toLowerCase()}`];
+                    if (diceValue === parseInt(value)) {
             wins = true;
+                    }
+                }
+                break;
+                
+            case 'POSITION_SIZE':
+                // Handle position size bets (A_big, A_small, etc.)
+                const [pos, size] = betValue.split('_');
+                if (pos && size) {
+                    const diceValue = combination[`dice_${pos.toLowerCase()}`];
+                    if (size === 'big' && diceValue >= 5) {
+                        wins = true;
+                    } else if (size === 'small' && diceValue < 5) {
+                        wins = true;
+                    }
+                }
+                break;
+                
+            case 'POSITION_PARITY':
+                // Handle position parity bets (A_even, A_odd, etc.)
+                const [pos2, parity] = betValue.split('_');
+                if (pos2 && parity) {
+                    const diceValue = combination[`dice_${pos2.toLowerCase()}`];
+                    if (parity === 'even' && diceValue % 2 === 0) {
+                        wins = true;
+                    } else if (parity === 'odd' && diceValue % 2 === 1) {
+                        wins = true;
+                    }
+                }
+                break;
         }
 
         if (wins) {
@@ -1556,7 +2138,6 @@ function format5DResult(dbResult) {
         sum_parity: dbResult.sum_parity
     };
 }
-
 function findUnbetPositions(betExposures) {
     const unbetPositions = {
         A: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -1724,9 +2305,6 @@ const clearPerformanceCaches = (force = false) => {
         });
     }
 };
-
-
-
 /**
  * Initialize combination tracking for all possible results
  * @param {string} gameType - Game type
@@ -1776,8 +2354,6 @@ const initializeCombinationTracking = async (gameType, duration, periodId) => {
         });
     }
 };
-
-
 /**
  * Start a new period with real-time optimization
  * @param {string} gameType - Game type
@@ -1856,7 +2432,6 @@ const schedulePeriodCleanup = async (gameType, duration, periodId) => {
         });
     }
 };
-
 /**
  * Performance-optimized combination cache system
  */
@@ -1877,7 +2452,6 @@ const PerformanceCache = {
         patterns: 45000      // 45 seconds
     }
 };
-
 /**
  * Pre-calculate and cache all possible combinations for a game type
  * @param {string} gameType - Game type
@@ -1930,9 +2504,6 @@ const getPreCalculatedCombinations = async (gameType) => {
         return await generateAllPossibleResults(gameType);
     }
 };
-
-
-
 /**
  * Calculate payout using statistical sampling for medium volume
  * @param {string} gameType - Game type
@@ -1995,9 +2566,6 @@ const calculateSampledPayout = async (gameType, durationKey, periodId, result, s
         return 0;
     }
 };
-
-
-
 /**
  * Get period status
  * @param {string} gameType - Game type
@@ -2049,7 +2617,6 @@ const getLastResults = async (gameType, count = 5) => {
         return [];
     }
 };
-
 /**
  * Start a new round
  * @param {string} gameType - Game type
@@ -2333,7 +2900,6 @@ const validateBet = async (betData) => {
         };
     }
 };
-
 /**
  * Get user's bet count for current period
  * @param {string} userId - User ID
@@ -2516,20 +3082,49 @@ const getAllMinimumCombinations = async (gameType) => {
         return {};
     }
 };
-
-
-
 /**
  * NEW: Enhanced user threshold validation with outcome coverage analysis
  */
-
-
-
-
-
-
-
-
+/**
+ * Auto-initialize 5D Redis cache during server startup
+ * This function should be called after Redis is initialized
+ */
+async function autoInitialize5DCache() {
+    try {
+        console.log('🔄 [5D_AUTO_INIT] Auto-initializing 5D Redis cache...');
+        
+        // Check if cache already exists
+        const redis = getRedisHelper();
+        const cacheKey = '5d_combinations_cache';
+        const cacheExists = await redis.exists(cacheKey);
+        
+        if (cacheExists) {
+            console.log(`✅ [5D_AUTO_INIT] 5D cache already initialized`);
+            return 1; // Return 1 to indicate cache exists
+        }
+        
+        // Initialize cache in background (non-blocking)
+        console.log('🔄 [5D_AUTO_INIT] Starting background 5D cache initialization...');
+        
+        // Use setImmediate to run in background
+        setImmediate(async () => {
+            try {
+                const loadedCount = await preload5DCombinationsToRedis();
+                console.log(`✅ [5D_AUTO_INIT] Background initialization completed: ${loadedCount} combinations loaded`);
+            } catch (error) {
+                console.error('❌ [5D_AUTO_INIT] Background initialization failed:', error.message);
+                console.log('⚠️ [5D_AUTO_INIT] 5D protection will fall back to database queries');
+            }
+        });
+        
+        return 0; // Return 0 to indicate background initialization started
+        
+    } catch (error) {
+        console.error('❌ [5D_AUTO_INIT] Error in auto-initialization:', error);
+        console.log('⚠️ [5D_AUTO_INIT] 5D protection will fall back to database queries');
+        return 0;
+    }
+}
 async function selectProtectedResultWithExposure(gameType, duration, periodId, timeline) {
     try {
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
@@ -2989,7 +3584,6 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
         throw error;
     }
 }
-
 /**
  * Enhanced 5D result selection with performance monitoring
  * @param {string} gameType - Game type
@@ -3052,7 +3646,6 @@ async function getCurrent5DResult(gameType, duration, periodId, timeline) {
         throw error;
     }
 }
-
 /**
  * Track 5D performance for monitoring
  * @param {number} enhancedTime - Enhanced system time
@@ -3077,7 +3670,6 @@ async function track5DPerformance(enhancedTime, currentTime, success) {
         console.log('❌ [PERFORMANCE] Error tracking performance:', error.message);
     }
 }
-
 /**
  * Pre-calculate 5D result during bet freeze period
  * @param {string} gameType - Game type
@@ -3277,7 +3869,6 @@ async function shouldUseEnhancedSystem(gameType, duration, periodId) {
 
     return shouldUse;
 }
-
 /**
  * End a game round and process results
  * @param {string} gameType - Game type (wingo, fiveD, k3, trx_wix)
@@ -3481,7 +4072,6 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
         };
     }
 };
-
 /**
  * Check if current period should use minimum bet result (every 20 periods)
  * NEW FORMAT: Extract sequence from last 9 digits
@@ -3512,8 +4102,6 @@ const isMinimumBetPeriod = async (periodId) => {
         return false;
     }
 };
-
-
 /**
  * Override result for a period (admin only)
  * @param {string} gameType - Game type
@@ -3657,7 +4245,6 @@ const getBetDistribution = async (gameType, duration, periodId, timeline = 'defa
         };
     }
 };
-
 /**
  * Get game history
  * @param {string} gameType - Game type (wingo, fiveD, k3, trx_wix)
@@ -3896,9 +4483,6 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
  * UPDATED: Enhanced getLastResult with proper format including odd/even and verification
  * REPLACE the existing getLastResult function with this enhanced version
  */
-
-
-
 /**
  * Calculate Wingo/TRX_WIX win amount with complex payout structure
  * @param {Object} bet - Bet object
@@ -4015,7 +4599,6 @@ const calculateWingoWin = (bet, result, betType, betValue) => {
         return 0;
     }
 };
-
 /**
  * Calculate K3 win amount with complex payout structure
  * @param {Object} bet - Bet object
@@ -4384,7 +4967,6 @@ const calculateK3Win = (bet, result, betType, betValue) => {
                     }
                 }
                 break;
-
             case 'ALL_DIFFERENT':
                 console.log(`🎲 [K3_ALL_DIFFERENT_PAYOUT_CHECK] Checking ALL_DIFFERENT bet: ${betValue}`, {
                     dice: [result.dice_1, result.dice_2, result.dice_3],
@@ -4883,7 +5465,6 @@ const checkWingoWin = (betType, betValue, result) => {
             return false;
     }
 };
-
 /**
  * FIXED: Check color win with proper violet logic
  */
@@ -5383,12 +5964,6 @@ const getLastResult = async (gameType, duration = null) => {
 };
 
 /**
- * UPDATED: Enhanced generateRandomResult with proper format including verification for trx_wix
- * REPLACE the existing generateRandomResult function with this enhanced version
- */
-
-
-/**
  * Clean up old Redis data to prevent memory issues
  * @param {boolean} aggressive - Whether to perform aggressive cleanup
  * @returns {Object} - Cleanup summary
@@ -5581,7 +6156,6 @@ const hasBets = async (gameType, duration, periodId, timeline = 'default') => {
         return false;
     }
 };
-
 /**
  * Update game history in Redis
  * @param {string} gameType - Game type
@@ -5883,7 +6457,6 @@ const validateFallbackResult = async (result, gameType) => {
         };
     }
 };
-
 /**
  * Check for suspicious patterns in a result
  * @param {Object} result - Result to check
@@ -6746,8 +7319,6 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
         globalProcessingLocks.delete(lockKey);
     }
 }
-
-
 const checkExistingResult = async (gameType, duration, periodId, timeline = 'default', transaction = null) => {
     try {
         const models = await ensureModelsInitialized();
@@ -6956,8 +7527,6 @@ const generateResultForTimeline = async (gameType, timeline) => {
         throw error;
     }
 };
-
-
 /**
  * Process winning bets with timeline support
  * @param {string} gameType - Game type
@@ -7507,7 +8076,6 @@ const processBet = async (betData) => {
             userId, gameType, duration, timeline, periodId,
             grossBetAmount, platformFee, netBetAmount, odds
         });
-
         const models = await ensureModelsInitialized();
         const { sequelize: sequelizeInstance } = require('../config/db');
         const t = await sequelizeInstance.transaction();
@@ -7754,7 +8322,6 @@ const processBet = async (betData) => {
             await t.rollback();
             throw error;
         }
-
     } catch (error) {
         console.error('❌ [BET_PROCESS] Error in processBet:', error);
         
@@ -7918,7 +8485,6 @@ const calculateResultBasedOdds = (gameType, betType, betValue, result) => {
         return 1.0;
     }
 };
-
 const calculateOdds = (gameType, betType, betValue) => {
     try {
         switch (gameType.toLowerCase()) {
@@ -8394,7 +8960,6 @@ const getEnhancedPeriodStatus = async (gameType, duration, periodId) => {
         };
     }
 };
-
 /**
  * NEW FUNCTION: Get user's current balance across all wallets
  * ADD this function to gameLogicService.js
@@ -8459,7 +9024,6 @@ const getUserGameBalance = async (userId) => {
         };
     }
 };
-
 /**
  * Get detailed K3 exposure analysis for a period
  * @param {string} gameType - Game type (should be 'k3')
@@ -8619,6 +9183,196 @@ const broadcastGameResult = async (gameType, duration, periodId, result, timelin
     }
 };
 
+/**
+ * Pre-calculate 5D result at bet freeze (t = -5s) and store in Redis
+ * This prevents the 1.5s delay at t=0 by calculating during the bet freeze period
+ */
+async function preCalculate5DResultAtFreeze(gameType, duration, periodId, timeline = 'default') {
+    const lockKey = `precalc_lock_${gameType}_${duration}_${periodId}_${timeline}`;
+    const resultKey = `precalc_result_${gameType}_${duration}_${periodId}_${timeline}`;
+    
+    try {
+        console.log('🔄 [5D_PRECALC_FREEZE] Starting pre-calculation at bet freeze:', {
+            gameType, duration, periodId, timeline
+        });
+
+        // Check if already pre-calculated
+        const existingResult = await getRedisHelper().get(resultKey);
+        if (existingResult) {
+            console.log('✅ [5D_PRECALC_FREEZE] Result already pre-calculated');
+            return JSON.parse(existingResult);
+        }
+
+        // Try to acquire lock to prevent double calculation
+        const lockValue = `${Date.now()}_${process.pid}`;
+        const lockAcquired = await getRedisHelper().set(lockKey, lockValue, 'EX', 30, 'NX');
+        
+        if (!lockAcquired) {
+            console.log('🔒 [5D_PRECALC_FREEZE] Another process is pre-calculating, waiting...');
+            
+            // Wait for result to be available
+            let attempts = 0;
+            while (attempts < 20) {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                const result = await getRedisHelper().get(resultKey);
+                if (result) {
+                    console.log('✅ [5D_PRECALC_FREEZE] Retrieved pre-calculated result from another process');
+                    return JSON.parse(result);
+                }
+                attempts++;
+            }
+            throw new Error('Failed to get pre-calculated result after waiting');
+        }
+
+        console.log('🎯 [5D_PRECALC_FREEZE] Acquired lock, calculating result...');
+
+        // Calculate result using existing protection logic
+        const resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId, timeline);
+        const result = resultWithVerification.result;
+
+        console.log('✅ [5D_PRECALC_FREEZE] Result calculated successfully:', {
+            result: result,
+            protectionMode: resultWithVerification.protectionMode,
+            protectionReason: resultWithVerification.protectionReason
+        });
+
+        // Store result in Redis with 2-minute expiry
+        await getRedisHelper().set(resultKey, JSON.stringify({
+            result: result,
+            protectionMode: resultWithVerification.protectionMode,
+            protectionReason: resultWithVerification.protectionReason,
+            calculatedAt: new Date().toISOString(),
+            periodId: periodId
+        }), 'EX', 120);
+
+        console.log('💾 [5D_PRECALC_FREEZE] Result stored in Redis, ready for t=0');
+
+        return {
+            result: result,
+            protectionMode: resultWithVerification.protectionMode,
+            protectionReason: resultWithVerification.protectionReason
+        };
+
+    } catch (error) {
+        console.error('❌ [5D_PRECALC_FREEZE] Error pre-calculating result:', error.message);
+        
+        // Clean up lock on error
+        try {
+            await getRedisHelper().del(lockKey);
+        } catch (cleanupError) {
+            console.error('❌ [5D_PRECALC_FREEZE] Error cleaning up lock:', cleanupError.message);
+        }
+        
+        throw error;
+    }
+}
+
+/**
+ * Retrieve pre-calculated 5D result at t=0
+ * This provides instant result delivery without calculation delay
+ */
+async function getPreCalculated5DResultAtZero(gameType, duration, periodId, timeline = 'default') {
+    const resultKey = `precalc_result_${gameType}_${duration}_${periodId}_${timeline}`;
+    
+    try {
+        console.log('🎯 [5D_PRECALC_ZERO] Retrieving pre-calculated result at t=0:', {
+            gameType, duration, periodId, timeline
+        });
+
+        const storedData = await getRedisHelper().get(resultKey);
+        
+        if (!storedData) {
+            console.log('⚠️ [5D_PRECALC_ZERO] No pre-calculated result found, falling back to real-time calculation');
+            return null; // Will trigger fallback to real-time calculation
+        }
+
+        const parsedData = JSON.parse(storedData);
+        console.log('✅ [5D_PRECALC_ZERO] Retrieved pre-calculated result:', {
+            result: parsedData.result,
+            protectionMode: parsedData.protectionMode,
+            calculatedAt: parsedData.calculatedAt
+        });
+
+        // Clean up the stored result
+        await getRedisHelper().del(resultKey);
+        console.log('🧹 [5D_PRECALC_ZERO] Cleaned up stored result');
+
+        return {
+            result: parsedData.result,
+            protectionMode: parsedData.protectionMode,
+            protectionReason: parsedData.protectionReason,
+            source: 'pre_calculated'
+        };
+
+    } catch (error) {
+        console.error('❌ [5D_PRECALC_ZERO] Error retrieving pre-calculated result:', error.message);
+        return null; // Will trigger fallback
+    }
+}
+
+/**
+ * Enhanced processGameResults that uses pre-calculated results for 5D
+ * This maintains backward compatibility while adding pre-calculation for 5D
+ */
+async function processGameResultsWithPreCalc(gameType, duration, periodId, timeline = 'default', transaction = null) {
+    // For 5D games, try to use pre-calculated result first
+    if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+        console.log('🎯 [5D_PROCESS] Attempting to use pre-calculated result for 5D');
+        
+        const preCalcResult = await getPreCalculated5DResultAtZero(gameType, duration, periodId, timeline);
+        
+        if (preCalcResult) {
+            console.log('✅ [5D_PROCESS] Using pre-calculated result, skipping real-time calculation');
+            
+            // Process the pre-calculated result through the normal flow
+            // This ensures all database saves, winner processing, etc. still happen
+            const result = preCalcResult.result;
+            
+            // Save to database (reuse existing logic)
+            const models = await ensureModelsInitialized();
+            const useTransaction = transaction || await sequelize.transaction();
+            const shouldCommit = !transaction;
+            
+            try {
+                // Save result to database
+                const savedResult = await models.BetResultFiveD.create({
+                    bet_number: periodId,
+                    result: JSON.stringify(result),
+                    created_at: new Date(),
+                    updated_at: new Date()
+                }, { transaction: useTransaction });
+
+                // Process winning bets
+                await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, useTransaction);
+
+                if (shouldCommit) await useTransaction.commit();
+
+                console.log('✅ [5D_PROCESS] Pre-calculated result processed successfully');
+
+                return {
+                    success: true,
+                    result: result,
+                    gameResult: result,
+                    winners: [], // Will be populated by processWinningBetsWithTimeline
+                    timeline: timeline,
+                    source: 'pre_calculated'
+                };
+
+            } catch (error) {
+                if (shouldCommit) await useTransaction.rollback();
+                console.error('❌ [5D_PROCESS] Error processing pre-calculated result:', error.message);
+                throw error;
+            }
+        } else {
+            console.log('⚠️ [5D_PROCESS] No pre-calculated result available, falling back to real-time calculation');
+        }
+    }
+
+    // Fallback to original processGameResults for non-5D games or when pre-calc fails
+    console.log('🔄 [5D_PROCESS] Falling back to real-time result calculation');
+    return await processGameResults(gameType, duration, periodId, timeline, transaction);
+}
+
 
 
 
@@ -8761,6 +9515,17 @@ module.exports = {
     getPreCalculated5DResult,
     isInBetFreeze,
     hasPeriodEnded,
+
+    // 5D Redis-based fast protection system
+    preload5DCombinationsToRedis,
+    get5DCombinationFromRedis,
+    getAll5DCombinationsFromRedis,
+    calculate5DExposureFast,
+    getOptimal5DResultByExposureFast,
+    autoInitialize5DCache,
+    preCalculate5DResultAtFreeze,
+    getPreCalculated5DResultAtZero,
+    processGameResultsWithPreCalc,
 
     // Model management
     ensureModelsInitialized,
