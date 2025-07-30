@@ -1237,8 +1237,8 @@ async function getOptimal5DResultByExposureFast(duration, periodId, timeline = '
             return await getOptimal5DResultByExposure(duration, periodId, timeline);
         }
         
-        // Scan ALL 100,000 combinations for complete protection coverage
-        console.log(`🔄 [5D_FAST_STRATEGY] Processing ALL ${allCombinations.length} combinations for complete protection coverage...`);
+        // NON-BLOCKING: Process combinations in chunks to prevent blocking the event loop
+        console.log(`🔄 [5D_FAST_STRATEGY] Processing ALL ${allCombinations.length} combinations in chunks (non-blocking)...`);
         
         // Optimize by pre-calculating bet patterns for faster exposure calculation
         const betPatterns = {};
@@ -1251,34 +1251,55 @@ async function getOptimal5DResultByExposureFast(duration, periodId, timeline = '
             }
         }
         
-        // Calculate exposure for ALL combinations with optimized patterns
+        // Process combinations in chunks to prevent blocking
+        const CHUNK_SIZE = 1000; // Process 1000 combinations at a time
         let bestResult = null;
         let bestExposure = Infinity;
         let zeroExposureCount = 0;
+        let processedCount = 0;
         
-        for (const combo of allCombinations) {
-            const exposure = calculate5DExposureFastOptimized(combo, betPatterns);
+        for (let i = 0; i < allCombinations.length; i += CHUNK_SIZE) {
+            const chunk = allCombinations.slice(i, i + CHUNK_SIZE);
             
-            if (exposure === 0) {
-                zeroExposureCount++;
-                // Randomly select from zero exposure combinations (1 in 10 chance)
-                if (Math.random() < 0.1) {
+            // Process this chunk
+            for (const combo of chunk) {
+                const exposure = calculate5DExposureFastOptimized(combo, betPatterns);
+                
+                if (exposure === 0) {
+                    zeroExposureCount++;
+                    // Randomly select from zero exposure combinations (1 in 10 chance)
+                    if (Math.random() < 0.1) {
+                        bestResult = combo;
+                        bestExposure = 0;
+                        break; // Found a good zero-exposure result, stop scanning
+                    }
+                } else if (exposure < bestExposure) {
                     bestResult = combo;
-                    bestExposure = 0;
-                    break; // Found a good zero-exposure result, stop scanning
+                    bestExposure = exposure;
                 }
-            } else if (exposure < bestExposure) {
-                bestResult = combo;
-                bestExposure = exposure;
+            }
+            
+            processedCount += chunk.length;
+            
+            // If we found a zero-exposure result, we can stop early
+            if (bestExposure === 0) {
+                console.log(`🛡️ [5D_FAST_PROTECTION] Found zero-exposure result early at ${processedCount}/${allCombinations.length} combinations`);
+                break;
+            }
+            
+            // Yield control back to event loop every chunk to prevent blocking
+            if (i + CHUNK_SIZE < allCombinations.length) {
+                await new Promise(resolve => setImmediate(resolve));
             }
         }
         
         if (bestResult) {
-            console.log(`🛡️ [5D_FAST_PROTECTION] Selected result from ALL combinations:`, {
+            console.log(`🛡️ [5D_FAST_PROTECTION] Selected result from ${processedCount} combinations:`, {
                 dice_value: bestResult.dice_value,
                 exposure: bestExposure,
                 zeroExposureCount: zeroExposureCount,
-                totalCombinations: allCombinations.length
+                totalCombinations: allCombinations.length,
+                processedCount: processedCount
             });
             
             return format5DResult(bestResult);
@@ -9372,20 +9393,10 @@ async function preCalculate5DResultAtFreeze(gameType, duration, periodId, timeli
         const lockAcquired = await getRedisHelper().set(lockKey, lockValue, 'EX', 30, 'NX');
         
         if (!lockAcquired) {
-            console.log('🔒 [5D_PRECALC_FREEZE] Another process is pre-calculating, waiting...');
-            
-            // Wait for result to be available
-            let attempts = 0;
-            while (attempts < 20) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-                const result = await getRedisHelper().get(resultKey);
-                if (result) {
-                    console.log('✅ [5D_PRECALC_FREEZE] Retrieved pre-calculated result from another process');
-                    return JSON.parse(result);
-                }
-                attempts++;
-            }
-            throw new Error('Failed to get pre-calculated result after waiting');
+            console.log('🔒 [5D_PRECALC_FREEZE] Another process is pre-calculating, skipping this instance');
+            // NON-BLOCKING: Don't wait for lock, just skip this pre-calculation
+            // The other process will handle the calculation
+            return null;
         }
 
         console.log('🎯 [5D_PRECALC_FREEZE] Acquired lock, calculating result...');
@@ -9395,7 +9406,7 @@ async function preCalculate5DResultAtFreeze(gameType, duration, periodId, timeli
         
         // Add timeout to prevent hanging
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Pre-calculation timeout')), 3000); // 3 second timeout
+            setTimeout(() => reject(new Error('Pre-calculation timeout')), 5000); // 5 second timeout for full scan
         });
         
         const calculationPromise = getOptimal5DResultByExposureFast(duration, periodId, timeline);

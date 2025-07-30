@@ -483,8 +483,14 @@ const broadcastTick = async (gameType, duration) => {
             global.eventSequencer = {
                 processedEvents: new Map(),
                 periodStates: new Map(),
-                sequenceLocks: new Map()
+                sequenceLocks: new Map(),
+                periodCache: new Map() // Add cache for period info
             };
+        }
+        
+        // CRITICAL FIX: Ensure periodCache exists (for existing eventSequencer instances)
+        if (!global.eventSequencer.periodCache) {
+            global.eventSequencer.periodCache = new Map();
         }
         
         const key = `${gameType}_${duration}`;
@@ -493,12 +499,50 @@ const broadcastTick = async (gameType, duration) => {
         // CRITICAL DEBUG: Add logging to see which games are being processed
         ////console.log(`🔍 [BROADCAST_TICK_DEBUG] Processing ${gameType}_${duration}`);
 
-        // Get period info from Redis
-        const periodInfo = await getPeriodInfoFromRedis(gameType, duration);
+        // Get period info from cache first, then Redis if needed
+        let periodInfo;
+        const cacheKey = `period_cache_${key}`;
+        const cachedData = global.eventSequencer.periodCache.get(cacheKey);
+        const cacheTime = Date.now();
+        
+        if (cachedData && (cacheTime - cachedData.timestamp) < 2000) { // Cache for 2 seconds
+            periodInfo = cachedData.data;
+        } else {
+            // Get period info from Redis (non-blocking)
+            try {
+                periodInfo = await getPeriodInfoFromRedis(gameType, duration);
+                // Cache the result (but don't cache timeRemaining as it changes)
+                if (periodInfo) {
+                    // Store static data only, timeRemaining will be recalculated
+                    const staticData = {
+                        periodId: periodInfo.periodId,
+                        endTime: periodInfo.endTime,
+                        bettingOpen: periodInfo.bettingOpen,
+                        bettingCloseTime: periodInfo.bettingCloseTime
+                    };
+                    global.eventSequencer.periodCache.set(cacheKey, {
+                        data: staticData,
+                        timestamp: cacheTime
+                    });
+                    periodInfo = staticData;
+                }
+            } catch (redisError) {
+                console.error(`❌ [BROADCAST_TICK_REDIS] Error getting period info:`, redisError.message);
+                // Continue with tick even if Redis fails
+                return;
+            }
+        }
 
         if (!periodInfo) {
             ////console.log(`❌ [BROADCAST_TICK_DEBUG] No period info for ${gameType}_${duration}, requesting from scheduler`);
-            await requestPeriodFromSchedulerDebounced(gameType, duration);
+            // Non-blocking: Request period in background
+            setImmediate(async () => {
+                try {
+                    await requestPeriodFromSchedulerDebounced(gameType, duration);
+                } catch (error) {
+                    console.error(`❌ [BROADCAST_TICK_BG] Error requesting period:`, error.message);
+                }
+            });
             return;
         }
 
@@ -520,7 +564,14 @@ const broadcastTick = async (gameType, duration) => {
         // Validate time remaining
         if (actualTimeRemaining > duration + 1) {
             ////console.log(`⚠️ [BROADCAST_TICK_DEBUG] ${gameType}_${duration}: timeRemaining too high (${actualTimeRemaining}s), requesting new period`);
-            await requestPeriodFromSchedulerDebounced(gameType, duration);
+            // Non-blocking: Request period in background
+            setImmediate(async () => {
+                try {
+                    await requestPeriodFromSchedulerDebounced(gameType, duration);
+                } catch (error) {
+                    console.error(`❌ [BROADCAST_TICK_BG] Error requesting period:`, error.message);
+                }
+            });
             return;
         }
 
@@ -564,8 +615,8 @@ const broadcastTick = async (gameType, duration) => {
                 global.eventSequencer.processedEvents.set(zeroKey, Date.now());
                 setTimeout(() => global.eventSequencer.processedEvents.delete(zeroKey), 30000);
                 
-                // Wait for periodStart before continuing
-                await new Promise(resolve => setTimeout(resolve, 200));
+                // Non-blocking period transition (don't wait)
+                // The periodStart will be handled by the scheduler
             }
             
             // Update tracking to new period
@@ -621,6 +672,11 @@ const broadcastTick = async (gameType, duration) => {
         if (['5d', 'fived'].includes(gameType.toLowerCase()) && actualTimeRemaining <= 10) {
             console.log(`⏰ [5D_TIMING_DEBUG] ${roomId}: t=${actualTimeRemaining}s, period=${periodInfo.periodId}`);
         }
+        
+        // Debug logging for countdown issues
+        if (['5d', 'fived'].includes(gameType.toLowerCase()) && actualTimeRemaining <= 5) {
+            console.log(`🔍 [5D_COUNTDOWN_DEBUG] ${roomId}: Processing tick at t=${actualTimeRemaining}s, period=${periodInfo.periodId}`);
+        }
 
         // Handle bet freeze (t = -3s) - Trigger pre-calculation for 5D (safer approach)
         // IMPROVED: Trigger at t=3s to ensure pre-calculation completes before bet freeze
@@ -633,7 +689,7 @@ const broadcastTick = async (gameType, duration) => {
                 setTimeout(() => global.eventSequencer.processedEvents.delete(preCalcKey), 30000);
                 
                 // Import and trigger pre-calculation in background (non-blocking)
-                setImmediate(async () => {
+                setTimeout(async () => {
                     try {
                         const { preCalculate5DResultAtFreeze } = require('./gameLogicService');
                         await preCalculate5DResultAtFreeze(gameType, duration, periodInfo.periodId, 'default');
@@ -641,9 +697,7 @@ const broadcastTick = async (gameType, duration) => {
                     } catch (error) {
                         console.error(`❌ [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation failed for period ${periodInfo.periodId}:`, error.message);
                     }
-                });
-                
-                console.log(`🔄 [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation started in background for period ${periodInfo.periodId}`);
+                }, 0);
             }
         }
 
@@ -656,36 +710,46 @@ const broadcastTick = async (gameType, duration) => {
                 global.eventSequencer.processedEvents.set(periodEndKey, Date.now());
                 setTimeout(() => global.eventSequencer.processedEvents.delete(periodEndKey), 30000);
                 
-                // For 5D, use pre-calculated result if available
-                if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                // Process period end in background (non-blocking)
+                setImmediate(async () => {
                     try {
-                        const { processGameResultsWithPreCalc } = require('./gameLogicService');
-                        console.log(`🎯 [5D_PERIOD_END] ${roomId}: Using pre-calculated result for period ${periodInfo.periodId}`);
-                        await processGameResultsWithPreCalc(gameType, duration, periodInfo.periodId, 'default');
-                    } catch (error) {
-                        console.error(`❌ [5D_PERIOD_END] ${roomId}: Error processing pre-calculated result for period ${periodInfo.periodId}:`, error.message);
-                        // Fallback to normal processing
-                        try {
-                            const { processGameResults } = require('./gameLogicService');
-                            await processGameResults(gameType, duration, periodInfo.periodId, 'default');
-                        } catch (fallbackError) {
-                            console.error(`❌ [5D_PERIOD_END_FALLBACK] ${roomId}: Fallback processing also failed:`, fallbackError.message);
+                        // For 5D, use pre-calculated result if available
+                        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                            try {
+                                const { processGameResultsWithPreCalc } = require('./gameLogicService');
+                                console.log(`🎯 [5D_PERIOD_END] ${roomId}: Using pre-calculated result for period ${periodInfo.periodId}`);
+                                await processGameResultsWithPreCalc(gameType, duration, periodInfo.periodId, 'default');
+                            } catch (error) {
+                                console.error(`❌ [5D_PERIOD_END] ${roomId}: Error processing pre-calculated result for period ${periodInfo.periodId}:`, error.message);
+                                // Fallback to normal processing
+                                try {
+                                    const { processGameResults } = require('./gameLogicService');
+                                    await processGameResults(gameType, duration, periodInfo.periodId, 'default');
+                                } catch (fallbackError) {
+                                    console.error(`❌ [5D_PERIOD_END_FALLBACK] ${roomId}: Fallback processing also failed:`, fallbackError.message);
+                                }
+                            }
+                        } else {
+                            // For non-5D games, use normal processing
+                            try {
+                                const { processGameResults } = require('./gameLogicService');
+                                await processGameResults(gameType, duration, periodInfo.periodId, 'default');
+                            } catch (error) {
+                                console.error(`❌ [PERIOD_END] ${roomId}: Error processing result for period ${periodInfo.periodId}:`, error.message);
+                            }
                         }
+                        
+                        // Request next period with delay
+                        setTimeout(async () => {
+                            await requestPeriodFromSchedulerDebounced(gameType, duration);
+                        }, 2000); // 2 second delay for better sequencing
+                        
+                    } catch (bgError) {
+                        console.error(`❌ [PERIOD_END_BG] ${roomId}: Background period end processing failed:`, bgError.message);
                     }
-                } else {
-                    // For non-5D games, use normal processing
-                    try {
-                        const { processGameResults } = require('./gameLogicService');
-                        await processGameResults(gameType, duration, periodInfo.periodId, 'default');
-                    } catch (error) {
-                        console.error(`❌ [PERIOD_END] ${roomId}: Error processing result for period ${periodInfo.periodId}:`, error.message);
-                    }
-                }
+                });
                 
-                // Request next period with delay
-                setTimeout(async () => {
-                    await requestPeriodFromSchedulerDebounced(gameType, duration);
-                }, 2000); // 2 second delay for better sequencing
+                console.log(`🔄 [PERIOD_END] ${roomId}: Period end processing started in background for period ${periodInfo.periodId}`);
             }
         }
 
@@ -727,6 +791,14 @@ const cleanupEventSequencer = () => {
         }
     }
     
+    // Clean period cache
+    for (const [key, cacheData] of global.eventSequencer.periodCache.entries()) {
+        if (now - cacheData.timestamp > 10000) { // 10 second max cache
+            global.eventSequencer.periodCache.delete(key);
+            cleaned++;
+        }
+    }
+    
     if (cleaned > 0) {
         ////console.log(`🧹 [SEQUENCER_CLEANUP] Cleaned ${cleaned} entries`);
     }
@@ -735,7 +807,8 @@ const cleanupEventSequencer = () => {
     const stats = {
         processedEvents: global.eventSequencer.processedEvents.size,
         periodStates: global.eventSequencer.periodStates.size,
-        sequenceLocks: global.eventSequencer.sequenceLocks.size
+        sequenceLocks: global.eventSequencer.sequenceLocks.size,
+        periodCache: global.eventSequencer.periodCache.size
     };
     
     ////console.log(`📊 [SEQUENCER_STATS]`, stats);
@@ -911,12 +984,12 @@ const processWebSocketBet = async (socket, data) => {
 
         const validation = await validateBetPlacement(userId, gameType, duration, currentPeriod.periodId, betAmount, timeline);
         if (!validation.valid) {
-            console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] Validation failed for user ${userId}:`, validation.error);
+            ////console.log(`❌ [WEBSOCKET_BET_VALIDATION_FAILED] Validation failed for user ${userId}:`, validation.error);
             socket.emit('betError', {
                 message: validation.error,
                 timestamp: timestamp
             });
-            return { success: false, message: validation.error };
+            return;
         }
 
         console.log(`✅ [WEBSOCKET_BET_VALIDATION_SUCCESS] Validation passed for user ${userId}`);
