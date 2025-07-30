@@ -397,6 +397,33 @@ class UnifiedRedisManager {
                 }
             },
 
+            async hkeys(key) {
+                try {
+                    return await mainConnection.hkeys(key);
+                } catch (error) {
+                    console.error('Redis hkeys error:', error);
+                    throw error;
+                }
+            },
+
+            async keys(pattern) {
+                try {
+                    return await mainConnection.keys(pattern);
+                } catch (error) {
+                    console.error('Redis keys error:', error);
+                    throw error;
+                }
+            },
+
+            async type(key) {
+                try {
+                    return await mainConnection.type(key);
+                } catch (error) {
+                    console.error('Redis type error:', error);
+                    throw error;
+                }
+            },
+
             // Direct access to main connection (backward compatible)
             getClient() {
                 return mainConnection;

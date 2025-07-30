@@ -632,14 +632,18 @@ const broadcastTick = async (gameType, duration) => {
                 global.eventSequencer.processedEvents.set(preCalcKey, Date.now());
                 setTimeout(() => global.eventSequencer.processedEvents.delete(preCalcKey), 30000);
                 
-                // Import and trigger pre-calculation
-                try {
-                    const { preCalculate5DResultAtFreeze } = require('./gameLogicService');
-                    await preCalculate5DResultAtFreeze(gameType, duration, periodInfo.periodId, 'default');
-                    console.log(`✅ [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation completed for period ${periodInfo.periodId}`);
-                } catch (error) {
-                    console.error(`❌ [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation failed for period ${periodInfo.periodId}:`, error.message);
-                }
+                // Import and trigger pre-calculation in background (non-blocking)
+                setImmediate(async () => {
+                    try {
+                        const { preCalculate5DResultAtFreeze } = require('./gameLogicService');
+                        await preCalculate5DResultAtFreeze(gameType, duration, periodInfo.periodId, 'default');
+                        console.log(`✅ [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation completed for period ${periodInfo.periodId}`);
+                    } catch (error) {
+                        console.error(`❌ [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation failed for period ${periodInfo.periodId}:`, error.message);
+                    }
+                });
+                
+                console.log(`🔄 [5D_PRECALC_TRIGGER] ${roomId}: Pre-calculation started in background for period ${periodInfo.periodId}`);
             }
         }
 
