@@ -4,7 +4,33 @@ function getRedisHelper() {
 }
 
 // Backend/services/gameLogicService.js
-const { sequelize, DataTypes, Op } = require('../config/db');
+const { sequelize, DataTypes, Op, connectDB, getSequelizeInstance } = require('../config/db');
+
+// Ensure database is initialized
+let localSequelize = null;
+const ensureDatabaseInitialized = async () => {
+    console.log('🔍 [GAME_LOGIC] ensureDatabaseInitialized called, localSequelize:', localSequelize ? 'exists' : 'null');
+    
+    if (!localSequelize) {
+        try {
+            console.log('🔄 [GAME_LOGIC] Database not initialized, using getSequelizeInstance...');
+            localSequelize = await getSequelizeInstance(); // Use the existing function that handles initialization
+            console.log('🔍 [GAME_LOGIC] getSequelizeInstance returned:', typeof localSequelize, localSequelize ? 'exists' : 'null');
+            
+            if (!localSequelize) {
+                throw new Error('Sequelize instance is still null after getSequelizeInstance');
+            }
+        } catch (error) {
+            console.error('❌ [GAME_LOGIC] Failed to initialize database:', error.message);
+            console.error('❌ [GAME_LOGIC] Error stack:', error.stack);
+            throw error;
+        }
+    } else {
+        console.log('✅ [GAME_LOGIC] Database already initialized');
+    }
+    
+    return localSequelize;
+};
 
 
 const periodService = require('./periodService');
@@ -7119,8 +7145,30 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
         globalProcessingLocks.set(lockKey, { timestamp: Date.now(), processId: process.pid });
 
         const models = await ensureModelsInitialized();
-        const useTransaction = transaction || await sequelize.transaction();
-        const shouldCommit = !transaction;
+        
+        // Ensure we have a valid transaction
+        let useTransaction;
+        let shouldCommit = false;
+        
+        if (transaction) {
+            useTransaction = transaction;
+            shouldCommit = false;
+        } else {
+            try {
+                // Ensure database is initialized before creating transaction
+                console.log('🔄 [PROCESS_RESULT] Ensuring database is initialized...');
+                const db = await ensureDatabaseInitialized();
+                console.log('✅ [PROCESS_RESULT] Database initialized, creating transaction...');
+                console.log('🔍 [PROCESS_RESULT] Database instance:', typeof db, db ? 'exists' : 'null');
+                useTransaction = await db.transaction();
+                shouldCommit = true;
+                console.log('✅ [PROCESS_RESULT] Transaction created successfully');
+            } catch (error) {
+                console.error('❌ [PROCESS_RESULT] Failed to create transaction:', error.message);
+                console.error('❌ [PROCESS_RESULT] Error stack:', error.stack);
+                throw new Error(`Database transaction creation failed: ${error.message}`);
+            }
+        }
 
         try {
             // Check existing result
@@ -7542,8 +7590,25 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
         console.log(`🔄 Processing winning bets for ${gameType} ${duration}s ${timeline} - ${periodId}`);
 
         const models = await ensureModelsInitialized();
-        const useTransaction = transaction || await sequelize.transaction();
-        const shouldCommit = !transaction;
+        
+        // Ensure we have a valid transaction
+        let useTransaction;
+        let shouldCommit = false;
+        
+        if (transaction) {
+            useTransaction = transaction;
+            shouldCommit = false;
+        } else {
+            try {
+                // Ensure database is initialized before creating transaction
+                const db = await ensureDatabaseInitialized();
+                useTransaction = await db.transaction();
+                shouldCommit = true;
+            } catch (error) {
+                console.error('❌ [PROCESS_WINNING_BETS] Failed to create transaction:', error.message);
+                throw new Error(`Database transaction creation failed: ${error.message}`);
+            }
+        }
 
         try {
             let bets = [];
@@ -9330,8 +9395,25 @@ async function processGameResultsWithPreCalc(gameType, duration, periodId, timel
             
             // Save to database (reuse existing logic)
             const models = await ensureModelsInitialized();
-            const useTransaction = transaction || await sequelize.transaction();
-            const shouldCommit = !transaction;
+            
+            // Ensure we have a valid transaction
+            let useTransaction;
+            let shouldCommit = false;
+            
+            if (transaction) {
+                useTransaction = transaction;
+                shouldCommit = false;
+            } else {
+                try {
+                    // Ensure database is initialized before creating transaction
+                    const db = await ensureDatabaseInitialized();
+                    useTransaction = await db.transaction();
+                    shouldCommit = true;
+                } catch (error) {
+                    console.error('❌ [5D_PROCESS] Failed to create transaction:', error.message);
+                    throw new Error(`Database transaction creation failed: ${error.message}`);
+                }
+            }
             
             try {
                 // Save result to database

@@ -616,12 +616,18 @@ const broadcastTick = async (gameType, duration) => {
         if (actualTimeRemaining <= 5 || actualTimeRemaining % 10 === 0) {
             ////console.log(`⏰ [TIME_UPDATE] ${roomId}: ${actualTimeRemaining}s (period: ${periodInfo.periodId})`);
         }
+        
+        // Enhanced logging for 5D pre-calculation debugging
+        if (['5d', 'fived'].includes(gameType.toLowerCase()) && actualTimeRemaining <= 10) {
+            console.log(`⏰ [5D_TIMING_DEBUG] ${roomId}: t=${actualTimeRemaining}s, period=${periodInfo.periodId}`);
+        }
 
-        // Handle bet freeze (t = -5s) - Trigger pre-calculation for 5D
-        if (actualTimeRemaining === 5 && ['5d', 'fived'].includes(gameType.toLowerCase())) {
+        // Handle bet freeze (t = -3s) - Trigger pre-calculation for 5D (safer approach)
+        // IMPROVED: Trigger at t=3s to ensure pre-calculation completes before bet freeze
+        if (actualTimeRemaining === 3 && ['5d', 'fived'].includes(gameType.toLowerCase())) {
             const preCalcKey = `precalc_triggered_${periodInfo.periodId}`;
             if (!global.eventSequencer.processedEvents.has(preCalcKey)) {
-                console.log(`🔄 [5D_PRECALC_TRIGGER] ${roomId}: Triggering pre-calculation for period ${periodInfo.periodId}`);
+                console.log(`🔄 [5D_PRECALC_TRIGGER] ${roomId}: Triggering pre-calculation for period ${periodInfo.periodId} (t=${actualTimeRemaining}s)`);
                 
                 global.eventSequencer.processedEvents.set(preCalcKey, Date.now());
                 setTimeout(() => global.eventSequencer.processedEvents.delete(preCalcKey), 30000);
