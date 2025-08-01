@@ -141,7 +141,7 @@ const handle5DPreCalcRequest = async (gameType, duration, periodId) => {
 
 /**
  * Execute 5D pre-calculation at bet freeze with final bet patterns
- * ENHANCED: Load balancer safety mechanisms
+ * ENHANCED: Load balancer safety mechanisms + Sorted Set optimization
  */
 const execute5DPreCalculation = async (gameType, duration, periodId) => {
     const startTime = Date.now();
@@ -166,9 +166,29 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
             totalExposure: Object.values(betPatterns).reduce((sum, val) => sum + parseFloat(val), 0)
         });
         
-        // 3. Run protection logic with final patterns
-        console.log(`🛡️ [5D_PRECALC_EXEC] Running protection logic for period ${periodId}`);
-        const result = await gameLogicService.getOptimal5DResultByExposureFast(duration, periodId, timeline);
+        // 3. 🚀 ENHANCED: Try Sorted Set method first for ultra-fast results
+        console.log(`🚀 [5D_PRECALC_EXEC] Attempting Sorted Set method for period ${periodId}`);
+        
+        let result = null;
+        let methodUsed = 'hash';
+        
+        try {
+            // Import Sorted Set service
+            const { getOptimal5DResultByExposureSortedSet } = require('../services/5dSortedSetService');
+            
+            // Try Sorted Set method
+            result = await getOptimal5DResultByExposureSortedSet(duration, periodId, timeline);
+            methodUsed = 'sorted_set';
+            
+            console.log(`✅ [5D_PRECALC_EXEC] Sorted Set method successful for period ${periodId}`);
+            
+        } catch (sortedSetError) {
+            console.log(`⚠️ [5D_PRECALC_EXEC] Sorted Set method failed, falling back to Hash method:`, sortedSetError.message);
+            
+            // Fallback to original Hash method
+            result = await gameLogicService.getOptimal5DResultByExposureFast(duration, periodId, timeline);
+            methodUsed = 'hash_fallback';
+        }
         
         if (!result) {
             console.log(`❌ [5D_PRECALC_EXEC] No result generated for period ${periodId}`);
@@ -185,6 +205,7 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
             gameType: gameType,
             duration: duration,
             timeline: timeline,
+            methodUsed: methodUsed, // Track which method was used
             // ENHANCED: Add load balancer safety data
             schedulerInstance: process.env.PM2_INSTANCE_ID || 'unknown',
             schedulerHost: require('os').hostname(),
@@ -200,7 +221,7 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
             return;
         }
         
-        console.log(`💾 [5D_PRECALC_EXEC] Result stored in Redis for period ${periodId}`);
+        console.log(`💾 [5D_PRECALC_EXEC] Result stored in Redis for period ${periodId} (method: ${methodUsed})`);
         
         // 5. Publish completion notification (load balancer safe)
         const completionMessage = {
@@ -210,6 +231,7 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
             periodId: periodId,
             timeline: timeline,
             result: result,
+            methodUsed: methodUsed, // Include method used
             completedAt: new Date().toISOString(),
             // ENHANCED: Add load balancer safety data
             schedulerInstance: process.env.PM2_INSTANCE_ID || 'unknown',
@@ -223,12 +245,13 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
         await schedulerPublisher.publish('5d_precalc:completed', JSON.stringify(completionMessage));
         
         const executionTime = Date.now() - startTime;
-        console.log(`✅ [5D_PRECALC_EXEC] Pre-calculation completed for period ${periodId} in ${executionTime}ms`);
+        console.log(`✅ [5D_PRECALC_EXEC] Pre-calculation completed for period ${periodId} in ${executionTime}ms (method: ${methodUsed})`);
         
         // 6. Update tracking
         fiveDPreCalcTracking.set(`${gameType}_${duration}_${periodId}`, {
             status: 'completed',
             result: result,
+            methodUsed: methodUsed,
             completedAt: new Date().toISOString(),
             executionTime: executionTime,
             schedulerInstance: process.env.PM2_INSTANCE_ID || 'unknown',
@@ -411,14 +434,43 @@ const fiveDPreCalcTick = async (gameType, duration) => {
             if (!fiveDPreCalcTracking.has(trackingKey)) {
                 console.log(`🎯 [5D_PRECALC_TRIGGER] Bet freeze detected for ${key}, period ${period.periodId} (t=${timeRemaining.toFixed(1)}s)`);
                 
-                // Trigger pre-calculation
-                await handle5DPreCalcRequest(gameType, duration, period.periodId);
+                // 🚀 CRITICAL FIX: DISABLE pre-calculation during critical countdown to prevent WebSocket freezing
+                // The heavy computation was blocking the event loop and causing WebSocket delays
+                console.log(`⚠️ [5D_PRECALC_DISABLED] Pre-calculation DISABLED for ${key} to prevent WebSocket freezing`);
                 
-                // Mark as triggered
+                // Mark as triggered but skip actual calculation
                 fiveDPreCalcTracking.set(trackingKey, {
-                    status: 'triggered',
+                    status: 'disabled_for_websocket',
                     triggeredAt: new Date().toISOString(),
-                    timeRemaining: timeRemaining
+                    timeRemaining: timeRemaining,
+                    reason: 'WebSocket performance optimization'
+                });
+                
+                // 🚀 ALTERNATIVE: Use lightweight result calculation instead of heavy pre-calculation
+                // This will be much faster and won't block the WebSocket
+                setImmediate(async () => {
+                    try {
+                        console.log(`🚀 [5D_LIGHTWEIGHT] Starting lightweight result calculation for ${key}`);
+                        
+                        // Use a simple, fast result calculation instead of heavy pre-calculation
+                        const { getOptimal5DResultByExposureFast } = require('../services/gameLogicService');
+                        const result = await getOptimal5DResultByExposureFast(duration, period.periodId, 'default');
+                        
+                        if (result) {
+                            // Store lightweight result
+                            const resultKey = `lightweight_5d_result:${gameType}:${duration}:default:${period.periodId}`;
+                            await schedulerHelper.set(resultKey, JSON.stringify({
+                                result: result,
+                                calculatedAt: new Date().toISOString(),
+                                method: 'lightweight',
+                                periodId: period.periodId
+                            }), 'EX', 300);
+                            
+                            console.log(`✅ [5D_LIGHTWEIGHT] Lightweight result calculated and stored for ${key}`);
+                        }
+                    } catch (error) {
+                        console.error(`❌ [5D_LIGHTWEIGHT] Error in lightweight calculation:`, error.message);
+                    }
                 });
             }
         }

@@ -1217,58 +1217,61 @@ function calculate5DExposureFastOptimized(combination, betPatterns) {
  */
 async function getOptimal5DResultByExposureFast(duration, periodId, timeline = 'default') {
     try {
-        const exposureKey = `exposure:5d:${duration}:${timeline}:${periodId}`;
-        const betExposures = await getRedisHelper().hgetall(exposureKey);
-        
-        // Get total bets amount
-        const totalBets = Object.values(betExposures).reduce((sum, val) => sum + parseFloat(val), 0);
-        
-        console.log('🎯 [5D_FAST_STRATEGY] Using Redis-cached combinations for fast exposure calculation:', {
-            totalBets,
-            periodId,
-            timeline
+        // 🚀 CRITICAL FIX: Add timeout to prevent blocking WebSocket
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('5D calculation timeout')), 500); // 500ms timeout
         });
         
-        // Get all combinations from Redis cache
-        const allCombinations = await getAll5DCombinationsFromRedis();
-        
-        if (allCombinations.length === 0) {
-            console.log('⚠️ [5D_FAST_STRATEGY] No combinations in Redis cache, falling back to database');
-            return await getOptimal5DResultByExposure(duration, periodId, timeline);
-        }
-        
-        // NON-BLOCKING: Process combinations in chunks to prevent blocking the event loop
-        console.log(`🔄 [5D_FAST_STRATEGY] Processing ALL ${allCombinations.length} combinations in chunks (non-blocking)...`);
-        
-        // Optimize by pre-calculating bet patterns for faster exposure calculation
-        const betPatterns = {};
-        for (const [betKey, exposure] of Object.entries(betExposures)) {
-            if (!betKey.startsWith('bet:')) continue;
-            const actualBetKey = betKey.replace('bet:', '');
-            const [betType, betValue] = actualBetKey.split(':');
-            if (betType && betValue) {
-                betPatterns[`${betType}:${betValue}`] = parseFloat(exposure);
-            }
-        }
-        
-        // Process combinations in chunks to prevent blocking
-        const CHUNK_SIZE = 1000; // Process 1000 combinations at a time
-        let bestResult = null;
-        let bestExposure = Infinity;
-        let zeroExposureCount = 0;
-        let processedCount = 0;
-        
-        for (let i = 0; i < allCombinations.length; i += CHUNK_SIZE) {
-            const chunk = allCombinations.slice(i, i + CHUNK_SIZE);
+        const calculationPromise = async () => {
+            const exposureKey = `exposure:5d:${duration}:${timeline}:${periodId}`;
+            const betExposures = await getRedisHelper().hgetall(exposureKey);
             
-            // Process this chunk
-            for (const combo of chunk) {
+            // Get total bets amount
+            const totalBets = Object.values(betExposures).reduce((sum, val) => sum + parseFloat(val), 0);
+            
+            console.log('🎯 [5D_FAST_STRATEGY] Using Redis-cached combinations for fast exposure calculation:', {
+                totalBets,
+                periodId,
+                timeline
+            });
+            
+            // Get all combinations from Redis cache
+            const allCombinations = await getAll5DCombinationsFromRedis();
+            
+            if (allCombinations.length === 0) {
+                console.log('⚠️ [5D_FAST_STRATEGY] No combinations in Redis cache, falling back to database');
+                return await getOptimal5DResultByExposure(duration, periodId, timeline);
+            }
+            
+            // 🚀 ULTRA-FAST: Process only first 1000 combinations to prevent blocking
+            console.log(`🚀 [5D_FAST_STRATEGY] Processing first 1000 combinations for ultra-fast result...`);
+            
+            // Optimize by pre-calculating bet patterns for faster exposure calculation
+            const betPatterns = {};
+            for (const [betKey, exposure] of Object.entries(betExposures)) {
+                if (!betKey.startsWith('bet:')) continue;
+                const actualBetKey = betKey.replace('bet:', '');
+                const [betType, betValue] = actualBetKey.split(':');
+                if (betType && betValue) {
+                    betPatterns[`${betType}:${betValue}`] = parseFloat(exposure);
+                }
+            }
+            
+            // Process only first 1000 combinations for ultra-fast result
+            const MAX_COMBINATIONS = 1000; // Limit to prevent blocking
+            let bestResult = null;
+            let bestExposure = Infinity;
+            let zeroExposureCount = 0;
+            let processedCount = 0;
+            
+            for (let i = 0; i < Math.min(allCombinations.length, MAX_COMBINATIONS); i++) {
+                const combo = allCombinations[i];
                 const exposure = calculate5DExposureFastOptimized(combo, betPatterns);
                 
                 if (exposure === 0) {
                     zeroExposureCount++;
-                    // Randomly select from zero exposure combinations (1 in 10 chance)
-                    if (Math.random() < 0.1) {
+                    // Randomly select from zero exposure combinations (1 in 5 chance)
+                    if (Math.random() < 0.2) {
                         bestResult = combo;
                         bestExposure = 0;
                         break; // Found a good zero-exposure result, stop scanning
@@ -1277,43 +1280,62 @@ async function getOptimal5DResultByExposureFast(duration, periodId, timeline = '
                     bestResult = combo;
                     bestExposure = exposure;
                 }
+                
+                processedCount++;
+                
+                // If we found a zero-exposure result, we can stop early
+                if (bestExposure === 0) {
+                    console.log(`🛡️ [5D_FAST_PROTECTION] Found zero-exposure result early at ${processedCount}/${Math.min(allCombinations.length, MAX_COMBINATIONS)} combinations`);
+                    break;
+                }
+                
+                // Yield control back to event loop every 100 combinations
+                if (i % 100 === 0 && i > 0) {
+                    await new Promise(resolve => setImmediate(resolve));
+                }
             }
             
-            processedCount += chunk.length;
-            
-            // If we found a zero-exposure result, we can stop early
-            if (bestExposure === 0) {
-                console.log(`🛡️ [5D_FAST_PROTECTION] Found zero-exposure result early at ${processedCount}/${allCombinations.length} combinations`);
-                break;
+            if (bestResult) {
+                console.log(`🛡️ [5D_FAST_PROTECTION] Selected result from ${processedCount} combinations:`, {
+                    dice_value: bestResult.dice_value,
+                    exposure: bestExposure,
+                    zeroExposureCount: zeroExposureCount,
+                    totalCombinations: allCombinations.length,
+                    processedCount: processedCount
+                });
+                
+                return format5DResult(bestResult);
+            } else {
+                // Fallback to first combination if something went wrong
+                console.log(`⚠️ [5D_FAST_PROTECTION] Fallback to first combination`);
+                return format5DResult(allCombinations[0]);
             }
-            
-            // Yield control back to event loop every chunk to prevent blocking
-            if (i + CHUNK_SIZE < allCombinations.length) {
-                await new Promise(resolve => setImmediate(resolve));
-            }
-        }
+        };
         
-        if (bestResult) {
-            console.log(`🛡️ [5D_FAST_PROTECTION] Selected result from ${processedCount} combinations:`, {
-                dice_value: bestResult.dice_value,
-                exposure: bestExposure,
-                zeroExposureCount: zeroExposureCount,
-                totalCombinations: allCombinations.length,
-                processedCount: processedCount
-            });
-            
-            return format5DResult(bestResult);
-        } else {
-            // Fallback to first combination if something went wrong
-            console.log(`⚠️ [5D_FAST_PROTECTION] Fallback to first combination`);
-            return format5DResult(allCombinations[0]);
-        }
+        // Execute with timeout
+        return await Promise.race([calculationPromise(), timeoutPromise]);
         
     } catch (error) {
-        console.error('❌ [5D_FAST_STRATEGY] Error in fast exposure calculation:', error);
-        // Fallback to original method
-        return await getOptimal5DResultByExposure(duration, periodId, timeline);
+        if (error.message === '5D calculation timeout') {
+            console.error('⚠️ [5D_FAST_STRATEGY] Calculation timed out, using default result');
+            return generateDefault5DResult();
+        } else {
+            console.error('❌ [5D_FAST_STRATEGY] Error in fast exposure calculation:', error);
+            return generateDefault5DResult();
+        }
     }
+}
+
+// Helper function to generate default 5D result
+function generateDefault5DResult() {
+    const result = {
+        A: 1, B: 2, C: 3, D: 4, E: 5,
+        sum_value: 15,
+        sum_size: 'small',
+        sum_parity: 'odd'
+    };
+    console.log('🔄 [5D_FAST_STRATEGY] Using default result:', result);
+    return result;
 }
 
 /**
