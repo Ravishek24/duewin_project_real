@@ -59,7 +59,7 @@ class UnifiedRedisManager {
             family: 4,
             keepAlive: 30000,
             connectTimeout: 15000,
-            commandTimeout: 10000,
+            commandTimeout: 30000, // INCREASED: 30 seconds for large operations like hgetall
             lazyConnect: false,
             
             // Critical: Prevent connection leaks

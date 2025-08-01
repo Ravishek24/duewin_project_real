@@ -49,9 +49,35 @@ router.get('/health', async (req, res) => {
 // Get available providers
 router.get('/providers', async (req, res) => {
   try {
+    const { provider } = req.query; // Add query parameter for filtering
+    
     const result = await playwin6Service.getProviders();
     
     if (result.success) {
+      // If provider filter is specified, filter the results
+      if (provider) {
+        const filteredData = result.data.data.filter(p => 
+          p.provider.toLowerCase() === provider.toLowerCase()
+        );
+        
+        if (filteredData.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: `Provider '${provider}' not found`
+          });
+        }
+        
+        return res.status(200).json({
+          success: true,
+          data: {
+            ...result.data,
+            data: filteredData
+          },
+          providers: [provider]
+        });
+      }
+      
+      // Return all providers if no filter
       res.status(200).json({
         success: true,
         data: result.data,
