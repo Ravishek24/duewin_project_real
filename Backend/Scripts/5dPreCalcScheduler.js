@@ -166,28 +166,68 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
             totalExposure: Object.values(betPatterns).reduce((sum, val) => sum + parseFloat(val), 0)
         });
         
-        // 3. 🚀 ENHANCED: Try Sorted Set method first for ultra-fast results
-        console.log(`🚀 [5D_PRECALC_EXEC] Attempting Sorted Set method for period ${periodId}`);
+        // 3. 🚀 ENHANCED: Try Parallel Processing method first for ultra-fast results
+        console.log(`🚀 [5D_PRECALC_EXEC] Attempting Parallel Processing method for period ${periodId}`);
         
         let result = null;
         let methodUsed = 'hash';
         
-        try {
-            // Import Sorted Set service
-            const { getOptimal5DResultByExposureSortedSet } = require('../services/5dSortedSetService');
+        // 🚀 OPTIMIZATION: Check if there are any bets before attempting parallel processing
+        const betCount = Object.keys(betPatterns).length;
+        if (betCount === 0) {
+            console.log(`🚀 [5D_PRECALC_EXEC] No bets detected - using instant result generation`);
             
-            // Try Sorted Set method
-            result = await getOptimal5DResultByExposureSortedSet(duration, periodId, timeline);
-            methodUsed = 'sorted_set';
+            // Generate a simple random result instantly
+            const randomResult = {
+                A: Math.floor(Math.random() * 10),
+                B: Math.floor(Math.random() * 10),
+                C: Math.floor(Math.random() * 10),
+                D: Math.floor(Math.random() * 10),
+                E: Math.floor(Math.random() * 10)
+            };
             
-            console.log(`✅ [5D_PRECALC_EXEC] Sorted Set method successful for period ${periodId}`);
+            const sum = randomResult.A + randomResult.B + randomResult.C + randomResult.D + randomResult.E;
+            randomResult.sum = sum;
+            randomResult.sum_size = sum < 22 ? 'small' : 'big';
+            randomResult.sum_parity = sum % 2 === 0 ? 'even' : 'odd';
+            randomResult.exposure = 0;
+            randomResult.method = 'instant_no_bets';
             
-        } catch (sortedSetError) {
-            console.log(`⚠️ [5D_PRECALC_EXEC] Sorted Set method failed, falling back to Hash method:`, sortedSetError.message);
+            result = randomResult;
+            methodUsed = 'instant_no_bets';
             
-            // Fallback to original Hash method
-            result = await gameLogicService.getOptimal5DResultByExposureFast(duration, periodId, timeline);
-            methodUsed = 'hash_fallback';
+            console.log(`✅ [5D_PRECALC_EXEC] Instant result generated for period ${periodId} (no bets)`);
+            
+        } else {
+            try {
+                // Import Parallel Processing service
+                const { getOptimal5DResultParallel } = require('../services/5dParallelProcessor');
+                
+                // Try Parallel Processing method (2 worker threads, 50,000 combinations each)
+                result = await getOptimal5DResultParallel(duration, periodId, timeline);
+                methodUsed = 'parallel_worker_threads';
+                
+                console.log(`✅ [5D_PRECALC_EXEC] Parallel Processing method successful for period ${periodId}`);
+                
+            } catch (parallelError) {
+                console.log(`⚠️ [5D_PRECALC_EXEC] Parallel Processing method failed, trying Sorted Set method:`, parallelError.message);
+                
+                try {
+                    // Fallback to Sorted Set method
+                    const { getOptimal5DResultByExposureSortedSet } = require('../services/5dSortedSetService');
+                    result = await getOptimal5DResultByExposureSortedSet(duration, periodId, timeline);
+                    methodUsed = 'sorted_set_fallback';
+                    
+                    console.log(`✅ [5D_PRECALC_EXEC] Sorted Set fallback successful for period ${periodId}`);
+                    
+                } catch (sortedSetError) {
+                    console.log(`⚠️ [5D_PRECALC_EXEC] Sorted Set method also failed, falling back to Hash method:`, sortedSetError.message);
+                    
+                    // Final fallback to original Hash method
+                    result = await gameLogicService.getOptimal5DResultByExposureFast(duration, periodId, timeline);
+                    methodUsed = 'hash_fallback';
+                }
+            }
         }
         
         if (!result) {
@@ -223,6 +263,72 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
         
         console.log(`💾 [5D_PRECALC_EXEC] Result stored in Redis for period ${periodId} (method: ${methodUsed})`);
         
+        console.log(`🗄️ [5D_PRECALC_EXEC] About to attempt database save for period ${periodId}...`);
+        
+        // 🗄️ CRITICAL: Save result to database so API can read it
+        try {
+            console.log(`💾 [5D_PRECALC_EXEC] Saving result to database for period ${periodId}...`);
+            console.log(`💾 [5D_PRECALC_EXEC] gameLogicService available:`, !!gameLogicService);
+            
+            // Ensure models are initialized
+            await gameLogicService.ensureModelsInitialized();
+            const models = await gameLogicService.models;
+            console.log(`💾 [5D_PRECALC_EXEC] Models available:`, !!models);
+            console.log(`💾 [5D_PRECALC_EXEC] BetResult5D model available:`, !!models.BetResult5D);
+            
+            // Check if result already exists to avoid duplicates
+            const existingResult = await models.BetResult5D.findOne({
+                where: {
+                    bet_number: periodId,
+                    duration: duration,
+                    timeline: timeline
+                }
+            });
+            
+            if (existingResult) {
+                console.log(`⚠️ [5D_PRECALC_EXEC] Result already exists in database, skipping save`);
+            } else {
+                console.log(`💾 [5D_PRECALC_EXEC] No existing result found, proceeding with database save...`);
+                // Save to database with retry logic
+                let savedResult = null;
+                let retryCount = 0;
+                const maxRetries = 3;
+                
+                while (!savedResult && retryCount < maxRetries) {
+                    try {
+                        savedResult = await models.BetResult5D.create({
+                            bet_number: periodId,
+                            result_a: result.A,
+                            result_b: result.B,
+                            result_c: result.C,
+                            result_d: result.D,
+                            result_e: result.E,
+                            total_sum: result.sum,
+                            duration: duration,
+                            timeline: timeline
+                        });
+                        
+                        console.log(`✅ [5D_PRECALC_EXEC] Successfully saved to database, ID: ${savedResult.bet_id}`);
+                    } catch (createError) {
+                        retryCount++;
+                        console.error(`❌ [5D_PRECALC_EXEC] Attempt ${retryCount} failed:`, createError.message);
+                        
+                        if (retryCount < maxRetries) {
+                            // Wait before retry (exponential backoff)
+                            const waitTime = Math.pow(2, retryCount) * 1000; // 2s, 4s, 8s
+                            console.log(`⏳ [5D_PRECALC_EXEC] Waiting ${waitTime}ms before retry...`);
+                            await new Promise(resolve => setTimeout(resolve, waitTime));
+                        } else {
+                            console.error(`❌ [5D_PRECALC_EXEC] All retry attempts failed`);
+                        }
+                    }
+                }
+            }
+        } catch (dbError) {
+            console.error(`❌ [5D_PRECALC_EXEC] Failed to save to database:`, dbError.message);
+            // Continue even if DB save fails
+        }
+        
         // 5. Publish completion notification (load balancer safe)
         const completionMessage = {
             action: 'precalc_completed',
@@ -242,10 +348,27 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
             totalExposure: Object.values(betPatterns).reduce((sum, val) => sum + parseFloat(val), 0)
         };
         
-        await schedulerPublisher.publish('5d_precalc:completed', JSON.stringify(completionMessage));
+        try {
+            await schedulerPublisher.publish('5d_precalc:completed', JSON.stringify(completionMessage));
+            console.log(`📤 [5D_PRECALC_EXEC] Completion notification published for period ${periodId}`);
+        } catch (pubError) {
+            console.error(`❌ [5D_PRECALC_EXEC] Error publishing completion notification:`, pubError.message);
+            // Continue even if publish fails
+        }
         
         const executionTime = Date.now() - startTime;
         console.log(`✅ [5D_PRECALC_EXEC] Pre-calculation completed for period ${periodId} in ${executionTime}ms (method: ${methodUsed})`);
+        
+        // 🎯 DETAILED LOGGING: Show the final stored result
+        console.log(`🎯 [5D_PRECALC_EXEC] FINAL STORED RESULT FOR PERIOD ${periodId}:`);
+        console.log(`   - Method used: ${methodUsed}`);
+        console.log(`   - Result: A=${result.A}, B=${result.B}, C=${result.C}, D=${result.D}, E=${result.E}`);
+        console.log(`   - Sum: ${result.sum} (${result.sum_size}, ${result.sum_parity})`);
+        console.log(`   - Exposure: ${result.exposure}`);
+        console.log(`   - Combination string: ${result.combination || 'N/A'}`);
+        console.log(`   - Processing time: ${result.processingTime || executionTime}ms`);
+        console.log(`   - Total combinations: ${result.totalCombinations || 'N/A'}`);
+        console.log(`   - Zero exposure count: ${result.zeroExposureCount || 'N/A'}`);
         
         // 6. Update tracking
         fiveDPreCalcTracking.set(`${gameType}_${duration}_${periodId}`, {
@@ -332,8 +455,10 @@ const verifyBetFreezeStatus = async (gameType, duration, periodId) => {
  */
 const getCurrentBetPatterns = async (gameType, duration, periodId, timeline) => {
     try {
-        const exposureKey = `exposure:5d:${duration}:${timeline}:${periodId}`;
+        const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
+        console.log(`🔍 [5D_PRECALC_PATTERNS] Looking for bets in Redis key: ${exposureKey}`);
         const betExposures = await schedulerHelper.hgetall(exposureKey);
+        console.log(`🔍 [5D_PRECALC_PATTERNS] Raw bet exposures from Redis:`, betExposures);
         
         // Convert to bet patterns format
         const betPatterns = {};
@@ -346,6 +471,7 @@ const getCurrentBetPatterns = async (gameType, duration, periodId, timeline) => 
             }
         }
         
+        console.log(`🔍 [5D_PRECALC_PATTERNS] Processed bet patterns:`, betPatterns);
         return betPatterns;
         
     } catch (error) {
@@ -434,42 +560,36 @@ const fiveDPreCalcTick = async (gameType, duration) => {
             if (!fiveDPreCalcTracking.has(trackingKey)) {
                 console.log(`🎯 [5D_PRECALC_TRIGGER] Bet freeze detected for ${key}, period ${period.periodId} (t=${timeRemaining.toFixed(1)}s)`);
                 
-                // 🚀 CRITICAL FIX: DISABLE pre-calculation during critical countdown to prevent WebSocket freezing
-                // The heavy computation was blocking the event loop and causing WebSocket delays
-                console.log(`⚠️ [5D_PRECALC_DISABLED] Pre-calculation DISABLED for ${key} to prevent WebSocket freezing`);
+                // 🚀 ENABLE parallel processing with non-blocking execution
+                console.log(`🚀 [5D_PRECALC_ENABLED] Starting parallel pre-calculation for ${key}`);
                 
-                // Mark as triggered but skip actual calculation
+                // Mark as triggered
                 fiveDPreCalcTracking.set(trackingKey, {
-                    status: 'disabled_for_websocket',
+                    status: 'triggered',
                     triggeredAt: new Date().toISOString(),
                     timeRemaining: timeRemaining,
-                    reason: 'WebSocket performance optimization'
+                    reason: 'Parallel processing enabled'
                 });
                 
-                // 🚀 ALTERNATIVE: Use lightweight result calculation instead of heavy pre-calculation
-                // This will be much faster and won't block the WebSocket
+                // 🚀 Use setImmediate to ensure non-blocking execution
                 setImmediate(async () => {
                     try {
-                        console.log(`🚀 [5D_LIGHTWEIGHT] Starting lightweight result calculation for ${key}`);
+                        console.log(`🚀 [5D_PARALLEL_TRIGGER] Starting parallel pre-calculation for ${key}, period ${period.periodId}`);
                         
-                        // Use a simple, fast result calculation instead of heavy pre-calculation
-                        const { getOptimal5DResultByExposureFast } = require('../services/gameLogicService');
-                        const result = await getOptimal5DResultByExposureFast(duration, period.periodId, 'default');
+                        // Execute parallel pre-calculation
+                        await execute5DPreCalculation(gameType, duration, period.periodId);
                         
-                        if (result) {
-                            // Store lightweight result
-                            const resultKey = `lightweight_5d_result:${gameType}:${duration}:default:${period.periodId}`;
-                            await schedulerHelper.set(resultKey, JSON.stringify({
-                                result: result,
-                                calculatedAt: new Date().toISOString(),
-                                method: 'lightweight',
-                                periodId: period.periodId
-                            }), 'EX', 300);
-                            
-                            console.log(`✅ [5D_LIGHTWEIGHT] Lightweight result calculated and stored for ${key}`);
-                        }
+                        console.log(`✅ [5D_PARALLEL_TRIGGER] Parallel pre-calculation completed for ${key}`);
+                        
                     } catch (error) {
-                        console.error(`❌ [5D_LIGHTWEIGHT] Error in lightweight calculation:`, error.message);
+                        console.error(`❌ [5D_PARALLEL_TRIGGER] Error in parallel pre-calculation:`, error.message);
+                        
+                        // Update tracking on error
+                        fiveDPreCalcTracking.set(trackingKey, {
+                            status: 'error',
+                            error: error.message,
+                            occurredAt: new Date().toISOString()
+                        });
                     }
                 });
             }

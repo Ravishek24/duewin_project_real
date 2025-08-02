@@ -69,7 +69,7 @@ async function test5DProtectionFix() {
         console.log('🧪 [TEST_5D_PROTECTION] Test data cleaned up');
         
         console.log('✅ [TEST_5D_PROTECTION] Test completed successfully!');
-        
+
     } catch (error) {
         console.error('❌ [TEST_5D_PROTECTION] Test failed:', error);
     }

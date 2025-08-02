@@ -119,7 +119,7 @@ async function test5DProtectionSimple() {
         console.log('   - Net savings: 400 - 4 = 396 exposure units!');
         
         console.log('✅ [TEST_5D_PROTECTION_SIMPLE] SUCCESS: Protection logic is working correctly!');
-        
+
     } catch (error) {
         console.error('❌ [TEST_5D_PROTECTION_SIMPLE] Test failed:', error);
     }

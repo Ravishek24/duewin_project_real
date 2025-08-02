@@ -3553,6 +3553,51 @@ async function calculateResultWithVerification(gameType, duration, periodId, tim
 
         let result;
 
+        // 🚀 ENHANCED: Check for pre-calculated result first (for 5D games)
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log('🔍 [5D_PRE_CALC_CHECK] Checking for pre-calculated result...');
+            const preCalculatedResult = await getPreCalculated5DResult(gameType, duration, periodId, timeline);
+            
+            if (preCalculatedResult) {
+                console.log('⚡ [5D_PRE_CALC_SUCCESS] Using pre-calculated result for instant display:', preCalculatedResult);
+                result = preCalculatedResult;
+                
+                // 🗄️ NOTE: Database save is handled by the scheduler, not here
+                console.log('💾 [5D_PRE_CALC] Using pre-calculated result (database save handled by scheduler)');
+                
+                // Get verification only for TrxWix
+                let verification = null;
+                if (gameType.toLowerCase() === 'trx_wix') {
+                    verification = await tronHashService.getResultWithVerification(result, duration);
+                }
+
+                const finalResult = {
+                    success: true,
+                    result: result,
+                    verification: verification ? {
+                        hash: verification.hash,
+                        link: verification.link,
+                        blockNumber: verification.blockNumber,
+                        resultTime: verification.resultTime
+                    } : null,
+                    protectionMode: false,
+                    protectionReason: 'PRE_CALCULATED',
+                    timeline: timeline,
+                    source: 'pre_calculated'
+                };
+
+                console.log('🎲 [RESULT_END] ==========================================');
+                console.log('🎲 [RESULT_END] Final pre-calculated result:', {
+                    result: finalResult.result,
+                    source: finalResult.source
+                });
+
+                return finalResult;
+            } else {
+                console.log('⚠️ [5D_PRE_CALC_MISS] No pre-calculated result found, proceeding with normal calculation');
+            }
+        }
+
         if (shouldUseProtectedResult) {
             console.log('🛡️ [RESULT_PROTECTION] Using PROTECTED result selection');
             console.log('🛡️ [RESULT_PROTECTION] Reason: INSUFFICIENT_USERS');
@@ -3881,7 +3926,8 @@ async function preCalculate5DResult(gameType, duration, periodId, timeline) {
 
         if (result) {
             // Store pre-calculated result in Redis
-            const preCalcKey = `precalc_5d:${gameType}:${duration}:${timeline}:${periodId}`;
+            // 🚀 FIX: Use the correct key pattern that matches the scheduler
+            const preCalcKey = `precalc_5d_result:${gameType}:${duration}:${timeline}:${periodId}`;
             const preCalcData = {
                 result,
                 calculationTime,
@@ -3890,7 +3936,8 @@ async function preCalculate5DResult(gameType, duration, periodId, timeline) {
                 periodId,
                 gameType,
                 duration,
-                timeline
+                timeline,
+                methodUsed: useEnhanced ? 'enhanced_system' : 'current_system'
             };
 
             await getRedisHelper().set(preCalcKey, JSON.stringify(preCalcData));
@@ -3900,6 +3947,7 @@ async function preCalculate5DResult(gameType, duration, periodId, timeline) {
                 periodId,
                 calculationTime,
                 useEnhanced,
+                methodUsed: preCalcData.methodUsed,
                 result: result
             });
 
@@ -3924,19 +3972,41 @@ async function preCalculate5DResult(gameType, duration, periodId, timeline) {
  */
 async function getPreCalculated5DResult(gameType, duration, periodId, timeline) {
     try {
-        const preCalcKey = `precalc_5d:${gameType}:${duration}:${timeline}:${periodId}`;
+        // 🚀 FIX: Use the correct key pattern that matches the scheduler
+        const preCalcKey = `precalc_5d_result:${gameType}:${duration}:${timeline}:${periodId}`;
+        console.log(`🔍 [5D_PRE_CALC] Looking for pre-calculated result with key: ${preCalcKey}`);
+        
         const preCalcData = await getRedisHelper().get(preCalcKey);
 
         if (preCalcData) {
-            const parsed = JSON.parse(preCalcData);
+            console.log(`🔍 [5D_PRE_CALC] Raw data from Redis:`, typeof preCalcData, preCalcData);
+            
+            let parsed;
+            try {
+                // Handle case where data might already be an object
+                if (typeof preCalcData === 'object') {
+                    parsed = preCalcData;
+                } else if (typeof preCalcData === 'string') {
+                    parsed = JSON.parse(preCalcData);
+                } else {
+                    console.error(`❌ [5D_PRE_CALC] Unexpected data type:`, typeof preCalcData);
+                    return null;
+                }
+            } catch (parseError) {
+                console.error(`❌ [5D_PRE_CALC] JSON parse error:`, parseError.message);
+                console.error(`❌ [5D_PRE_CALC] Raw data:`, preCalcData);
+                return null;
+            }
             console.log('✅ [5D_PRE_CALC] Retrieved pre-calculated result:', {
                 periodId,
-                calculationTime: parsed.calculationTime,
-                useEnhanced: parsed.useEnhanced
+                methodUsed: parsed.methodUsed,
+                calculatedAt: parsed.calculatedAt,
+                result: parsed.result
             });
 
             // Clean up the pre-calculated data
             await getRedisHelper().del(preCalcKey);
+            console.log('🧹 [5D_PRE_CALC] Cleaned up pre-calculated data');
 
             return parsed.result;
         } else {
@@ -7312,12 +7382,27 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
             }
         }
 
+        // 🗄️ CRITICAL: Declare resultWithVerification outside try block for catch block access
+        let resultWithVerification = null;
+        let transactionCommitted = false; // Track if transaction was committed
+        let savedResult = null; // Track saved result for return statement
+        let betProcessingTransaction = null; // Separate transaction for bet processing
+        let shouldCommitBetProcessing = false; // Whether to commit bet processing transaction
+
         try {
             // Check existing result
             let existingResult = await checkExistingResult(gameType, duration, periodId, timeline, useTransaction);
             if (existingResult) {
                 console.log(`⚠️ Result exists, returning existing`);
-                if (shouldCommit) await useTransaction.commit();
+                if (shouldCommit) {
+                    try {
+                        await useTransaction.commit();
+                        transactionCommitted = true;
+                        console.log('💾 [PROCESS_RESULT] Transaction committed (existing result found)');
+                    } catch (commitError) {
+                        console.error('❌ [PROCESS_RESULT] Error committing transaction for existing result:', commitError);
+                    }
+                }
                 return {
                     success: true,
                     result: existingResult.dbResult,
@@ -7335,7 +7420,14 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
 
             if (!redisLockAcquired) {
                 console.log(`🔒 Redis lock failed, waiting...`);
-                if (shouldCommit) await useTransaction.rollback();
+                if (shouldCommit) {
+                    try {
+                        await useTransaction.rollback();
+                        console.log('💾 [PROCESS_RESULT] Transaction rolled back (Redis lock failed)');
+                    } catch (rollbackError) {
+                        console.error('❌ [PROCESS_RESULT] Error rolling back transaction for Redis lock failure:', rollbackError);
+                    }
+                }
                 let attempts = 0;
                 while (attempts < 20) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -7359,7 +7451,15 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                 // Final check after Redis lock
                 existingResult = await checkExistingResult(gameType, duration, periodId, timeline, useTransaction);
                 if (existingResult) {
-                    if (shouldCommit) await useTransaction.commit();
+                    if (shouldCommit) {
+                        try {
+                            await useTransaction.commit();
+                            transactionCommitted = true;
+                            console.log('💾 [PROCESS_RESULT] Transaction committed (final check found existing result)');
+                        } catch (commitError) {
+                            console.error('❌ [PROCESS_RESULT] Error committing transaction for final check result:', commitError);
+                        }
+                    }
                     return {
                         success: true,
                         result: existingResult.dbResult,
@@ -7378,18 +7478,36 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                     gameType, duration, periodId, timeline
                 });
 
-                const resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId, timeline);
+                resultWithVerification = await calculateResultWithVerification(gameType, duration, periodId, timeline);
                 const result = resultWithVerification.result;
 
                 console.log('🎯 [PROCESS_RESULT] Result generated successfully:', {
                     result: result,
                     protectionMode: resultWithVerification.protectionMode,
                     protectionReason: resultWithVerification.protectionReason,
-                    verification: resultWithVerification.verification
+                    verification: resultWithVerification.verification,
+                    source: resultWithVerification.source
                 });
+                console.log('🔍 [PROCESS_RESULT] Source check for bet processing:', {
+                    source: resultWithVerification.source,
+                    isPreCalculated: resultWithVerification.source === 'pre_calculated',
+                    gameType: gameType
+                });
+
+                // 🗄️ CRITICAL: Only save to database if NOT using pre-calculated result
+                // Pre-calculated results are already saved by the scheduler
+                if (resultWithVerification.source === 'pre_calculated') {
+                    console.log('💾 [PROCESS_RESULT] Skipping database save - using pre-calculated result (already saved by scheduler)');
+                } else {
+                    console.log('💾 [PROCESS_RESULT] Saving result to database (not pre-calculated)');
 
                 // Save to database
                 let savedResult;
+                    console.log('🔍 [PROCESS_RESULT] About to save to database, transaction state:', {
+                        transactionState: useTransaction?.finished ? 'finished' : 'active',
+                        transactionCommitted
+                    });
+                    
                 if (gameType === 'wingo') {
                     savedResult = await models.BetResultWingo.create({
                         bet_number: periodId,
@@ -7399,6 +7517,10 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         duration: duration,
                         timeline: timeline
                     }, { transaction: useTransaction });
+                        console.log('🔍 [PROCESS_RESULT] After Wingo save, transaction state:', {
+                            transactionState: useTransaction?.finished ? 'finished' : 'active',
+                            transactionCommitted
+                        });
 
                 } else if (gameType === 'fiveD' || gameType === '5d') {
                     savedResult = await models.BetResult5D.create({
@@ -7412,6 +7534,10 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         duration: duration,
                         timeline: timeline
                     }, { transaction: useTransaction });
+                        console.log('🔍 [PROCESS_RESULT] After 5D save, transaction state:', {
+                            transactionState: useTransaction?.finished ? 'finished' : 'active',
+                            transactionCommitted
+                        });
 
                 } else if (gameType === 'k3') {
                     savedResult = await models.BetResultK3.create({
@@ -7454,11 +7580,48 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
                         resultId: savedResult.result_id,
                         timestamp: new Date().toISOString()
                     });
+                    }
                 }
 
                 console.log('🏆 [PROCESS_WINNERS] Processing winning bets...');
+                
+                // 🗄️ CRITICAL FIX: For pre-calculated results, we need a separate transaction for bet processing
+                let betProcessingTransaction = useTransaction;
+                let shouldCommitBetProcessing = shouldCommit;
+                
+                if (resultWithVerification.source === 'pre_calculated') {
+                    // Create a separate transaction for bet processing since the main transaction won't be committed
+                    const db = await ensureDatabaseInitialized();
+                    betProcessingTransaction = await db.transaction();
+                    shouldCommitBetProcessing = true;
+                    console.log('💾 [PROCESS_RESULT] Created separate transaction for bet processing (pre-calculated result)');
+                    console.log('🔍 [BET_PROCESSING_DEBUG] Bet processing transaction created:', {
+                        hasTransaction: !!betProcessingTransaction,
+                        shouldCommit: shouldCommitBetProcessing,
+                        gameType: gameType,
+                        periodId: periodId
+                    });
+                } else {
+                    console.log('🔍 [BET_PROCESSING_DEBUG] Using main transaction for bet processing:', {
+                        source: resultWithVerification.source,
+                        gameType: gameType,
+                        periodId: periodId
+                    });
+                }
+                
                 // Process winners
-                const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, useTransaction);
+                console.log('🔥 [BET_PROCESSING_START] About to call processWinningBetsWithTimeline:', {
+                    gameType: gameType,
+                    duration: duration,
+                    periodId: periodId,
+                    timeline: timeline,
+                    hasResult: !!result,
+                    resultKeys: result ? Object.keys(result) : [],
+                    hasTransaction: !!betProcessingTransaction,
+                    transactionState: betProcessingTransaction?.finished ? 'finished' : 'active'
+                });
+                
+                const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, betProcessingTransaction);
 
                 console.log('🏆 [PROCESS_WINNERS] Winners processed:', {
                     winnerCount: winners.length,
@@ -7467,20 +7630,78 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
 
                 console.log('🔄 [PROCESS_CLEANUP] Resetting period exposure...');
                 // Reset exposure for next period
+                try {
                 await resetPeriodExposure(gameType, duration, periodId);
+                    console.log('✅ [PROCESS_CLEANUP] Period exposure reset successfully');
+                } catch (cleanupError) {
+                    console.error('❌ [PROCESS_CLEANUP] Error resetting period exposure:', cleanupError);
+                    // Don't throw here - this is cleanup and shouldn't fail the entire process
+                }
 
-                if (shouldCommit) await useTransaction.commit();
+                // 🗄️ CRITICAL: Commit bet processing transaction if needed
+                if (shouldCommitBetProcessing) {
+                    try {
+                        await betProcessingTransaction.commit();
+                        console.log('💾 [PROCESS_RESULT] Bet processing transaction committed');
+                    } catch (commitError) {
+                        console.error('❌ [PROCESS_RESULT] Error committing bet processing transaction:', commitError);
+                        // Try to rollback the bet processing transaction
+                        try {
+                            await betProcessingTransaction.rollback();
+                            console.log('💾 [PROCESS_RESULT] Bet processing transaction rolled back after commit error');
+                        } catch (rollbackError) {
+                            console.error('❌ [PROCESS_RESULT] Error rolling back bet processing transaction after commit error:', rollbackError);
+                        }
+                        throw commitError; // Re-throw to be handled by outer catch
+                    }
+                }
+
+                // 🗄️ CRITICAL: Only commit main transaction if we actually used it (not pre-calculated) AND not already committed
+                console.log('🔍 [PROCESS_RESULT] Transaction state check:', {
+                    shouldCommit,
+                    source: resultWithVerification?.source,
+                    transactionCommitted,
+                    transactionState: useTransaction?.finished ? 'finished' : 'active'
+                });
+                
+                // Check if transaction is already finished before trying to commit
+                if (useTransaction?.finished) {
+                    console.log('💾 [PROCESS_RESULT] Skipping main transaction commit (transaction already finished)');
+                } else if (shouldCommit && resultWithVerification.source !== 'pre_calculated' && !transactionCommitted) {
+                    try {
+                        console.log('🔍 [PROCESS_RESULT] About to commit main transaction...');
+                        await useTransaction.commit();
+                        transactionCommitted = true; // Mark transaction as committed
+                        console.log('💾 [PROCESS_RESULT] Main transaction committed (database save performed)');
+                    } catch (commitError) {
+                        console.error('❌ [PROCESS_RESULT] Error committing main transaction:', commitError);
+                        // Try to rollback the main transaction
+                        try {
+                            await useTransaction.rollback();
+                            console.log('💾 [PROCESS_RESULT] Main transaction rolled back after commit error');
+                        } catch (rollbackError) {
+                            console.error('❌ [PROCESS_RESULT] Error rolling back main transaction after commit error:', rollbackError);
+                        }
+                        throw commitError; // Re-throw to be handled by outer catch
+                    }
+                } else if (resultWithVerification.source === 'pre_calculated') {
+                    console.log('💾 [PROCESS_RESULT] Skipping main transaction commit (using pre-calculated result)');
+                } else if (transactionCommitted) {
+                    console.log('💾 [PROCESS_RESULT] Skipping main transaction commit (transaction already committed)');
+                } else {
+                    console.log('💾 [PROCESS_RESULT] Skipping main transaction commit (other reason)');
+                }
 
                 console.log('✅ [PROCESS_COMPLETE] Complete result processing done');
                 console.log('🎲 [PROCESS_END] ==========================================');
 
                 return {
                     success: true,
-                    result: savedResult,
+                    result: savedResult, // Use savedResult directly (will be null for pre-calculated)
                     gameResult: result,
                     winners: winners,
                     timeline: timeline,
-                    source: 'new_result',
+                    source: resultWithVerification.source || 'new_result',
                     protectionMode: resultWithVerification.protectionMode,
                     protectionReason: resultWithVerification.protectionReason
                 };
@@ -7498,7 +7719,33 @@ async function processGameResults(gameType, duration, periodId, timeline = 'defa
             }
 
         } catch (error) {
-            if (shouldCommit) await useTransaction.rollback();
+            console.error(`❌ [PROCESS_RESULT] Error in main try block:`, error);
+            
+            // 🗄️ CRITICAL: Handle bet processing transaction rollback
+            if (shouldCommitBetProcessing && betProcessingTransaction && betProcessingTransaction !== useTransaction) {
+                try {
+                    await betProcessingTransaction.rollback();
+                    console.log('💾 [PROCESS_RESULT] Bet processing transaction rolled back');
+                } catch (rollbackError) {
+                    console.error('❌ [PROCESS_RESULT] Error rolling back bet processing transaction:', rollbackError);
+                }
+            }
+            
+            // 🗄️ CRITICAL: Only rollback main transaction if we actually used it AND it hasn't been committed yet
+            if (useTransaction?.finished) {
+                console.log('💾 [PROCESS_RESULT] Skipping main transaction rollback (transaction already finished)');
+            } else if (shouldCommit && resultWithVerification?.source !== 'pre_calculated' && !transactionCommitted) {
+                try {
+                    await useTransaction.rollback();
+                    console.log('💾 [PROCESS_RESULT] Main transaction rolled back (database save failed)');
+                } catch (rollbackError) {
+                    console.error('❌ [PROCESS_RESULT] Error rolling back main transaction:', rollbackError);
+                }
+            } else if (resultWithVerification?.source === 'pre_calculated') {
+                console.log('💾 [PROCESS_RESULT] Skipping main transaction rollback (using pre-calculated result)');
+            } else if (transactionCommitted) {
+                console.log('💾 [PROCESS_RESULT] Skipping main transaction rollback (transaction already committed)');
+            }
             throw error;
         }
 
@@ -7730,6 +7977,16 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
     try {
         console.log(`🔥🔥🔥 THIS IS THE REAL PAYOUT FUNCTION! 🔥🔥🔥`);
         console.log(`🔄 Processing winning bets for ${gameType} ${duration}s ${timeline} - ${periodId}`);
+        console.log(`🔍 [PROCESS_WINNING_BETS_DEBUG] Function called with:`, {
+            gameType: gameType,
+            duration: duration,
+            periodId: periodId,
+            timeline: timeline,
+            hasResult: !!result,
+            resultKeys: result ? Object.keys(result) : [],
+            hasTransaction: !!transaction,
+            transactionState: transaction?.finished ? 'finished' : 'active'
+        });
 
         const models = await ensureModelsInitialized();
         
@@ -7757,10 +8014,79 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
             const winningBets = [];
 
             // Get bets for this specific timeline
-            const whereCondition = {
+            let whereCondition = {
                 bet_number: periodId,
                 timeline: timeline
             };
+            
+            // CRITICAL FIX: If no bets found with specific timeline, try without timeline filter
+            switch (gameType.toLowerCase()) {
+                case 'wingo':
+                    bets = await models.BetRecordWingo.findAll({
+                        where: whereCondition,
+                        transaction: useTransaction
+                    });
+                    break;
+                case 'trx_wix':
+                    bets = await models.BetRecordTrxWix.findAll({
+                        where: whereCondition,
+                        transaction: useTransaction
+                    });
+                    break;
+                case 'fived':
+                case '5d':
+                    bets = await models.BetRecord5D.findAll({
+                        where: whereCondition,
+                        transaction: useTransaction
+                    });
+                    break;
+                case 'k3':
+                    bets = await models.BetRecordK3.findAll({
+                        where: whereCondition,
+                        transaction: useTransaction
+                    });
+                    break;
+            }
+            
+            // If no bets found with timeline filter, try without timeline
+            if (bets.length === 0) {
+                console.log(`⚠️ [BET_PROCESSING_WARNING] No bets found with timeline ${timeline}, trying without timeline filter...`);
+                whereCondition = {
+                    bet_number: periodId
+                };
+                
+                switch (gameType.toLowerCase()) {
+                    case 'wingo':
+                        bets = await models.BetRecordWingo.findAll({
+                            where: whereCondition,
+                            transaction: useTransaction
+                        });
+                        break;
+                    case 'trx_wix':
+                        bets = await models.BetRecordTrxWix.findAll({
+                            where: whereCondition,
+                            transaction: useTransaction
+                        });
+                        break;
+                    case 'fived':
+                    case '5d':
+                        bets = await models.BetRecord5D.findAll({
+                            where: whereCondition,
+                            transaction: useTransaction
+                        });
+                        break;
+                    case 'k3':
+                        bets = await models.BetRecordK3.findAll({
+                            where: whereCondition,
+                            transaction: useTransaction
+                        });
+                        break;
+                }
+                
+                if (bets.length > 0) {
+                    console.log(`✅ [BET_PROCESSING_SUCCESS] Found ${bets.length} bets without timeline filter`);
+                }
+            }
 
             switch (gameType.toLowerCase()) {
                 case 'wingo':
@@ -7791,6 +8117,52 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
             }
 
             console.log(`📊 Found ${bets.length} bets for ${timeline}`);
+            console.log(`🔍 [BET_STATUS_DEBUG] Bet details:`, bets.map(bet => ({
+                betId: bet.bet_id || bet.id,
+                userId: bet.user_id,
+                status: bet.status,
+                betType: bet.bet_type,
+                betAmount: bet.bet_amount,
+                timeline: bet.timeline
+            })));
+            
+            if (bets.length === 0) {
+                console.log(`⚠️ [BET_PROCESSING_WARNING] No bets found for ${gameType} ${periodId} ${timeline}`);
+                console.log(`🔍 [BET_PROCESSING_DEBUG] Checking if bets exist in database...`);
+                
+                // Let's check if there are any bets at all for this period
+                let allBets = [];
+                switch (gameType.toLowerCase()) {
+                    case 'wingo':
+                        allBets = await models.BetRecordWingo.findAll({
+                            where: { bet_number: periodId }
+                        });
+                        break;
+                    case 'trx_wix':
+                        allBets = await models.BetRecordTrxWix.findAll({
+                            where: { bet_number: periodId }
+                        });
+                        break;
+                    case 'fived':
+                    case '5d':
+                        allBets = await models.BetRecord5D.findAll({
+                            where: { bet_number: periodId }
+                        });
+                        break;
+                    case 'k3':
+                        allBets = await models.BetRecordK3.findAll({
+                            where: { bet_number: periodId }
+                        });
+                        break;
+                }
+                
+                console.log(`🔍 [BET_PROCESSING_DEBUG] Total bets for period ${periodId}: ${allBets.length}`);
+                console.log(`🔍 [BET_PROCESSING_DEBUG] All bet timelines:`, allBets.map(bet => ({
+                    betId: bet.bet_id || bet.id,
+                    timeline: bet.timeline,
+                    status: bet.status
+                })));
+            }
 
             // Process each bet
             for (const bet of bets) {
@@ -7850,6 +8222,7 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                         });
 
                         // Update bet status
+                        console.log(`🔍 [BET_STATUS_UPDATE] Updating bet ${bet.bet_id || bet.id} to 'won' with winnings ₹${winnings}`);
                         await bet.update({
                             status: 'won',
                             payout: winnings,
@@ -7857,6 +8230,7 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                             wallet_balance_after: parseFloat(bet.wallet_balance_before) + winnings,
                             result: JSON.stringify(result)
                         }, { transaction: useTransaction });
+                        console.log(`✅ [BET_STATUS_UPDATE] Bet ${bet.bet_id || bet.id} updated to 'won' successfully`);
 
                         winningBets.push({
                             userId: bet.user_id,
@@ -7889,6 +8263,7 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                         }
 
                         // Mark bet as lost
+                        console.log(`🔍 [BET_STATUS_UPDATE] Updating bet ${bet.bet_id || bet.id} to 'lost'`);
                         await bet.update({
                             status: 'lost',
                             payout: 0,
@@ -7896,6 +8271,7 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                             wallet_balance_after: bet.wallet_balance_before,
                             result: JSON.stringify(result)
                         }, { transaction: useTransaction });
+                        console.log(`✅ [BET_STATUS_UPDATE] Bet ${bet.bet_id || bet.id} updated to 'lost' successfully`);
                     }
                 } catch (betError) {
                     console.error(`❌ Error processing bet ${bet.bet_id}:`, betError);
@@ -7903,8 +8279,17 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                 }
             }
 
-            if (shouldCommit) {
+            if (shouldCommit && useTransaction) {
+                console.log(`🔍 [BET_PROCESSING_COMMIT] Committing bet processing transaction...`);
+                console.log(`🔍 [BET_PROCESSING_COMMIT_DEBUG] Transaction state before commit:`, {
+                    hasTransaction: !!useTransaction,
+                    transactionState: useTransaction?.finished ? 'finished' : 'active',
+                    shouldCommit: shouldCommit
+                });
                 await useTransaction.commit();
+                console.log(`✅ [BET_PROCESSING_COMMIT] Bet processing transaction committed successfully`);
+            } else {
+                console.log(`🔍 [BET_PROCESSING_COMMIT] Skipping commit (shouldCommit: ${shouldCommit}, hasTransaction: ${!!useTransaction})`);
             }
 
             // Add K3 exposure summary logging
@@ -7929,7 +8314,7 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
             return winningBets;
 
         } catch (error) {
-            if (shouldCommit) {
+            if (shouldCommit && useTransaction) {
                 await useTransaction.rollback();
             }
             throw error;
@@ -8333,6 +8718,8 @@ const processBet = async (betData) => {
                     betRecord = await models.BetRecordK3.create(betRecordData, { transaction: t });
                     break;
                 case 'fiveD':
+                case '5d':
+                case 'fived':
                     betRecord = await models.BetRecord5D.create(betRecordData, { transaction: t });
                     break;
                 default:
@@ -9527,65 +9914,165 @@ async function getPreCalculated5DResultAtZero(gameType, duration, periodId, time
  * This uses pre-calculated results from Redis for instant delivery
  */
 async function processGameResultsWithPreCalc(gameType, duration, periodId, timeline = 'default', transaction = null) {
+    console.log('🎯 [PROCESS_GAME_RESULTS_WITH_PRE_CALC] Function called with:', {
+        gameType: gameType,
+        duration: duration,
+        periodId: periodId,
+        timeline: timeline,
+        hasTransaction: !!transaction
+    });
+    
     // For 5D games, try to use pre-calculated result first
     if (['5d', 'fived'].includes(gameType.toLowerCase())) {
         console.log('🎯 [5D_PROCESS] Attempting to use pre-calculated result for 5D');
         
+        console.log('🔍 [5D_PROCESS] Calling getPreCalculated5DResultAtZero...');
         const preCalcResult = await getPreCalculated5DResultAtZero(gameType, duration, periodId, timeline);
+        console.log('🔍 [5D_PROCESS] getPreCalculated5DResultAtZero returned:', {
+            hasResult: !!preCalcResult,
+            resultKeys: preCalcResult ? Object.keys(preCalcResult) : [],
+            result: preCalcResult?.result
+        });
         
         if (preCalcResult) {
             console.log('⚡ [5D_PROCESS] Using pre-calculated result for instant delivery!');
             
             const result = preCalcResult.result;
             
-            // Return result instantly from Redis (no database operations)
-            console.log('🚀 [5D_PROCESS] Delivering result instantly from Redis');
+            // Process database operations synchronously to ensure bet processing happens
+            console.log('🔄 [5D_PROCESS] Processing database operations synchronously...');
             
-            // Process database operations in background (non-blocking)
-            setImmediate(async () => {
+            try {
+                // Save result to database
+                const models = await ensureModelsInitialized();
+                const db = await ensureDatabaseInitialized();
+                const bgTransaction = await db.transaction();
+                
+                // Check if result already exists
+                console.log('🔍 [5D_PROCESS] Checking for existing result in database...');
+                const existingResult = await models.BetResult5D.findOne({
+                    where: { bet_number: periodId }
+                });
+                
+                if (!existingResult) {
+                    console.log('💾 [5D_PROCESS] Saving result to database...');
+                    await models.BetResult5D.create({
+                        bet_number: periodId,
+                        result_a: result.A,
+                        result_b: result.B,
+                        result_c: result.C,
+                        result_d: result.D,
+                        result_e: result.E,
+                        total_sum: result.sum,
+                        created_at: new Date(),
+                        updated_at: new Date()
+                    }, { transaction: bgTransaction });
+                    console.log('✅ [5D_PROCESS] Result saved to database');
+                } else {
+                    console.log('✅ [5D_PROCESS] Result already exists in database');
+                }
+                
+                // Process winning bets synchronously using proper transaction flow
+                console.log('🔥 [5D_PROCESS] About to process winning bets synchronously...');
+                
+                // Create separate bet processing transaction like other games
+                const betProcessingTransaction = await db.transaction();
+                console.log('🔍 [5D_PROCESS] Created separate bet processing transaction');
+                
+                let winners = []; // Declare winners outside try block
+                
                 try {
-                    console.log('🔄 [5D_PROCESS_BG] Processing database operations in background...');
+                    winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, betProcessingTransaction);
                     
-                    // Save result to database
-                    const models = await ensureModelsInitialized();
-                    const db = await ensureDatabaseInitialized();
-                    const bgTransaction = await db.transaction();
-                    
-                    // Check if result already exists
-                    const existingResult = await models.BetResultFiveD.findOne({
-                        where: { bet_number: periodId }
+                    // Log winners like K3 does
+                    console.log('🏆 [5D_PROCESS_WINNERS] Winners processed:', {
+                        winnerCount: winners.length,
+                        winners: winners.map(w => ({ userId: w.userId, winnings: w.winnings }))
                     });
                     
-                    if (!existingResult) {
-                        await models.BetResultFiveD.create({
-                            bet_number: periodId,
-                            result: JSON.stringify(result),
-                            created_at: new Date(),
-                            updated_at: new Date()
-                        }, { transaction: bgTransaction });
+                    // Cleanup like K3 does
+                    console.log('🔄 [5D_PROCESS_CLEANUP] Resetting period exposure...');
+                    try {
+                        await resetPeriodExposure(gameType, duration, periodId);
+                        console.log('✅ [5D_PROCESS_CLEANUP] Period exposure reset successfully');
+                    } catch (cleanupError) {
+                        console.error('❌ [5D_PROCESS_CLEANUP] Error resetting period exposure:', cleanupError);
+                        // Don't throw here - this is cleanup and shouldn't fail the entire process
                     }
                     
-                    // Process winning bets
-                    await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, bgTransaction);
-                    await bgTransaction.commit();
+                    // Commit bet processing transaction
+                    await betProcessingTransaction.commit();
+                    console.log('✅ [5D_PROCESS] Bet processing transaction committed successfully');
                     
-                    console.log('✅ [5D_PROCESS_BG] Background database operations completed');
-                } catch (bgError) {
-                    console.error('❌ [5D_PROCESS_BG] Background database operations failed:', bgError.message);
+                    // CRITICAL FIX: Ensure bet processing actually happened
+                    console.log('🔍 [5D_PROCESS] Verifying bet processing...');
+                    const processedBets = await models.BetRecord5D.findAll({
+                        where: {
+                            bet_number: periodId,
+                            status: ['won', 'lost']
+                        }
+                    });
+                    console.log(`🔍 [5D_PROCESS] Found ${processedBets.length} processed bets for period ${periodId}`);
+                    
+                } catch (betProcessingError) {
+                    console.error('❌ [5D_PROCESS] Bet processing failed:', betProcessingError.message);
+                    await betProcessingTransaction.rollback();
+                    throw betProcessingError;
                 }
-            });
+                
+                await bgTransaction.commit();
+                
+                console.log('✅ [5D_PROCESS] Database operations completed with winners:', winners.length);
 
+                return {
+                    success: true,
+                    result: result,
+                    gameResult: result,
+                    winners: winners, // Now populated with actual winners
+                    timeline: timeline,
+                    source: 'pre_calculated_instant'
+                };
+            } catch (bgError) {
+                console.error('❌ [5D_PROCESS] Database operations failed:', bgError.message);
+                throw bgError; // Re-throw to be handled by scheduler
+            }
+            
+        } else {
+            console.log('⚠️ [5D_PROCESS] No pre-calculated result available, falling back to real-time calculation');
+        }
+    }
+
+    // CRITICAL FIX: Always ensure bet processing happens for 5D games
+    if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+        console.log('🔄 [5D_PROCESS] Ensuring bet processing for 5D game...');
+        
+        // Try to get existing result first
+        const models = await ensureModelsInitialized();
+        const existingResult = await models.BetResult5D.findOne({
+            where: { bet_number: periodId }
+        });
+        
+        if (existingResult) {
+            console.log('🔄 [5D_PROCESS] Found existing result, processing bets...');
+            const result = {
+                A: existingResult.result_a,
+                B: existingResult.result_b,
+                C: existingResult.result_c,
+                D: existingResult.result_d,
+                E: existingResult.result_e,
+                sum: existingResult.total_sum
+            };
+            
+            const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, transaction);
+            
             return {
                 success: true,
                 result: result,
                 gameResult: result,
-                winners: [], // Will be populated by background process
+                winners: winners,
                 timeline: timeline,
-                source: 'pre_calculated_instant'
+                source: 'existing_result_processed'
             };
-            
-        } else {
-            console.log('⚠️ [5D_PROCESS] No pre-calculated result available, falling back to real-time calculation');
         }
     }
 

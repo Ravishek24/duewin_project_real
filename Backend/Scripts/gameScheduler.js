@@ -46,7 +46,7 @@ const GAME_CONFIGS = {
  */
 const setupSchedulerCommunication = async () => {
     try {
-        //console.log('🔄 [SCHEDULER_COMM] Setting up multi-instance communication...');
+        ////console.log('🔄 [SCHEDULER_COMM] Setting up multi-instance communication...');
         
         // Create dedicated publisher using unifiedRedis
         schedulerPublisher = await unifiedRedis.createConnection({
@@ -86,7 +86,7 @@ const setupSchedulerCommunication = async () => {
             });
         });
         
-        //console.log('✅ [SCHEDULER_COMM] Publisher created and connected');
+        ////console.log('✅ [SCHEDULER_COMM] Publisher created and connected');
         
         // Listen for period requests from WebSocket instances
         schedulerSubscriber = unifiedRedis.getConnection('subscriber');
@@ -95,7 +95,7 @@ const setupSchedulerCommunication = async () => {
         schedulerSubscriber.on('message', async (channel, message) => {
             try {
                 const request = JSON.parse(message);
-                //console.log(`📥 [SCHEDULER_COMM] Received period request:`, request);
+                ////console.log(`📥 [SCHEDULER_COMM] Received period request:`, request);
                 
                 if (request.action === 'request_period') {
                     await handlePeriodRequest(request.gameType, request.duration);
@@ -105,7 +105,7 @@ const setupSchedulerCommunication = async () => {
             }
         });
         
-        //console.log('✅ [SCHEDULER_COMM] Multi-instance communication setup completed');
+        ////console.log('✅ [SCHEDULER_COMM] Multi-instance communication setup completed');
         
     } catch (error) {
         console.error('❌ [SCHEDULER_COMM] Error setting up communication:', error);
@@ -118,7 +118,7 @@ const setupSchedulerCommunication = async () => {
  */
 const handlePeriodRequest = async (gameType, duration) => {
     try {
-        console.log(`📋 [PERIOD_REQUEST] Handling period request for ${gameType}_${duration} at ${new Date().toISOString()}`);
+        //console.log(`📋 [PERIOD_REQUEST] Handling period request for ${gameType}_${duration} at ${new Date().toISOString()}`);
         
         // Get current period and ensure it's broadcasted
         const currentPeriod = await periodService.getCurrentPeriod(gameType, duration);
@@ -132,9 +132,9 @@ const handlePeriodRequest = async (gameType, duration) => {
             
             if (isNewPeriod) {
                 await broadcastPeriodStart(gameType, duration, currentPeriod);
-                console.log(`✅ [PERIOD_REQUEST] Broadcasted NEW period ${currentPeriod.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
+                //console.log(`✅ [PERIOD_REQUEST] Broadcasted NEW period ${currentPeriod.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
             } else {
-                console.log(`⚠️ [PERIOD_REQUEST] Skipping broadcast for EXISTING period ${currentPeriod.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
+                //console.log(`⚠️ [PERIOD_REQUEST] Skipping broadcast for EXISTING period ${currentPeriod.periodId} with ${timeRemaining.toFixed(3)}s remaining`);
             }
         } else {
             console.warn(`⚠️ [PERIOD_REQUEST] No active period found for ${gameType}_${duration}`);
@@ -179,7 +179,7 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
         // Check if already sent within last 10 seconds
         const lastSent = global.schedulerSequencer.sentEvents.get(exactKey);
         if (lastSent && Date.now() - lastSent < 10000) {
-            console.log(`⏭️ [SCHEDULER_DUPLICATE_START] Already sent within 10s: ${periodId} (${Date.now() - lastSent}ms ago)`);
+            //console.log(`⏭️ [SCHEDULER_DUPLICATE_START] Already sent within 10s: ${periodId} (${Date.now() - lastSent}ms ago)`);
             return;
         }
         
@@ -193,7 +193,7 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
         const isNewPeriod = timeRemaining >= (duration - 3); // Allow 3 second tolerance
         
         if (!isNewPeriod) {
-            console.log(`⚠️ [SCHEDULER_START_SKIP] Period ${periodId} has only ${timeRemaining.toFixed(1)}s remaining, skipping`);
+            //console.log(`⚠️ [SCHEDULER_START_SKIP] Period ${periodId} has only ${timeRemaining.toFixed(1)}s remaining, skipping`);
             return;
         }
         
@@ -208,7 +208,7 @@ const broadcastPeriodStart = async (gameType, duration, periodData) => {
             source: 'game_scheduler_start'
         };
         
-        console.log(`📤 [SCHEDULER_START] Broadcasting NEW period: ${periodId} with ${timeRemaining.toFixed(1)}s remaining`);
+        //console.log(`📤 [SCHEDULER_START] Broadcasting NEW period: ${periodId} with ${timeRemaining.toFixed(1)}s remaining`);
         
         // CRITICAL FIX: Add to broadcast queue to prevent rapid duplicates
         const queueKey = `${gameType}_${duration}`;
@@ -273,7 +273,7 @@ const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
         const lastSent = global.schedulerSequencer.sentEvents.get(exactKey);
         
         if (lastSent && Date.now() - lastSent < 15000) { // 15 second window
-            console.log(`⏭️ [SCHEDULER_DUPLICATE_RESULT] Already sent within 15s: ${periodId} (${Date.now() - lastSent}ms ago)`);
+            //console.log(`⏭️ [SCHEDULER_DUPLICATE_RESULT] Already sent within 15s: ${periodId} (${Date.now() - lastSent}ms ago)`);
             return;
         }
         
@@ -286,7 +286,7 @@ const broadcastPeriodResult = async (gameType, duration, periodId, result) => {
             source: 'game_scheduler_result'
         };
         
-        console.log(`📤 [SCHEDULER_RESULT] Broadcasting result for: ${periodId}`);
+        //console.log(`📤 [SCHEDULER_RESULT] Broadcasting result for: ${periodId}`);
         
         // Broadcast to channels
         const channels = [
@@ -338,7 +338,7 @@ const broadcastBettingClosed = async (gameType, duration, periodId) => {
         const exactKey = `betting_${gameType}_${duration}_${periodId}`;
         
         if (global.schedulerSequencer.sentEvents.has(exactKey)) {
-            console.log(`⏭️ [SCHEDULER_DUPLICATE_BETTING] Already sent bettingClosed for: ${periodId}`);
+            //console.log(`⏭️ [SCHEDULER_DUPLICATE_BETTING] Already sent bettingClosed for: ${periodId}`);
             return;
         }
         
@@ -351,7 +351,7 @@ const broadcastBettingClosed = async (gameType, duration, periodId) => {
             source: 'game_scheduler_betting'
         };
         
-        console.log(`📤 [SCHEDULER_BETTING] Broadcasting betting closed: ${periodId}`);
+        //console.log(`📤 [SCHEDULER_BETTING] Broadcasting betting closed: ${periodId}`);
         
         // Broadcast to channels
         const channels = [
@@ -394,7 +394,7 @@ const broadcastPeriodError = async (gameType, duration, periodId, error) => {
             source: 'game_scheduler_instance'
         };
         
-        //console.log(`📤 [PERIOD_ERROR] Broadcasting period error: ${periodId}`);
+        ////console.log(`📤 [PERIOD_ERROR] Broadcasting period error: ${periodId}`);
         
         // Broadcast to all possible channels
         const channels = [
@@ -406,7 +406,7 @@ const broadcastPeriodError = async (gameType, duration, periodId, error) => {
         for (const channel of channels) {
             if (schedulerPublisher) {
                 await schedulerPublisher.publish(channel, JSON.stringify(broadcastData));
-                //console.log(`✅ [PERIOD_ERROR] Published to ${channel}`);
+                ////console.log(`✅ [PERIOD_ERROR] Published to ${channel}`);
             }
         }
         
@@ -431,7 +431,7 @@ const startSchedulerHealthBroadcast = () => {
             
             if (schedulerPublisher) {
                 await schedulerPublisher.publish('scheduler:heartbeat', JSON.stringify(healthData));
-                //console.log(`💓 [SCHEDULER_HEALTH] Heartbeat sent`);
+                ////console.log(`💓 [SCHEDULER_HEALTH] Heartbeat sent`);
             }
             
         } catch (error) {
@@ -512,14 +512,14 @@ const startDatabaseHealthMonitoring = () => {
             console.warn('⚠️ Database health check failed, attempting reconnection...');
             try {
                 await connectDB();
-                //console.log('✅ Database reconnection successful');
+                ////console.log('✅ Database reconnection successful');
             } catch (error) {
                 console.error('❌ Database reconnection failed:', error.message);
             }
         }
     }, 30000); // Check every 30 seconds
     
-    //console.log('🔍 Database health monitoring started');
+    ////console.log('🔍 Database health monitoring started');
 };
 
 /**
@@ -527,33 +527,33 @@ const startDatabaseHealthMonitoring = () => {
  */
 async function initialize() {
     try {
-        //console.log('DEBUG: initialize() - start');
+        ////console.log('DEBUG: initialize() - start');
         await connectDB();
-        //console.log('DEBUG: initialize() - after connectDB');
+        ////console.log('DEBUG: initialize() - after connectDB');
         const { sequelize: seq } = require('../config/db');
         sequelize = seq;
         await sequelize.authenticate();
-        //console.log('DEBUG: initialize() - after sequelize.authenticate');
+        ////console.log('DEBUG: initialize() - after sequelize.authenticate');
         const modelsModule = require('../models');
         await new Promise(resolve => setTimeout(resolve, 1000));
-        //console.log('DEBUG: initialize() - after setTimeout');
+        ////console.log('DEBUG: initialize() - after setTimeout');
         models = await modelsModule.initializeModels();
-        //console.log('DEBUG: initialize() - after initializeModels');
+        ////console.log('DEBUG: initialize() - after initializeModels');
         if (!models) {
             throw new Error('Models initialization failed - no models returned');
         }
         periodService = require('../services/periodService');
         gameLogicService = require('../services/gameLogicService');
         await periodService.ensureModelsLoaded();
-        //console.log('DEBUG: initialize() - after ensureModelsLoaded');
+        ////console.log('DEBUG: initialize() - after ensureModelsLoaded');
         
         try {
             tronHashService = require('../services/tronHashService');
             await tronHashService.startHashCollection();
-            //console.log('DEBUG: initialize() - after tronHashService.startHashCollection');
+            ////console.log('DEBUG: initialize() - after tronHashService.startHashCollection');
         } catch (error) {
             console.error('❌ Error initializing TRON hash collection:', error);
-            //console.log('⚠️ Game results will use fallback hash generation');
+            ////console.log('⚠️ Game results will use fallback hash generation');
         }
         
         // Initialize schedulerHelper if not already done
@@ -563,7 +563,7 @@ async function initialize() {
         
         if (!schedulerPublisher) {
             schedulerPublisher = unifiedRedis.getConnection('publisher');
-            //console.log('🔄 Waiting for Redis to be ready...');
+            ////console.log('🔄 Waiting for Redis to be ready...');
             await new Promise((resolve) => {
                 if (schedulerPublisher.status === 'ready') {
                     resolve();
@@ -571,22 +571,22 @@ async function initialize() {
                     schedulerPublisher.on('ready', resolve);
                 }
             });
-            //console.log('DEBUG: initialize() - after redis ready');
+            ////console.log('DEBUG: initialize() - after redis ready');
         }
-        //console.log('✅ Redis connection verified for game scheduler');
+        ////console.log('✅ Redis connection verified for game scheduler');
         
         // CRITICAL FIX: Setup multi-instance communication
         await setupSchedulerCommunication();
-        //console.log('DEBUG: initialize() - after setupSchedulerCommunication');
+        ////console.log('DEBUG: initialize() - after setupSchedulerCommunication');
         
         startDatabaseHealthMonitoring();
-        //console.log('DEBUG: initialize() - after startDatabaseHealthMonitoring');
+        ////console.log('DEBUG: initialize() - after startDatabaseHealthMonitoring');
         
         // Start health broadcast
         startSchedulerHealthBroadcast();
-        //console.log('DEBUG: initialize() - after startSchedulerHealthBroadcast');
+        ////console.log('DEBUG: initialize() - after startSchedulerHealthBroadcast');
         
-        //console.log('✅ GAME SCHEDULER initialization completed - MULTI-INSTANCE SETUP');
+        ////console.log('✅ GAME SCHEDULER initialization completed - MULTI-INSTANCE SETUP');
     } catch (error) {
         console.error('❌ Failed to initialize game scheduler:', error);
         process.exit(1);
@@ -598,19 +598,19 @@ async function initialize() {
  */
 const startSchedulerGameTicks = async () => {
     try {
-        //console.log('DEBUG: Entered startSchedulerGameTicks');
-        //console.log('🕐 Starting SCHEDULER DURATION-BASED game tick system...');
+        ////console.log('DEBUG: Entered startSchedulerGameTicks');
+        ////console.log('🕐 Starting SCHEDULER DURATION-BASED game tick system...');
         
         for (const [gameType, durations] of Object.entries(GAME_CONFIGS)) {
-            //console.log(`DEBUG: Looping gameType=${gameType}, durations=${JSON.stringify(durations)}`);
+            ////console.log(`DEBUG: Looping gameType=${gameType}, durations=${JSON.stringify(durations)}`);
             for (const duration of durations) {
                 try {
                     const key = `${gameType}_${duration}`;
-                    //console.log(`DEBUG: Initializing scheduler for ${key}`);
+                    ////console.log(`DEBUG: Initializing scheduler for ${key}`);
                     
                     // FIXED: Get current period using duration-based calculation
                     const currentPeriod = await periodService.getCurrentPeriod(gameType, duration);
-                    //console.log(`DEBUG: currentPeriod for ${key}:`, currentPeriod);
+                    ////console.log(`DEBUG: currentPeriod for ${key}:`, currentPeriod);
                     
                     if (currentPeriod) {
                         // FIXED: Validate that period hasn't ended
@@ -629,15 +629,15 @@ const startSchedulerGameTicks = async () => {
                             const isNewPeriod = timeRemaining >= (duration - 1);
                             if (isNewPeriod) {
                                 await broadcastPeriodStart(gameType, duration, currentPeriod);
-                                console.log(`📅 SCHEDULER loaded [${gameType}|${duration}s]: NEW Period ${currentPeriod.periodId} (${Math.ceil(timeRemaining)}s remaining)`);
+                                //console.log(`📅 SCHEDULER loaded [${gameType}|${duration}s]: NEW Period ${currentPeriod.periodId} (${Math.ceil(timeRemaining)}s remaining)`);
                             } else {
-                                console.log(`📅 SCHEDULER loaded [${gameType}|${duration}s]: EXISTING Period ${currentPeriod.periodId} (${Math.ceil(timeRemaining)}s remaining) - skipping broadcast`);
+                                //console.log(`📅 SCHEDULER loaded [${gameType}|${duration}s]: EXISTING Period ${currentPeriod.periodId} (${Math.ceil(timeRemaining)}s remaining) - skipping broadcast`);
                             }
                         } else {
                             console.warn(`⚠️ Period ${currentPeriod.periodId} has already ended, getting next period`);
                             // Get next period
                             const nextPeriod = await getNextPeriod(gameType, duration, currentPeriod.periodId);
-                            //console.log(`DEBUG: nextPeriod for ${key}:`, nextPeriod);
+                            ////console.log(`DEBUG: nextPeriod for ${key}:`, nextPeriod);
                             if (nextPeriod) {
                                 schedulerCurrentPeriods.set(key, nextPeriod);
                                 await storePeriodInRedisForWebSocket(gameType, duration, nextPeriod);
@@ -651,7 +651,7 @@ const startSchedulerGameTicks = async () => {
                     }
                     
                     startSchedulerTicksForGame(gameType, duration);
-                    //console.log(`DEBUG: Called startSchedulerTicksForGame for ${key}`);
+                    ////console.log(`DEBUG: Called startSchedulerTicksForGame for ${key}`);
                     
                 } catch (error) {
                     console.error(`❌ Error initializing scheduler for [${gameType}|${duration}s]:`, error.message);
@@ -660,16 +660,16 @@ const startSchedulerGameTicks = async () => {
         }
         
         schedulerGameTicksStarted = true;
-        //console.log('✅ SCHEDULER DURATION-BASED game tick system started');
+        ////console.log('✅ SCHEDULER DURATION-BASED game tick system started');
         
-        //console.log('\n📋 SCHEDULER ACTIVE COMBINATIONS:');
+        ////console.log('\n📋 SCHEDULER ACTIVE COMBINATIONS:');
         Object.entries(GAME_CONFIGS).forEach(([gameType, durations]) => {
             durations.forEach(duration => {
-                //console.log(`   - ${gameType}_${duration}`);
+                ////console.log(`   - ${gameType}_${duration}`);
             });
         });
-        //console.log(`📊 Total combinations: ${Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0)}\n`);
-        //console.log('DEBUG: Exiting startSchedulerGameTicks');
+        ////console.log(`📊 Total combinations: ${Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0)}\n`);
+        ////console.log('DEBUG: Exiting startSchedulerGameTicks');
         
     } catch (error) {
         console.error('❌ Error starting scheduler game ticks:', error);
@@ -692,7 +692,7 @@ const startSchedulerTicksForGame = (gameType, duration) => {
     }, 1000);
     
     schedulerGameIntervals.set(key, intervalId);
-    //console.log(`⏰ SCHEDULER started ticks for ${gameType} ${duration}s`);
+    ////console.log(`⏰ SCHEDULER started ticks for ${gameType} ${duration}s`);
 };
 
 /**
@@ -711,7 +711,7 @@ const cleanupSchedulerTracking = () => {
     }
     
     if (cleaned > 0) {
-        console.log(`🧹 [SCHEDULER_CLEANUP] Cleaned ${cleaned} tracking entries`);
+        //console.log(`🧹 [SCHEDULER_CLEANUP] Cleaned ${cleaned} tracking entries`);
     }
 };
 
@@ -752,7 +752,7 @@ const cleanupSchedulerSequencer = () => {
     }
     
     if (cleaned > 0) {
-        console.log(`🧹 [SCHEDULER_CLEANUP] Cleaned ${cleaned} tracking entries`);
+        //console.log(`🧹 [SCHEDULER_CLEANUP] Cleaned ${cleaned} tracking entries`);
     }
     
     const stats = {
@@ -761,7 +761,7 @@ const cleanupSchedulerSequencer = () => {
         broadcastQueue: global.schedulerSequencer.broadcastQueue.size
     };
     
-    console.log(`📊 [SCHEDULER_STATS]`, stats);
+    //console.log(`📊 [SCHEDULER_STATS]`, stats);
 };
 
 // Run cleanup every 2 minutes
@@ -778,6 +778,11 @@ const schedulerGameTick = async (gameType, duration) => {
         const now = new Date();
         const key = `${gameType}_${duration}`;
         
+        // Add debugging for 5D games
+        if (gameType.toLowerCase() === 'fived') {
+            console.log(`🔍 [SCHEDULER_5D_TICK] Processing tick for ${gameType}_${duration} at ${now.toISOString()}`);
+        }
+        
         // Get current period
         let currentPeriodInfo = await periodService.getCurrentPeriod(gameType, duration);
         
@@ -788,9 +793,26 @@ const schedulerGameTick = async (gameType, duration) => {
         // Get cached period
         const cachedCurrent = schedulerCurrentPeriods.get(key);
         
+        // Add debugging for 5D period info
+        if (gameType.toLowerCase() === 'fived') {
+            console.log(`📊 [SCHEDULER_5D_PERIOD_INFO] ${gameType}_${duration}:`);
+            console.log(`   - Current period: ${currentPeriodInfo.periodId}`);
+            console.log(`   - Cached period: ${cachedCurrent?.periodId || 'NONE'}`);
+            console.log(`   - Periods match: ${cachedCurrent?.periodId === currentPeriodInfo.periodId}`);
+            console.log(`   - Has cached: ${!!cachedCurrent}`);
+        }
+        
         // Handle period transition
         if (!cachedCurrent || cachedCurrent.periodId !== currentPeriodInfo.periodId) {
-            console.log(`⚡ [SCHEDULER_TRANSITION] ${key}: ${cachedCurrent?.periodId || 'NONE'} → ${currentPeriodInfo.periodId}`);
+            //console.log(`⚡ [SCHEDULER_TRANSITION] ${key}: ${cachedCurrent?.periodId || 'NONE'} → ${currentPeriodInfo.periodId}`);
+            
+            // Add debugging for 5D period transitions
+            if (gameType.toLowerCase() === 'fived') {
+                console.log(`🔄 [SCHEDULER_5D_TRANSITION] Period transition detected for ${gameType}_${duration}:`);
+                console.log(`   - Cached period: ${cachedCurrent?.periodId || 'NONE'}`);
+                console.log(`   - Current period: ${currentPeriodInfo.periodId}`);
+                console.log(`   - Has cached current: ${!!cachedCurrent}`);
+            }
             
             // Process previous period if exists
             if (cachedCurrent && cachedCurrent.periodId !== currentPeriodInfo.periodId) {
@@ -798,9 +820,25 @@ const schedulerGameTick = async (gameType, duration) => {
                     const prevPeriodEndTime = calculatePeriodEndTime(cachedCurrent.periodId, duration);
                     const timeSincePrevEnd = (now - prevPeriodEndTime) / 1000;
                     
+                    // Add debugging for 5D timing
+                    if (gameType.toLowerCase() === 'fived') {
+                        console.log(`🔍 [SCHEDULER_5D_TIMING] Period transition detected for ${gameType}_${duration}:`);
+                        console.log(`   - Previous period: ${cachedCurrent.periodId}`);
+                        console.log(`   - New period: ${currentPeriodInfo.periodId}`);
+                        console.log(`   - Previous end time: ${prevPeriodEndTime.toISOString()}`);
+                        console.log(`   - Current time: ${now.toISOString()}`);
+                        console.log(`   - Time since prev end: ${timeSincePrevEnd.toFixed(2)}s`);
+                        console.log(`   - Timing valid: ${timeSincePrevEnd >= -2 && timeSincePrevEnd <= 60}`);
+                    }
+                    
                     if (timeSincePrevEnd >= -2 && timeSincePrevEnd <= 60) {
-                        console.log(`✅ [SCHEDULER] Processing previous period ${cachedCurrent.periodId}`);
+                        //console.log(`✅ [SCHEDULER] Processing previous period ${cachedCurrent.periodId}`);
+                        if (gameType.toLowerCase() === 'fived') {
+                            console.log(`🎯 [SCHEDULER_5D_PERIOD] About to process period end for ${gameType}_${duration}: ${cachedCurrent.periodId}`);
+                        }
                         await processSchedulerPeriodEnd(gameType, duration, cachedCurrent.periodId);
+                    } else if (gameType.toLowerCase() === 'fived') {
+                        console.log(`⚠️ [SCHEDULER_5D_TIMING] Skipping 5D period processing - timing outside valid range: ${timeSincePrevEnd.toFixed(2)}s`);
                     }
                 } catch (timingError) {
                     console.error(`❌ [SCHEDULER] Error validating timing:`, timingError.message);
@@ -818,10 +856,10 @@ const schedulerGameTick = async (gameType, duration) => {
             const timeRemaining = Math.max(0, (endTime - now) / 1000);
             
             if (timeRemaining >= (duration - 2)) { // Must have at least duration-2 seconds remaining
-                console.log(`📢 [SCHEDULER] Broadcasting new period ${currentPeriodInfo.periodId} with ${timeRemaining.toFixed(1)}s`);
+                //console.log(`📢 [SCHEDULER] Broadcasting new period ${currentPeriodInfo.periodId} with ${timeRemaining.toFixed(1)}s`);
                 await broadcastPeriodStart(gameType, duration, currentPeriodInfo);
             } else {
-                console.log(`⏸️ [SCHEDULER] Not broadcasting period ${currentPeriodInfo.periodId}, only ${timeRemaining.toFixed(1)}s remaining`);
+                //console.log(`⏸️ [SCHEDULER] Not broadcasting period ${currentPeriodInfo.periodId}, only ${timeRemaining.toFixed(1)}s remaining`);
             }
         }
         
@@ -845,7 +883,7 @@ const schedulerGameTick = async (gameType, duration) => {
                 const lastBettingBroadcast = global.schedulerSequencer.sentEvents.get(bettingKey);
                 
                 if (!lastBettingBroadcast) {
-                    console.log(`🔒 [SCHEDULER] Sending betting closed for ${currentPeriod.periodId} at ${bettingTime}s remaining`);
+                    //console.log(`🔒 [SCHEDULER] Sending betting closed for ${currentPeriod.periodId} at ${bettingTime}s remaining`);
                     await broadcastBettingClosed(gameType, duration, currentPeriod.periodId);
                 }
             }
@@ -923,21 +961,21 @@ const storePeriodInRedisForWebSocket = async (gameType, duration, periodInfo) =>
         };
         
         // CRITICAL FIX: Add extensive logging to debug JSON parsing issue
-        console.log(`🔍 [SCHEDULER_STORE_DEBUG] ${gameType}_${duration}: About to store in Redis`);
-        console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodInfo type:`, typeof periodInfo);
-        console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodInfo keys:`, Object.keys(periodInfo || {}));
-        console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodData:`, JSON.stringify(periodData, null, 2));
+        //console.log(`🔍 [SCHEDULER_STORE_DEBUG] ${gameType}_${duration}: About to store in Redis`);
+        //console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodInfo type:`, typeof periodInfo);
+        //console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodInfo keys:`, Object.keys(periodInfo || {}));
+        //console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodData:`, JSON.stringify(periodData, null, 2));
         
         const redisConnection = schedulerPublisher || schedulerHelper;
         if (redisConnection) {
             try {
                 const jsonString = JSON.stringify(periodData);
-                console.log(`🔍 [SCHEDULER_STORE_DEBUG] JSON string to store:`, jsonString);
+                //console.log(`🔍 [SCHEDULER_STORE_DEBUG] JSON string to store:`, jsonString);
                 
                 await redisConnection.set(redisKey, jsonString);
                 await redisConnection.expire(redisKey, 3600);
                 
-                console.log(`✅ [SCHEDULER_STORE_SUCCESS] ${gameType}_${duration}: Successfully stored in Redis`);
+                //console.log(`✅ [SCHEDULER_STORE_SUCCESS] ${gameType}_${duration}: Successfully stored in Redis`);
             } catch (jsonError) {
                 console.error(`❌ [SCHEDULER_STORE_ERROR] ${gameType}_${duration}: JSON serialization error:`, jsonError.message);
                 console.error(`❌ [SCHEDULER_STORE_ERROR] periodData:`, periodData);
@@ -946,13 +984,13 @@ const storePeriodInRedisForWebSocket = async (gameType, duration, periodInfo) =>
             
             // CRITICAL FIX: Add logging for new period stuck issue
             if (timeRemaining === duration) {
-                console.log(`🔍 [SCHEDULER_STORE_DEBUG] ${gameType}_${duration}: Storing period with stuck timeRemaining!`);
-                console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodData:`, JSON.stringify(periodData, null, 2));
+                //console.log(`🔍 [SCHEDULER_STORE_DEBUG] ${gameType}_${duration}: Storing period with stuck timeRemaining!`);
+                //console.log(`🔍 [SCHEDULER_STORE_DEBUG] periodData:`, JSON.stringify(periodData, null, 2));
             }
             
             // Add logging for debugging the countdown issue
             if (timeRemaining <= 10) {
-                console.log(`⏰ [SCHEDULER_TICK_DEBUG] ${gameType}_${duration}: Storing timeRemaining: ${timeRemaining}s, periodId: ${periodInfo.periodId}`);
+                //console.log(`⏰ [SCHEDULER_TICK_DEBUG] ${gameType}_${duration}: Storing timeRemaining: ${timeRemaining}s, periodId: ${periodInfo.periodId}`);
             }
         }
         
@@ -970,23 +1008,23 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
     try {
         // Prevent duplicate processing
         if (schedulerProcessingLocks.has(processKey)) {
-            //console.log(`🔒 SCHEDULER: Period ${periodId} already processing`);
+            ////console.log(`🔒 SCHEDULER: Period ${periodId} already processing`);
             return;
         }
         
         schedulerProcessingLocks.add(processKey);
         
-        //console.log(`🏁 SCHEDULER: Starting period end validation [${gameType}|${duration}s]: ${periodId}`);
+        ////console.log(`🏁 SCHEDULER: Starting period end validation [${gameType}|${duration}s]: ${periodId}`);
         
         // Strict timing validation to prevent premature processing
         const periodEndTime = calculatePeriodEndTime(periodId, duration);
         const now = new Date();
         const timeSinceEnd = (now - periodEndTime) / 1000;
         
-        //console.log(`⏰ TIMING CHECK for ${periodId}:`);
-        //console.log(`   - Period should end at: ${periodEndTime.toISOString()}`);
-        //console.log(`   - Current time: ${now.toISOString()}`);
-        //console.log(`   - Time since end: ${timeSinceEnd.toFixed(2)}s`);
+        ////console.log(`⏰ TIMING CHECK for ${periodId}:`);
+        ////console.log(`   - Period should end at: ${periodEndTime.toISOString()}`);
+        ////console.log(`   - Current time: ${now.toISOString()}`);
+        ////console.log(`   - Time since end: ${timeSinceEnd.toFixed(2)}s`);
         
         // Strict validation: Only process if period actually ended
         if (timeSinceEnd < -5) {
@@ -999,30 +1037,30 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
             return;
         }
         
-        //console.log(`✅ SCHEDULER: Period ${periodId} timing is valid (${timeSinceEnd.toFixed(2)}s after end) - PROCEEDING`);
+        ////console.log(`✅ SCHEDULER: Period ${periodId} timing is valid (${timeSinceEnd.toFixed(2)}s after end) - PROCEEDING`);
         
         // Enhanced Redis lock for cross-process safety
         const globalLockKey = `scheduler_result_lock_${gameType}_${duration}_${periodId}`;
         const lockValue = `scheduler_${Date.now()}_${process.pid}_${Math.random().toString(36).substr(2, 9)}`;
         
-        //console.log(`🔒 SCHEDULER: Acquiring enhanced Redis lock for ${periodId}...`);
+        ////console.log(`🔒 SCHEDULER: Acquiring enhanced Redis lock for ${periodId}...`);
         
         const redisForLock = schedulerPublisher || schedulerHelper;
         const lockAcquired = await redisForLock.set(globalLockKey, lockValue, 'EX', 300, 'NX');
         
         if (!lockAcquired) {
             const currentLockHolder = await redisForLock.get(globalLockKey);
-            //console.log(`⚠️ SCHEDULER: Period ${periodId} already locked by: ${currentLockHolder}`);
+            ////console.log(`⚠️ SCHEDULER: Period ${periodId} already locked by: ${currentLockHolder}`);
             return;
         }
         
-        //console.log(`🔒 SCHEDULER: Enhanced lock acquired for ${periodId} by ${lockValue}`);
+        ////console.log(`🔒 SCHEDULER: Enhanced lock acquired for ${periodId} by ${lockValue}`);
         
         try {
             // Final check for existing result
             const existingResult = await checkExistingSchedulerResult(gameType, duration, periodId);
             if (existingResult) {
-                //console.log(`✅ SCHEDULER: Using existing result for ${periodId}`);
+                ////console.log(`✅ SCHEDULER: Using existing result for ${periodId}`);
                 await publishPeriodResult(gameType, duration, periodId, existingResult, 'existing');
                 return;
             }
@@ -1034,16 +1072,47 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                 return;
             }
             
-            //console.log(`🎲 SCHEDULER: Generating NEW result for ${periodId} (${finalTimingCheck.toFixed(2)}s after end)`);
+            ////console.log(`🎲 SCHEDULER: Generating NEW result for ${periodId} (${finalTimingCheck.toFixed(2)}s after end)`);
             
             // Process NEW results using gameLogicService
             const processWithTimeout = async () => {
-                return await gameLogicService.processGameResults(
-                    gameType, 
-                    duration, 
-                    periodId,
-                    'default'
-                );
+                console.log(`🎯 [SCHEDULER_DEBUG] About to process ${gameType} game for period ${periodId}`);
+                console.log(`🎯 [SCHEDULER_DEBUG] Game type details:`, {
+                    original: gameType,
+                    lowercase: gameType.toLowerCase(),
+                    is5D: ['5d', 'fived'].includes(gameType.toLowerCase())
+                });
+                
+                // Use the correct function for 5D games with pre-calculated results
+                if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                    console.log(`🎯 [SCHEDULER_5D] Using processGameResultsWithPreCalc for 5D game`);
+                    const result = await gameLogicService.processGameResultsWithPreCalc(
+                        gameType, 
+                        duration, 
+                        periodId,
+                        'default'
+                    );
+                    console.log(`🎯 [SCHEDULER_5D] processGameResultsWithPreCalc completed:`, {
+                        success: result.success,
+                        source: result.source,
+                        winnersCount: result.winners?.length || 0
+                    });
+                    return result;
+                } else {
+                    console.log(`🎯 [SCHEDULER_OTHER] Using processGameResults for ${gameType} game`);
+                    const result = await gameLogicService.processGameResults(
+                        gameType, 
+                        duration, 
+                        periodId,
+                        'default'
+                    );
+                    console.log(`🎯 [SCHEDULER_OTHER] processGameResults completed:`, {
+                        success: result.success,
+                        source: result.source,
+                        winnersCount: result.winners?.length || 0
+                    });
+                    return result;
+                }
             };
             
             const gameResult = await Promise.race([
@@ -1053,11 +1122,11 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                 )
             ]);
             
-            console.log(`🎲 SCHEDULER: processGameResults completed for ${periodId}:`, {
-                success: gameResult.success,
-                source: gameResult.source,
-                protectionMode: gameResult.protectionMode
-            });
+            // console.log(`🎲 SCHEDULER: processGameResults completed for ${periodId}:`, {
+            //     success: gameResult.success,
+            //     source: gameResult.source,
+            //     protectionMode: gameResult.protectionMode
+            // });
             
             if (gameResult.success) {
                 await publishPeriodResult(
@@ -1072,7 +1141,7 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                     'new'
                 );
                 
-                //console.log(`✅ SCHEDULER: NEW result processed for ${periodId}: ${JSON.stringify(gameResult.gameResult)}`);
+                ////console.log(`✅ SCHEDULER: NEW result processed for ${periodId}: ${JSON.stringify(gameResult.gameResult)}`);
                 
             } else {
                 throw new Error(gameResult.message || 'Failed to process results');
@@ -1085,7 +1154,7 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
             const fallbackTimingCheck = (new Date() - periodEndTime) / 1000;
             if (fallbackTimingCheck >= -2 && fallbackTimingCheck <= 180) {
                 try {
-                    //console.log(`🎲 SCHEDULER: Generating fallback result for ${periodId}`);
+                    ////console.log(`🎲 SCHEDULER: Generating fallback result for ${periodId}`);
                     
                     const fallbackResult = await generateSchedulerFallbackResult(gameType);
                     
@@ -1101,7 +1170,7 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                         'fallback'
                     );
                     
-                    //console.log(`✅ SCHEDULER: Fallback result generated for ${periodId}`);
+                    ////console.log(`✅ SCHEDULER: Fallback result generated for ${periodId}`);
                     
                 } catch (fallbackError) {
                     console.error(`❌ SCHEDULER: Fallback result generation failed for ${periodId}:`, fallbackError.message);
@@ -1118,7 +1187,7 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                 const currentLock = await redisForUnlock.get(globalLockKey);
                 if (currentLock === lockValue) {
                     await redisForUnlock.del(globalLockKey);
-                    //console.log(`🔓 SCHEDULER: Released enhanced lock for ${periodId}`);
+                    ////console.log(`🔓 SCHEDULER: Released enhanced lock for ${periodId}`);
                 } else {
                     console.warn(`⚠️ SCHEDULER: Lock changed for ${periodId}: expected ${lockValue}, found ${currentLock}`);
                 }
@@ -1351,7 +1420,7 @@ const publishPeriodResult = async (gameType, duration, periodId, resultData, sou
             source: `scheduler_${source}`
         });
         
-        //console.log(`📢 SCHEDULER: Published result for ${periodId} (${source})`);
+        ////console.log(`📢 SCHEDULER: Published result for ${periodId} (${source})`);
 
     } catch (error) {
         console.error('❌ SCHEDULER: Error publishing period result:', error);
@@ -1365,7 +1434,7 @@ const publishPeriodError = async (gameType, duration, periodId, message) => {
     try {
         // Use the new enhanced broadcasting function
         await broadcastPeriodError(gameType, duration, periodId, message);
-        //console.log(`📢 SCHEDULER: Published error for ${periodId}: ${message}`);
+        ////console.log(`📢 SCHEDULER: Published error for ${periodId}: ${message}`);
 
     } catch (error) {
         console.error('❌ SCHEDULER: Error publishing period error:', error);
@@ -1380,20 +1449,20 @@ const resetDailySequences = async () => {
     const lockValue = `${Date.now()}_${process.pid}`;
     
     try {
-        //console.log('🔄 SCHEDULER: Starting daily sequence reset at 2 AM IST...');
+        ////console.log('🔄 SCHEDULER: Starting daily sequence reset at 2 AM IST...');
         
         const redisForReset = schedulerPublisher || schedulerHelper;
         const acquired = await redisForReset.set(lockKey, lockValue, 'EX', 600, 'NX');
         
         if (!acquired) {
-            //console.log('⚠️ SCHEDULER: Daily reset already running on another instance, skipping...');
+            ////console.log('⚠️ SCHEDULER: Daily reset already running on another instance, skipping...');
             return;
         }
 
-        //console.log('🔒 SCHEDULER: Acquired reset lock, proceeding with daily sequence reset');
+        ////console.log('🔒 SCHEDULER: Acquired reset lock, proceeding with daily sequence reset');
         
         const today = moment.tz('Asia/Kolkata').format('YYYYMMDD');
-        //console.log(`🔄 SCHEDULER: Resetting daily sequences for ${today}`);
+        ////console.log(`🔄 SCHEDULER: Resetting daily sequences for ${today}`);
 
         let resetCount = 0;
         for (const [gameType, durations] of Object.entries(GAME_CONFIGS)) {
@@ -1411,14 +1480,14 @@ const resetDailySequences = async () => {
                     await redisForReset.expire(sequenceKey, expirySeconds);
                     
                     resetCount++;
-                    //console.log(`✅ SCHEDULER: Reset sequence for ${gameType}:${duration}`);
+                    ////console.log(`✅ SCHEDULER: Reset sequence for ${gameType}:${duration}`);
                 } catch (sequenceError) {
                     console.error(`❌ SCHEDULER: Failed to reset sequence for ${gameType}:${duration}:`, sequenceError);
                 }
             }
         }
 
-        //console.log(`✅ SCHEDULER: Daily sequence reset completed! Reset ${resetCount} sequences`);
+        ////console.log(`✅ SCHEDULER: Daily sequence reset completed! Reset ${resetCount} sequences`);
 
     } catch (error) {
         console.error('❌ SCHEDULER: Error in daily sequence reset:', error);
@@ -1428,7 +1497,7 @@ const resetDailySequences = async () => {
             const currentValue = await redisForUnlock.get(lockKey);
             if (currentValue === lockValue) {
                 await redisForUnlock.del(lockKey);
-                //console.log('🔓 SCHEDULER: Released reset lock');
+                ////console.log('🔓 SCHEDULER: Released reset lock');
             }
         } catch (lockError) {
             console.error('❌ SCHEDULER: Error releasing reset lock:', lockError);
@@ -1441,22 +1510,22 @@ const resetDailySequences = async () => {
  */
 const startGameScheduler = async () => {
     try {
-        //console.log('DEBUG: Entered startGameScheduler');
+        ////console.log('DEBUG: Entered startGameScheduler');
         await initialize();
-        //console.log('DEBUG: Finished initialize, about to startSchedulerGameTicks');
+        ////console.log('DEBUG: Finished initialize, about to startSchedulerGameTicks');
         await startSchedulerGameTicks();
-        //console.log('DEBUG: Finished startSchedulerGameTicks');
+        ////console.log('DEBUG: Finished startSchedulerGameTicks');
         
-        //console.log('✅ SCHEDULER: Game scheduler started successfully with MULTI-INSTANCE SUPPORT');
+        ////console.log('✅ SCHEDULER: Game scheduler started successfully with MULTI-INSTANCE SUPPORT');
         
         // Log all scheduled cron jobs
-        //console.log('\n📅 SCHEDULER CRON JOBS:');
-        //console.log('⏰ 2:00 AM IST - Daily period sequence reset');
-        //console.log('⏰ Every hour - TRON hash collection refresh');
-        //console.log('🎮 SCHEDULER handles ALL period management and result processing');
-        //console.log('📡 ENHANCED: Multi-instance communication via Redis pub/sub');
-        //console.log('🚀 MULTI-INSTANCE: WebSocket service on separate instance receives events');
-        //console.log('🎯 FIXED: Time-based period validation (no early results)\n');
+        ////console.log('\n📅 SCHEDULER CRON JOBS:');
+        ////console.log('⏰ 2:00 AM IST - Daily period sequence reset');
+        ////console.log('⏰ Every hour - TRON hash collection refresh');
+        ////console.log('🎮 SCHEDULER handles ALL period management and result processing');
+        ////console.log('📡 ENHANCED: Multi-instance communication via Redis pub/sub');
+        ////console.log('🚀 MULTI-INSTANCE: WebSocket service on separate instance receives events');
+        ////console.log('🎯 FIXED: Time-based period validation (no early results)\n');
         
         return true;
         
@@ -1468,7 +1537,7 @@ const startGameScheduler = async () => {
 
 // Schedule daily period sequence reset at 2 AM IST
 cron.schedule('0 2 * * *', async () => {
-    //console.log('🕐 SCHEDULER: 2 AM IST - Starting daily period sequence reset...');
+    ////console.log('🕐 SCHEDULER: 2 AM IST - Starting daily period sequence reset...');
     try {
         await resetDailySequences();
     } catch (error) {
@@ -1480,11 +1549,11 @@ cron.schedule('0 2 * * *', async () => {
 
 // Schedule hourly TRON hash collection refresh
 cron.schedule('0 * * * *', async () => {
-    //console.log('🔄 SCHEDULER: Refreshing TRON hash collection...');
+    ////console.log('🔄 SCHEDULER: Refreshing TRON hash collection...');
     try {
         if (tronHashService) {
             await tronHashService.startHashCollection();
-            //console.log('✅ SCHEDULER: TRON hash collection refreshed');
+            ////console.log('✅ SCHEDULER: TRON hash collection refreshed');
         }
     } catch (error) {
         console.error('❌ SCHEDULER: Failed to refresh TRON hash collection:', error);
@@ -1493,28 +1562,28 @@ cron.schedule('0 * * * *', async () => {
 
 // Handle process termination
 process.on('SIGINT', () => {
-    //console.log('SCHEDULER: Game scheduler stopped');
+    ////console.log('SCHEDULER: Game scheduler stopped');
     
     // Clean up intervals
     schedulerGameIntervals.forEach((intervalId, key) => {
         clearInterval(intervalId);
-        //console.log(`⏹️ SCHEDULER: Stopped ticks for ${key}`);
+        ////console.log(`⏹️ SCHEDULER: Stopped ticks for ${key}`);
     });
     
     // Disconnect Redis connections
     if (schedulerPublisher) {
         schedulerPublisher.disconnect();
-        //console.log('🔌 SCHEDULER: Disconnected scheduler publisher');
+        ////console.log('🔌 SCHEDULER: Disconnected scheduler publisher');
     }
     
     if (schedulerSubscriber) {
         schedulerSubscriber.disconnect();
-        //console.log('🔌 SCHEDULER: Disconnected scheduler subscriber');
+        ////console.log('🔌 SCHEDULER: Disconnected scheduler subscriber');
     }
     
     if (schedulerHelper) {
         schedulerHelper.disconnect();
-        //console.log('🔌 SCHEDULER: Disconnected scheduler helper');
+        ////console.log('🔌 SCHEDULER: Disconnected scheduler helper');
     }
     
     process.exit(0);
@@ -1552,27 +1621,27 @@ module.exports = {
     
     // Debug function
     verifySchedulerTicks: () => {
-        //console.log('🔍 Verifying SCHEDULER MULTI-INSTANCE tick system...');
+        ////console.log('🔍 Verifying SCHEDULER MULTI-INSTANCE tick system...');
         
         const expectedIntervals = Object.values(GAME_CONFIGS).reduce((sum, durations) => sum + durations.length, 0);
         const activeIntervals = schedulerGameIntervals.size;
         
-        //console.log(`📊 Scheduler tick system status:`);
-        //console.log(`   - Active intervals: ${activeIntervals}`);
-        //console.log(`   - Expected intervals: ${expectedIntervals}`);
-        //console.log(`   - System started: ${schedulerGameTicksStarted}`);
-        //console.log(`   - Cached periods: ${schedulerCurrentPeriods.size}`);
-        //console.log(`   - Processing locks: ${schedulerProcessingLocks.size}`);
-        //console.log(`   - Publisher status: ${schedulerPublisher ? schedulerPublisher.status : 'not_created'}`);
+        ////console.log(`📊 Scheduler tick system status:`);
+        ////console.log(`   - Active intervals: ${activeIntervals}`);
+        ////console.log(`   - Expected intervals: ${expectedIntervals}`);
+        ////console.log(`   - System started: ${schedulerGameTicksStarted}`);
+        ////console.log(`   - Cached periods: ${schedulerCurrentPeriods.size}`);
+        ////console.log(`   - Processing locks: ${schedulerProcessingLocks.size}`);
+        ////console.log(`   - Publisher status: ${schedulerPublisher ? schedulerPublisher.status : 'not_created'}`);
         
         // Show detailed status
         Object.keys(GAME_CONFIGS).forEach(gameType => {
-            //console.log(`\n📋 ${gameType.toUpperCase()} rooms:`);
+            ////console.log(`\n📋 ${gameType.toUpperCase()} rooms:`);
             GAME_CONFIGS[gameType].forEach(duration => {
                 const key = `${gameType}_${duration}`;
                 const hasInterval = schedulerGameIntervals.has(key);
                 const hasCachedPeriod = schedulerCurrentPeriods.has(key);
-                //console.log(`   - ${key}: ${hasInterval ? '✅' : '❌'} Interval | ${hasCachedPeriod ? '✅' : '❌'} Period | 📡 Multi-Instance`);
+                ////console.log(`   - ${key}: ${hasInterval ? '✅' : '❌'} Interval | ${hasCachedPeriod ? '✅' : '❌'} Period | 📡 Multi-Instance`);
             });
         });
         
@@ -1588,5 +1657,5 @@ module.exports = {
 
 // Don't auto-start if this file is run directly
 if (require.main === module) {
-    //console.log('🚫 SCHEDULER: Auto-start disabled - use start-scheduler.js instead');
+    ////console.log('🚫 SCHEDULER: Auto-start disabled - use start-scheduler.js instead');
 }

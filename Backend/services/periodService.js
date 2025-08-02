@@ -540,6 +540,11 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
         // CRITICAL FIX: Make this more precise to avoid cutting off at 1
         if (timeRemaining < 0.5) { // Use 0.5 to account for timing precision
             console.log(`Period ${periodId} has expired, getting next period`);
+            
+            // Add debugging for 5D period transitions
+            if (gameType.toLowerCase() === 'fived') {
+                console.log(`🔄 [PERIOD_SERVICE_5D] Period ${periodId} expired for ${gameType} ${duration}s, timeRemaining: ${timeRemaining.toFixed(2)}s`);
+            }
             const nextPeriodNumber = currentPeriodNumber + 1;
             const nextPeriodId = `${dateStr}${nextPeriodNumber.toString().padStart(9, '0')}`;
             
@@ -548,11 +553,9 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
             const nextPeriodEnd = nextPeriodStart.clone().add(duration, 'seconds');
             const nextTimeRemaining = Math.max(0, nextPeriodEnd.diff(istMoment, 'seconds'));
             
-            // CRITICAL FIX: Always show current period with 0 time remaining first
-            // This ensures the countdown shows 2, 1, 0 before transitioning to new period
-            // Only transition to next period when it has its full duration remaining
-            // CRITICAL FIX: Make transition more precise to avoid cutting off at 1
-            if (nextTimeRemaining >= duration) { // Only transition when next period has full duration
+            // CRITICAL FIX: Transition to next period when current period has expired
+            // This ensures proper period transitions for all game types
+            if (nextTimeRemaining >= 0) { // Transition when next period is ready (has any time remaining)
                 const nextPeriodInfo = {
                     periodId: nextPeriodId,
                     gameType,
@@ -571,6 +574,11 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
                     currentTime: istMoment.format(),
                     endTime: nextPeriodEnd.format()
                 });
+                
+                // Add debugging for 5D transitions
+                if (gameType.toLowerCase() === 'fived') {
+                    console.log(`✅ [PERIOD_SERVICE_5D] Successfully transitioning to next period ${nextPeriodId} for ${gameType} ${duration}s`);
+                }
                 
                 return nextPeriodInfo;
             }
@@ -594,12 +602,17 @@ const getCurrentPeriod = async (gameType, duration, timeline = 'default') => {
         
         // Add debugging for countdown issue
         if (timeRemaining <= 10) {
-            console.log(`⏰ [PERIOD_SERVICE_DEBUG] ${gameType} ${duration}s: Current period ${periodId} has ${timeRemaining.toFixed(2)}s remaining`);
+            //console.log(`⏰ [PERIOD_SERVICE_DEBUG] ${gameType} ${duration}s: Current period ${periodId} has ${timeRemaining.toFixed(2)}s remaining`);
+        }
+        
+        // Add debugging for 5D games to see their time remaining
+        if (gameType.toLowerCase() === 'fived') {
+            //console.log(`⏰ [PERIOD_SERVICE_5D_DEBUG] ${gameType} ${duration}s: Current period ${periodId} has ${timeRemaining.toFixed(2)}s remaining`);
         }
         
         // CRITICAL DEBUG: Log when we're about to transition
         if (timeRemaining < 1 && timeRemaining >= 0) {
-            console.log(`🔍 [PERIOD_TRANSITION_DEBUG] ${gameType} ${duration}s: Period ${periodId} at ${timeRemaining.toFixed(2)}s - checking transition conditions`);
+            //console.log(`🔍 [PERIOD_TRANSITION_DEBUG] ${gameType} ${duration}s: Period ${periodId} at ${timeRemaining.toFixed(2)}s - checking transition conditions`);
         }
         
         const periodInfo = {
