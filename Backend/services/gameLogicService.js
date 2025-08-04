@@ -7987,6 +7987,12 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
             hasTransaction: !!transaction,
             transactionState: transaction?.finished ? 'finished' : 'active'
         });
+        
+        // ADDITIONAL 5D SPECIFIC LOGGING
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`🎯 [5D_BET_PROCESSING] 5D bet processing started for period ${periodId}`);
+            console.log(`🎯 [5D_BET_PROCESSING] Result data:`, result);
+        }
 
         const models = await ensureModelsInitialized();
         
@@ -8019,6 +8025,8 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                 timeline: timeline
             };
             
+            console.log(`🔍 [BET_RETRIEVAL] Looking for bets with condition:`, whereCondition);
+            
             // CRITICAL FIX: If no bets found with specific timeline, try without timeline filter
             switch (gameType.toLowerCase()) {
                 case 'wingo':
@@ -8035,10 +8043,12 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                     break;
                 case 'fived':
                 case '5d':
+                    console.log(`🎯 [5D_BET_RETRIEVAL] Querying BetRecord5D with condition:`, whereCondition);
                     bets = await models.BetRecord5D.findAll({
                         where: whereCondition,
                         transaction: useTransaction
                     });
+                    console.log(`🎯 [5D_BET_RETRIEVAL] Found ${bets.length} 5D bets with timeline filter`);
                     break;
                 case 'k3':
                     bets = await models.BetRecordK3.findAll({
@@ -8055,6 +8065,8 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                     bet_number: periodId
                 };
                 
+                console.log(`🔍 [BET_RETRIEVAL_FALLBACK] Looking for bets with fallback condition:`, whereCondition);
+                
                 switch (gameType.toLowerCase()) {
                     case 'wingo':
                         bets = await models.BetRecordWingo.findAll({
@@ -8070,10 +8082,12 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                         break;
                     case 'fived':
                     case '5d':
+                        console.log(`🎯 [5D_BET_RETRIEVAL_FALLBACK] Querying BetRecord5D with fallback condition:`, whereCondition);
                         bets = await models.BetRecord5D.findAll({
                             where: whereCondition,
                             transaction: useTransaction
                         });
+                        console.log(`🎯 [5D_BET_RETRIEVAL_FALLBACK] Found ${bets.length} 5D bets without timeline filter`);
                         break;
                     case 'k3':
                         bets = await models.BetRecordK3.findAll({
@@ -8165,9 +8179,21 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
             }
 
             // Process each bet
+            console.log(`🔄 [BET_PROCESSING_LOOP] Starting to process ${bets.length} bets...`);
+            
             for (const bet of bets) {
                 try {
+                    console.log(`🔍 [BET_PROCESSING] Processing bet:`, {
+                        betId: bet.bet_id || bet.id,
+                        userId: bet.user_id,
+                        currentStatus: bet.status,
+                        betType: bet.bet_type,
+                        betAmount: bet.bet_amount
+                    });
+                    
                     const isWinner = await checkBetWin(bet, result, gameType);
+                    console.log(`🎯 [BET_WIN_CHECK] Bet ${bet.bet_id || bet.id} isWinner: ${isWinner}`);
+                    
                     if (isWinner) {
                         console.log(`💰 [PAYOUT_START] About to calculate winnings for bet:`, {
                             betId: bet.bet_id,
@@ -8223,6 +8249,19 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
 
                         // Update bet status
                         console.log(`🔍 [BET_STATUS_UPDATE] Updating bet ${bet.bet_id || bet.id} to 'won' with winnings ₹${winnings}`);
+                        
+                        // ADDITIONAL 5D LOGGING
+                        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                            console.log(`🎯 [5D_BET_STATUS_UPDATE] About to update 5D bet ${bet.bet_id || bet.id} to 'won'`);
+                            console.log(`🎯 [5D_BET_STATUS_UPDATE] Update data:`, {
+                                status: 'won',
+                                payout: winnings,
+                                win_amount: winnings,
+                                wallet_balance_after: parseFloat(bet.wallet_balance_before) + winnings,
+                                hasTransaction: !!useTransaction
+                            });
+                        }
+                        
                         await bet.update({
                             status: 'won',
                             payout: winnings,
@@ -8230,7 +8269,13 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                             wallet_balance_after: parseFloat(bet.wallet_balance_before) + winnings,
                             result: JSON.stringify(result)
                         }, { transaction: useTransaction });
+                        
                         console.log(`✅ [BET_STATUS_UPDATE] Bet ${bet.bet_id || bet.id} updated to 'won' successfully`);
+                        
+                        // ADDITIONAL 5D LOGGING
+                        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                            console.log(`🎯 [5D_BET_STATUS_UPDATE] Successfully updated 5D bet ${bet.bet_id || bet.id} to 'won'`);
+                        }
 
                         winningBets.push({
                             userId: bet.user_id,
@@ -8264,6 +8309,19 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
 
                         // Mark bet as lost
                         console.log(`🔍 [BET_STATUS_UPDATE] Updating bet ${bet.bet_id || bet.id} to 'lost'`);
+                        
+                        // ADDITIONAL 5D LOGGING
+                        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                            console.log(`🎯 [5D_BET_STATUS_UPDATE] About to update 5D bet ${bet.bet_id || bet.id} to 'lost'`);
+                            console.log(`🎯 [5D_BET_STATUS_UPDATE] Update data:`, {
+                                status: 'lost',
+                                payout: 0,
+                                win_amount: 0,
+                                wallet_balance_after: bet.wallet_balance_before,
+                                hasTransaction: !!useTransaction
+                            });
+                        }
+                        
                         await bet.update({
                             status: 'lost',
                             payout: 0,
@@ -8271,6 +8329,11 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
                             wallet_balance_after: bet.wallet_balance_before,
                             result: JSON.stringify(result)
                         }, { transaction: useTransaction });
+                        
+                        // ADDITIONAL 5D LOGGING
+                        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                            console.log(`🎯 [5D_BET_STATUS_UPDATE] Successfully updated 5D bet ${bet.bet_id || bet.id} to 'lost'`);
+                        }
                         console.log(`✅ [BET_STATUS_UPDATE] Bet ${bet.bet_id || bet.id} updated to 'lost' successfully`);
                     }
                 } catch (betError) {
@@ -8311,6 +8374,21 @@ const processWinningBetsWithTimeline = async (gameType, duration, periodId, time
             }
 
             console.log(`🎯 Processed ${winningBets.length} winning bets out of ${bets.length} total bets for ${timeline}`);
+            
+            // ADDITIONAL 5D LOGGING
+            if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                console.log(`🎯 [5D_BET_PROCESSING_COMPLETE] 5D bet processing completed for period ${periodId}`);
+                console.log(`🎯 [5D_BET_PROCESSING_SUMMARY] Summary:`, {
+                    periodId: periodId,
+                    totalBets: bets.length,
+                    winningBets: winningBets.length,
+                    losingBets: bets.length - winningBets.length,
+                    timeline: timeline,
+                    hasTransaction: !!useTransaction,
+                    transactionCommitted: shouldCommit
+                });
+            }
+            
             return winningBets;
 
         } catch (error) {
@@ -10024,6 +10102,16 @@ async function processGameResultsWithPreCalc(gameType, duration, periodId, timel
                 
                 console.log('✅ [5D_PROCESS] Database operations completed with winners:', winners.length);
 
+                // Broadcast result to frontend like other games
+                try {
+                    console.log('📡 [5D_PROCESS] Broadcasting result to frontend...');
+                    await broadcastGameResult(gameType, duration, periodId, result, timeline);
+                    console.log('✅ [5D_PROCESS] Result broadcasted successfully');
+                } catch (broadcastError) {
+                    console.error('❌ [5D_PROCESS] Error broadcasting result:', broadcastError.message);
+                    // Don't throw here - broadcasting failure shouldn't fail the entire process
+                }
+
                 return {
                     success: true,
                     result: result,
@@ -10064,6 +10152,16 @@ async function processGameResultsWithPreCalc(gameType, duration, periodId, timel
             };
             
             const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, transaction);
+            
+            // Broadcast result to frontend like other games
+            try {
+                console.log('📡 [5D_PROCESS] Broadcasting existing result to frontend...');
+                await broadcastGameResult(gameType, duration, periodId, result, timeline);
+                console.log('✅ [5D_PROCESS] Existing result broadcasted successfully');
+            } catch (broadcastError) {
+                console.error('❌ [5D_PROCESS] Error broadcasting existing result:', broadcastError.message);
+                // Don't throw here - broadcasting failure shouldn't fail the entire process
+            }
             
             return {
                 success: true,

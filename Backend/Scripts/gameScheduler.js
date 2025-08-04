@@ -780,7 +780,7 @@ const schedulerGameTick = async (gameType, duration) => {
         
         // Add debugging for 5D games
         if (gameType.toLowerCase() === 'fived') {
-            console.log(`🔍 [SCHEDULER_5D_TICK] Processing tick for ${gameType}_${duration} at ${now.toISOString()}`);
+            //console.log(`🔍 [SCHEDULER_5D_TICK] Processing tick for ${gameType}_${duration} at ${now.toISOString()}`);
         }
         
         // Get current period
@@ -794,13 +794,13 @@ const schedulerGameTick = async (gameType, duration) => {
         const cachedCurrent = schedulerCurrentPeriods.get(key);
         
         // Add debugging for 5D period info
-        if (gameType.toLowerCase() === 'fived') {
-            console.log(`📊 [SCHEDULER_5D_PERIOD_INFO] ${gameType}_${duration}:`);
-            console.log(`   - Current period: ${currentPeriodInfo.periodId}`);
-            console.log(`   - Cached period: ${cachedCurrent?.periodId || 'NONE'}`);
-            console.log(`   - Periods match: ${cachedCurrent?.periodId === currentPeriodInfo.periodId}`);
-            console.log(`   - Has cached: ${!!cachedCurrent}`);
-        }
+        // if (gameType.toLowerCase() === 'fived') {
+        //     console.log(`📊 [SCHEDULER_5D_PERIOD_INFO] ${gameType}_${duration}:`);
+        //     console.log(`   - Current period: ${currentPeriodInfo.periodId}`);
+        //     console.log(`   - Cached period: ${cachedCurrent?.periodId || 'NONE'}`);
+        //     console.log(`   - Periods match: ${cachedCurrent?.periodId === currentPeriodInfo.periodId}`);
+        //     console.log(`   - Has cached: ${!!cachedCurrent}`);
+        // }
         
         // Handle period transition
         if (!cachedCurrent || cachedCurrent.periodId !== currentPeriodInfo.periodId) {
@@ -1002,14 +1002,34 @@ const storePeriodInRedisForWebSocket = async (gameType, duration, periodInfo) =>
 /**
  * FIXED: Process period end with strict timing validation and multi-instance broadcasting
  */
-const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
-    const processKey = `scheduler_${gameType}_${duration}_${periodId}`;
+    const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
+        const processKey = `scheduler_${gameType}_${duration}_${periodId}`;
+        
+        // Unconditional entry log to confirm function entry
+        console.log(`🎯 [SCHEDULER_ENTRY] Entering processSchedulerPeriodEnd for ${gameType}_${duration}:${periodId} (raw gameType: "${gameType}")`);
+        
+        // Add entry log for 5D games
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`🎯 [SCHEDULER_5D_ENTRY] Entering processSchedulerPeriodEnd for ${gameType}_${duration}:${periodId}`);
+        }
     
     try {
         // Prevent duplicate processing
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`🔍 [SCHEDULER_5D_LOCK_CHECK] Checking if ${processKey} is already in schedulerProcessingLocks`);
+            console.log(`🔍 [SCHEDULER_5D_LOCK_CHECK] Current locks:`, Array.from(schedulerProcessingLocks));
+        }
+        
         if (schedulerProcessingLocks.has(processKey)) {
+            if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                console.log(`⚠️ [SCHEDULER_5D_LOCK_CHECK] Period ${periodId} already processing - EXITING EARLY`);
+            }
             ////console.log(`🔒 SCHEDULER: Period ${periodId} already processing`);
             return;
+        }
+        
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`✅ [SCHEDULER_5D_LOCK_CHECK] Adding ${processKey} to schedulerProcessingLocks`);
         }
         
         schedulerProcessingLocks.add(processKey);
@@ -1027,12 +1047,22 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
         ////console.log(`   - Time since end: ${timeSinceEnd.toFixed(2)}s`);
         
         // Strict validation: Only process if period actually ended
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`🔍 [SCHEDULER_5D_TIMING] Time since end: ${timeSinceEnd.toFixed(2)}s`);
+        }
+        
         if (timeSinceEnd < -5) {
+            if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                console.log(`⚠️ [SCHEDULER_5D_TIMING] Period ${periodId} hasn't ended yet (${Math.abs(timeSinceEnd).toFixed(2)}s early) - EXITING EARLY`);
+            }
             console.warn(`⚠️ SCHEDULER: Period ${periodId} hasn't ended yet (${Math.abs(timeSinceEnd).toFixed(2)}s early) - REJECTING`);
             return;
         }
         
         if (timeSinceEnd > 120) {
+            if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                console.log(`⚠️ [SCHEDULER_5D_TIMING] Period ${periodId} ended too long ago (${timeSinceEnd.toFixed(2)}s late) - EXITING EARLY`);
+            }
             console.warn(`⚠️ SCHEDULER: Period ${periodId} ended too long ago (${timeSinceEnd.toFixed(2)}s late) - REJECTING`);
             return;
         }
@@ -1045,25 +1075,49 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
         
         ////console.log(`🔒 SCHEDULER: Acquiring enhanced Redis lock for ${periodId}...`);
         
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`🔍 [SCHEDULER_5D_REDIS_LOCK] Attempting to acquire Redis lock: ${globalLockKey}`);
+        }
+        
         const redisForLock = schedulerPublisher || schedulerHelper;
         const lockAcquired = await redisForLock.set(globalLockKey, lockValue, 'EX', 300, 'NX');
         
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`🔍 [SCHEDULER_5D_REDIS_LOCK] Lock acquisition result: ${lockAcquired ? 'SUCCESS' : 'FAILED'}`);
+        }
+        
         if (!lockAcquired) {
             const currentLockHolder = await redisForLock.get(globalLockKey);
+            if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                console.log(`⚠️ [SCHEDULER_5D_REDIS_LOCK] Period ${periodId} already locked by: ${currentLockHolder} - EXITING EARLY`);
+            }
             ////console.log(`⚠️ SCHEDULER: Period ${periodId} already locked by: ${currentLockHolder}`);
             return;
         }
         
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`✅ [SCHEDULER_5D_REDIS_LOCK] Successfully acquired Redis lock for ${periodId}`);
+        }
+        
         ////console.log(`🔒 SCHEDULER: Enhanced lock acquired for ${periodId} by ${lockValue}`);
         
-        try {
-            // Final check for existing result
-            const existingResult = await checkExistingSchedulerResult(gameType, duration, periodId);
-            if (existingResult) {
-                ////console.log(`✅ SCHEDULER: Using existing result for ${periodId}`);
-                await publishPeriodResult(gameType, duration, periodId, existingResult, 'existing');
-                return;
-            }
+                              try {
+                          // Final check for existing result
+                          console.log(`🔍 [SCHEDULER_DEBUG] Checking for existing result for ${gameType}_${duration}:${periodId}`);
+                          const existingResult = await checkExistingSchedulerResult(gameType, duration, periodId);
+                          if (existingResult) {
+                              console.log(`✅ [SCHEDULER_DEBUG] Found existing result for ${periodId}`);
+                              if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+                                  console.log(`⚠️ [SCHEDULER_5D_EXISTING_RESULT] Existing 5D result found, but proceeding to process bets for period ${periodId}`);
+                                  // DO NOT RETURN HERE FOR 5D. Continue to call processGameResultsWithPreCalc.
+                              } else {
+                                  console.log(`✅ [SCHEDULER_DEBUG] Using existing result for ${periodId}, skipping new processing.`);
+                                  await publishPeriodResult(gameType, duration, periodId, existingResult, 'existing');
+                                  return; // Return for non-5D games
+                              }
+                          } else {
+                              console.log(`🔍 [SCHEDULER_DEBUG] No existing result found for ${periodId}, proceeding with new processing`);
+                          }
             
             // Additional timing check before processing
             const finalTimingCheck = (new Date() - periodEndTime) / 1000;
@@ -1072,7 +1126,16 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                 return;
             }
             
+            console.log(`🎯 [SCHEDULER_DEBUG_POST_TIMING_CHECK] Passed timing check for ${periodId} (${finalTimingCheck.toFixed(2)}s after end)`);
+            
             ////console.log(`🎲 SCHEDULER: Generating NEW result for ${periodId} (${finalTimingCheck.toFixed(2)}s after end)`);
+            
+            console.log(`🎯 [SCHEDULER_DEBUG_PRE_PROCESS] Preparing to call processWithTimeout for:`, {
+                gameType: gameType,
+                duration: duration,
+                periodId: periodId,
+                is5D: ['5d', 'fived'].includes(gameType.toLowerCase())
+            });
             
             // Process NEW results using gameLogicService
             const processWithTimeout = async () => {
@@ -1086,17 +1149,35 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
                 // Use the correct function for 5D games with pre-calculated results
                 if (['5d', 'fived'].includes(gameType.toLowerCase())) {
                     console.log(`🎯 [SCHEDULER_5D] Using processGameResultsWithPreCalc for 5D game`);
+                    console.log(`🎯 [SCHEDULER_5D] Calling processGameResultsWithPreCalc with:`, {
+                        gameType: gameType,
+                        duration: duration,
+                        periodId: periodId,
+                        timeline: 'default'
+                    });
+                    
                     const result = await gameLogicService.processGameResultsWithPreCalc(
                         gameType, 
                         duration, 
                         periodId,
                         'default'
                     );
+                    
                     console.log(`🎯 [SCHEDULER_5D] processGameResultsWithPreCalc completed:`, {
                         success: result.success,
                         source: result.source,
-                        winnersCount: result.winners?.length || 0
+                        winnersCount: result.winners?.length || 0,
+                        hasGameResult: !!result.gameResult,
+                        gameResultKeys: result.gameResult ? Object.keys(result.gameResult) : []
                     });
+                    
+                    // ADDITIONAL 5D VERIFICATION
+                    if (result.success) {
+                        console.log(`✅ [SCHEDULER_5D] 5D processing successful for period ${periodId}`);
+                    } else {
+                        console.error(`❌ [SCHEDULER_5D] 5D processing failed for period ${periodId}:`, result.message || 'Unknown error');
+                    }
+                    
                     return result;
                 } else {
                     console.log(`🎯 [SCHEDULER_OTHER] Using processGameResults for ${gameType} game`);
@@ -1197,9 +1278,19 @@ const processSchedulerPeriodEnd = async (gameType, duration, periodId) => {
         }
 
     } catch (error) {
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`❌ [SCHEDULER_5D_ERROR] Period end error for ${periodId}:`, error.message);
+        }
         console.error(`❌ SCHEDULER: Period end error for ${periodId}:`, error);
     } finally {
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`🔓 [SCHEDULER_5D_CLEANUP] Removing ${processKey} from schedulerProcessingLocks`);
+        }
         schedulerProcessingLocks.delete(processKey);
+        
+        if (['5d', 'fived'].includes(gameType.toLowerCase())) {
+            console.log(`✅ [SCHEDULER_5D_EXIT] Successfully completed processSchedulerPeriodEnd for ${gameType}_${duration}:${periodId}`);
+        }
     }
 };
 
@@ -1264,12 +1355,21 @@ const checkExistingSchedulerResult = async (gameType, duration, periodId) => {
             case 'fived':
             case '5d':
                 whereClause.bet_number = periodId;
+                console.log(`🔍 [SCHEDULER_DEBUG] Checking BetResult5D for period ${periodId} with condition:`, whereClause);
                 existingResult = await models.BetResult5D.findOne({
                     where: whereClause,
                     order: [['created_at', 'DESC']]
                 });
                 
                 if (existingResult) {
+                    console.log(`✅ [SCHEDULER_DEBUG] Found existing 5D result for ${periodId}:`, {
+                        result_a: existingResult.result_a,
+                        result_b: existingResult.result_b,
+                        result_c: existingResult.result_c,
+                        result_d: existingResult.result_d,
+                        result_e: existingResult.result_e,
+                        total_sum: existingResult.total_sum
+                    });
                     return {
                         result: {
                             A: existingResult.result_a,
@@ -1281,6 +1381,8 @@ const checkExistingSchedulerResult = async (gameType, duration, periodId) => {
                         },
                         winners: []
                     };
+                } else {
+                    console.log(`🔍 [SCHEDULER_DEBUG] No existing 5D result found for ${periodId}`);
                 }
                 break;
                 
