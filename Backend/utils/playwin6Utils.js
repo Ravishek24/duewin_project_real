@@ -146,14 +146,25 @@ const makePlayWin6Request = async (url, data = null, options = {}) => {
         hasData: !!data
       });
 
+      // CRITICAL FIX: Add API token to headers
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'PlayWin6-Integration/1.0'
+      };
+
+      // Add API token if available
+      if (playwin6Config.apiToken) {
+        headers['Authorization'] = `Bearer ${playwin6Config.apiToken}`;
+        headers['X-API-Token'] = playwin6Config.apiToken;
+      } else {
+        console.warn('⚠️ PlayWin6 API token not configured');
+      }
+
       const requestOptions = {
         method: data ? 'POST' : 'GET',
         timeout,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': 'PlayWin6-Integration/1.0'
-        }
+        headers
       };
 
       if (data) {

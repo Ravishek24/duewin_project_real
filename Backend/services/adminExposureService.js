@@ -253,6 +253,139 @@ class AdminExposureService {
     }
 
     /**
+     * Get user details for a specific number
+     */
+    async getUserDetailsForNumber(duration, periodId, number) {
+        try {
+            const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
+            const usersJson = await unifiedRedisHelper.hget(exposureKey, `users:number:${number}`);
+            const statsJson = await unifiedRedisHelper.hget(exposureKey, `stats:number:${number}`);
+            
+            return {
+                success: true,
+                number: number,
+                users: usersJson ? JSON.parse(usersJson) : [],
+                stats: statsJson ? JSON.parse(statsJson) : null
+            };
+        } catch (error) {
+            console.error('❌ [ADMIN_EXPOSURE] Error getting user details:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Get all numbers with user counts
+     */
+    async getAllNumbersUserCounts(duration, periodId) {
+        try {
+            const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
+            const periodStatsJson = await unifiedRedisHelper.hget(exposureKey, 'period:stats');
+            
+            if (!periodStatsJson) {
+                return { success: true, numberDistribution: {} };
+            }
+            
+            const periodStats = JSON.parse(periodStatsJson);
+            
+            return {
+                success: true,
+                numberDistribution: periodStats.numberDistribution || {},
+                totalUsers: periodStats.totalUsers || 0,
+                totalBetAmount: periodStats.totalBetAmount || 0,
+                uniqueUsers: periodStats.uniqueUsers || 0
+            };
+        } catch (error) {
+            console.error('❌ [ADMIN_EXPOSURE] Error getting number user counts:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Get enhanced Wingo exposure with user details
+     */
+    async getEnhancedWingoExposure(duration, periodId = null) {
+        try {
+            // Get current period if not provided
+            if (!periodId) {
+                const currentPeriod = await this.getCurrentPeriod(duration);
+                periodId = currentPeriod;
+            }
+
+            const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
+            const exposureData = await unifiedRedisHelper.hgetall(exposureKey);
+
+            // Convert cents to rupees and format
+            const formattedExposure = {};
+            let totalExposure = 0;
+            let zeroExposureNumbers = [];
+            let highestExposure = 0;
+            let optimalNumber = 0;
+            let minExposure = Infinity;
+
+            for (let num = 0; num <= 9; num++) {
+                const exposureCents = parseInt(exposureData[`number:${num}`] || 0);
+                const exposureRupees = exposureCents / 100;
+                formattedExposure[`number:${num}`] = exposureRupees.toFixed(2);
+                
+                totalExposure += exposureRupees;
+                
+                if (exposureRupees === 0) {
+                    zeroExposureNumbers.push(num);
+                }
+                
+                if (exposureRupees > highestExposure) {
+                    highestExposure = exposureRupees;
+                }
+                
+                if (exposureRupees < minExposure) {
+                    minExposure = exposureRupees;
+                    optimalNumber = num;
+                }
+            }
+
+            // Get period info
+            const periodInfo = await this.getPeriodInfo(duration, periodId);
+            
+            // Get bet distribution
+            const betDistribution = await this.getBetDistribution(duration, periodId);
+
+            // Get user counts for all numbers
+            const userCounts = await this.getAllNumbersUserCounts(duration, periodId);
+
+            return {
+                success: true,
+                room: `wingo-${duration}s`,
+                duration: duration,
+                periodId: periodId,
+                timestamp: new Date().toISOString(),
+                exposures: formattedExposure,
+                analysis: {
+                    totalExposure: totalExposure.toFixed(2),
+                    optimalNumber: optimalNumber,
+                    zeroExposureNumbers: zeroExposureNumbers,
+                    highestExposure: highestExposure.toFixed(2),
+                    minExposure: minExposure.toFixed(2),
+                    betDistribution: betDistribution
+                },
+                userAnalysis: {
+                    numberDistribution: userCounts.numberDistribution || {},
+                    totalUsers: userCounts.totalUsers || 0,
+                    totalBetAmount: userCounts.totalBetAmount || 0,
+                    uniqueUsers: userCounts.uniqueUsers || 0
+                },
+                periodInfo: periodInfo
+            };
+
+        } catch (error) {
+            console.error('❌ [ADMIN_EXPOSURE] Error getting enhanced Wingo exposure:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
      * Start real-time exposure monitoring
      */
     startExposureMonitoring(io) {
@@ -325,6 +458,74 @@ class AdminExposureService {
                 }
             });
 
+            // Subscribe to enhanced Wingo exposure with user details
+            socket.on('subscribeToEnhancedWingoExposure', async (data) => {
+                try {
+                    const { duration } = data;
+                    
+                    if (!this.wingoDurations.includes(duration)) {
+                        socket.emit('error', { message: 'Invalid duration' });
+                        return;
+                    }
+
+                    const roomName = `admin:enhanced:exposure:wingo:${duration}`;
+                    socket.join(roomName);
+                    
+                    console.log(`📊 [ADMIN_EXPOSURE] Admin ${socket.admin.username} subscribed to enhanced ${roomName}`);
+
+                    // Send initial enhanced exposure data
+                    const enhancedData = await this.getEnhancedWingoExposure(duration);
+                    socket.emit('enhancedWingoExposureUpdate', enhancedData);
+
+                } catch (error) {
+                    console.error('❌ [ADMIN_EXPOSURE] Enhanced subscription error:', error);
+                    socket.emit('error', { message: 'Enhanced subscription failed' });
+                }
+            });
+
+            // Get user details for specific number
+            socket.on('getUserDetailsForNumber', async (data) => {
+                try {
+                    const { duration, periodId, number } = data;
+                    
+                    if (!this.wingoDurations.includes(duration)) {
+                        socket.emit('error', { message: 'Invalid duration' });
+                        return;
+                    }
+
+                    if (number < 0 || number > 9) {
+                        socket.emit('error', { message: 'Invalid number (must be 0-9)' });
+                        return;
+                    }
+
+                    const userDetails = await this.getUserDetailsForNumber(duration, periodId, number);
+                    socket.emit('userDetailsForNumber', userDetails);
+
+                } catch (error) {
+                    console.error('❌ [ADMIN_EXPOSURE] Error getting user details:', error);
+                    socket.emit('error', { message: 'Failed to get user details' });
+                }
+            });
+
+            // Get all numbers user counts
+            socket.on('getAllNumbersUserCounts', async (data) => {
+                try {
+                    const { duration, periodId } = data;
+                    
+                    if (!this.wingoDurations.includes(duration)) {
+                        socket.emit('error', { message: 'Invalid duration' });
+                        return;
+                    }
+
+                    const userCounts = await this.getAllNumbersUserCounts(duration, periodId);
+                    socket.emit('allNumbersUserCounts', userCounts);
+
+                } catch (error) {
+                    console.error('❌ [ADMIN_EXPOSURE] Error getting user counts:', error);
+                    socket.emit('error', { message: 'Failed to get user counts' });
+                }
+            });
+
             // Subscribe to all Wingo rooms
             socket.on('subscribeToAllWingoRooms', async () => {
                 try {
@@ -364,9 +565,16 @@ class AdminExposureService {
         setInterval(async () => {
             try {
                 for (const duration of this.wingoDurations) {
+                    // Regular exposure updates
                     const exposureData = await this.getWingoExposure(duration);
                     if (exposureData.success) {
                         adminNamespace.to(`admin:exposure:wingo:${duration}`).emit('wingoExposureUpdate', exposureData);
+                    }
+
+                    // Enhanced exposure updates with user details
+                    const enhancedData = await this.getEnhancedWingoExposure(duration);
+                    if (enhancedData.success) {
+                        adminNamespace.to(`admin:enhanced:exposure:wingo:${duration}`).emit('enhancedWingoExposureUpdate', enhancedData);
                     }
                 }
 

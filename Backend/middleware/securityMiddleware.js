@@ -177,19 +177,28 @@ const securityMiddleware = (app) => {
 
         // Override send method to ensure headers are set
         res.send = function(data) {
-            ensureSecurityHeaders(res);
+            // CRITICAL FIX: Only set headers if not already sent
+            if (!res.headersSent) {
+                ensureSecurityHeaders(res);
+            }
             return originalSend.call(this, data);
         };
 
         // Override json method to ensure headers are set
         res.json = function(data) {
-            ensureSecurityHeaders(res);
+            // CRITICAL FIX: Only set headers if not already sent
+            if (!res.headersSent) {
+                ensureSecurityHeaders(res);
+            }
             return originalJson.call(this, data);
         };
 
         // Override end method to ensure headers are set
         res.end = function(data) {
-            ensureSecurityHeaders(res);
+            // CRITICAL FIX: Only set headers if not already sent
+            if (!res.headersSent) {
+                ensureSecurityHeaders(res);
+            }
             return originalEnd.call(this, data);
         };
 
@@ -203,6 +212,11 @@ const securityMiddleware = (app) => {
  * Helper function to ensure security headers are always set
  */
 function ensureSecurityHeaders(res) {
+    // CRITICAL FIX: Check if headers have already been sent
+    if (res.headersSent) {
+        return; // Don't modify headers if already sent
+    }
+    
     const headers = securityConfig.headers;
     
     // Critical headers that must be present
@@ -220,8 +234,10 @@ function ensureSecurityHeaders(res) {
         }
     });
 
-    // Ensure X-Powered-By is removed
-    res.removeHeader('X-Powered-By');
+    // Ensure X-Powered-By is removed (only if headers not sent)
+    if (!res.headersSent) {
+        res.removeHeader('X-Powered-By');
+    }
 }
 
 module.exports = securityMiddleware; 

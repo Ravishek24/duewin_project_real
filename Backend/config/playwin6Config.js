@@ -14,8 +14,8 @@ const playwin6Config = {
   
   // Game Launch Configuration
   gameLaunchUrl: process.env.PLAYWIN6_GAME_LAUNCH_URL || 'https://playwin6.com/launchGame',
-  providerGameUrl: process.env.PLAYWIN6_PROVIDER_GAME_URL || 'https://playwin6.com/providerGame',
-  getProviderUrl: process.env.PLAYWIN6_GET_PROVIDER_URL || 'https://playwin6.com/getProvider',
+  providerGameUrl: process.env.PLAYWIN6_PROVIDER_GAME_URL || 'https://playwin6.com/api/providerGame',
+  getProviderUrl: process.env.PLAYWIN6_GET_PROVIDER_URL || 'https://playwin6.com/api/getProvider',
   
   // Callback URLs
   callbackUrl: process.env.PLAYWIN6_CALLBACK_URL || 

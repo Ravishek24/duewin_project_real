@@ -1361,6 +1361,127 @@ async function autoInitialize5DCache() {
     }
 }
 
+/**
+ * Add user to number tracking for enhanced exposure
+ * @param {string} exposureKey - Redis exposure key
+ * @param {number} number - Number (0-9)
+ * @param {Object} userData - User bet data
+ */
+async function addUserToNumberTracking(exposureKey, number, userData) {
+    try {
+        const userKey = `users:number:${number}`;
+        const statsKey = `stats:number:${number}`;
+        
+        // Get existing users for this number
+        const existingUsersJson = await getRedisHelper().hget(exposureKey, userKey) || '[]';
+        const existingUsers = JSON.parse(existingUsersJson);
+        
+        // Add new user
+        existingUsers.push(userData);
+        
+        // Limit to max 100 users per number (performance optimization)
+        if (existingUsers.length > 100) {
+            existingUsers.splice(0, existingUsers.length - 100);
+        }
+        
+        // Update users list
+        await getRedisHelper().hset(exposureKey, userKey, JSON.stringify(existingUsers));
+        
+        // Update statistics
+        await updateNumberStatistics(exposureKey, number, existingUsers);
+        
+        // Update global period statistics
+        await updatePeriodStatistics(exposureKey);
+        
+        console.log(`✅ [USER_TRACKING] Added user ${userData.userId} to number ${number}`);
+        
+    } catch (error) {
+        console.error('❌ Error adding user to number tracking:', error);
+    }
+}
+
+/**
+ * Update number statistics for enhanced exposure
+ * @param {string} exposureKey - Redis exposure key
+ * @param {number} number - Number (0-9)
+ * @param {Array} users - Array of user data
+ */
+async function updateNumberStatistics(exposureKey, number, users) {
+    try {
+        const statsKey = `stats:number:${number}`;
+        
+        const stats = {
+            totalUsers: users.length,
+            totalBetAmount: users.reduce((sum, user) => sum + user.betAmount, 0),
+            uniqueUsers: new Set(users.map(u => u.userId)).size,
+            betTypes: {}
+        };
+        
+        // Count bet types
+        users.forEach(user => {
+            stats.betTypes[user.betType] = (stats.betTypes[user.betType] || 0) + 1;
+        });
+        
+        await getRedisHelper().hset(exposureKey, statsKey, JSON.stringify(stats));
+        
+        console.log(`📊 [STATS_UPDATE] Updated stats for number ${number}: ${stats.totalUsers} users, ₹${stats.totalBetAmount}`);
+        
+    } catch (error) {
+        console.error('❌ Error updating number statistics:', error);
+    }
+}
+
+/**
+ * Update global period statistics for enhanced exposure
+ * @param {string} exposureKey - Redis exposure key
+ */
+async function updatePeriodStatistics(exposureKey) {
+    try {
+        const statsKey = 'period:stats';
+        
+        // Get all number statistics
+        const allStats = {};
+        for (let num = 0; num <= 9; num++) {
+            const numberStatsJson = await getRedisHelper().hget(exposureKey, `stats:number:${num}`);
+            if (numberStatsJson) {
+                allStats[num] = JSON.parse(numberStatsJson);
+            }
+        }
+        
+        // Calculate global statistics
+        const globalStats = {
+            totalUsers: 0,
+            totalBetAmount: 0,
+            uniqueUsers: new Set(),
+            numberDistribution: {}
+        };
+        
+        Object.entries(allStats).forEach(([number, stats]) => {
+            globalStats.totalUsers += stats.totalUsers;
+            globalStats.totalBetAmount += stats.totalBetAmount;
+            globalStats.numberDistribution[number] = stats.totalUsers;
+        });
+        
+        // Count unique users from all user arrays
+        const allUserIds = new Set();
+        for (let num = 0; num <= 9; num++) {
+            const usersJson = await getRedisHelper().hget(exposureKey, `users:number:${num}`);
+            if (usersJson) {
+                const users = JSON.parse(usersJson);
+                users.forEach(user => allUserIds.add(user.userId));
+            }
+        }
+        globalStats.uniqueUsers = allUserIds.size;
+        
+        await getRedisHelper().hset(exposureKey, statsKey, JSON.stringify(globalStats));
+        
+        console.log(`🌐 [PERIOD_STATS] Updated global stats: ${globalStats.totalUsers} total users, ${globalStats.uniqueUsers} unique users`);
+        
+    } catch (error) {
+        console.error('❌ Error updating period statistics:', error);
+    }
+}
+
 async function updateBetExposure(gameType, duration, periodId, bet, timeline = 'default') {
     try {
         console.log('🔍 [EXPOSURE_DEBUG] updateBetExposure called with:', {
@@ -1398,6 +1519,15 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                     const numberOdds = 9.0; // Number bets always pay 9.0x
                     const exposure = Math.round(actualBetAmount * numberOdds * 100); // Convert to cents
                     await getRedisHelper().hincrby(exposureKey, `number:${betValue}`, exposure);
+                    
+                    // NEW: Add user tracking for NUMBER bet
+                    await addUserToNumberTracking(exposureKey, betValue, {
+                        userId: bet.userId,
+                        betAmount: actualBetAmount,
+                        betType: betType,
+                        betValue: betValue,
+                        timestamp: Date.now()
+                    });
                 }
                 // For other bets, update all matching numbers with correct odds
                 else {
@@ -1457,6 +1587,15 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                             console.log(`🔍 [EXPOSURE_DEBUG] Adding exposure ${exposure} to number ${num}`);
 
                             await getRedisHelper().hincrby(exposureKey, `number:${num}`, exposure);
+                            
+                            // NEW: Add user tracking for this number
+                            await addUserToNumberTracking(exposureKey, num, {
+                                userId: bet.userId,
+                                betAmount: actualBetAmount,
+                                betType: betType,
+                                betValue: betValue,
+                                timestamp: Date.now()
+                            });
                         } else {
                             console.log(`🔍 [EXPOSURE_DEBUG] Number ${num} (${combo?.color}) does NOT win for bet ${betType}:${betValue}`);
                         }
@@ -4496,13 +4635,13 @@ const getGameHistory = async (gameType, duration, limit = 20, offset = 0) => {
         // CRITICAL: Ensure models are initialized
         const models = await ensureModelsInitialized();
 
-        logger.info('Getting enhanced game history', {
-            gameType,
-            duration,
-            limit,
-            offset,
-            timestamp: new Date().toISOString()
-        });
+        // logger.info('Getting enhanced game history', {
+        //     gameType,
+        //     duration,
+        //     limit,
+        //     offset,
+        //     timestamp: new Date().toISOString()
+        // });
 
         // Validate inputs
         if (!gameType || !duration) {

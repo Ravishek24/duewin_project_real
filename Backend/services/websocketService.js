@@ -648,12 +648,12 @@ const broadcastTick = async (gameType, duration) => {
             
             // Enhanced logging for 5D pre-calculation debugging
             if (['5d', 'fived'].includes(gameType.toLowerCase()) && actualTimeRemaining <= 10) {
-                console.log(`⏰ [5D_TIMING_DEBUG] ${roomId}: t=${actualTimeRemaining}s, period=${periodInfo.periodId}`);
+                //console.log(`⏰ [5D_TIMING_DEBUG] ${roomId}: t=${actualTimeRemaining}s, period=${periodInfo.periodId}`);
             }
             
             // Debug logging for countdown issues
             if (actualTimeRemaining <= 3) {
-                console.log(`🚨 [COUNTDOWN_CRITICAL] ${roomId}: t=${actualTimeRemaining}s - CRITICAL COUNTDOWN`);
+                //console.log(`🚨 [COUNTDOWN_CRITICAL] ${roomId}: t=${actualTimeRemaining}s - CRITICAL COUNTDOWN`);
             }
             
             // 🚀 CRITICAL FIX: DISABLE 5D pre-calculation trigger to prevent WebSocket blocking
