@@ -200,8 +200,16 @@ class UnifiedRedisManager {
             throw new Error(`Invalid connection purpose: ${purpose}`);
         }
 
+        // If not initialized, try to initialize automatically
         if (!this.isInitialized) {
-            throw new Error('Redis manager not initialized. Call initialize() first.');
+            console.log('🔄 Redis manager not initialized, attempting auto-initialization...');
+            return this.initialize().then(() => {
+                const connection = this.connections.get(purpose);
+                if (!connection) {
+                    throw new Error(`Connection ${purpose} not found after initialization`);
+                }
+                return connection;
+            });
         }
 
         const connection = this.connections.get(purpose);

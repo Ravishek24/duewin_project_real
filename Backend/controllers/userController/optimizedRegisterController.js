@@ -4,7 +4,7 @@ const { Op } = require('sequelize');
 const crypto = require('crypto');
 const { autoRecordReferral } = require('../../services/referralService');
 const referralCodeGenerator = require('../../utils/referralCodeGenerator');
-const registrationQueue = require('../../queues/registrationQueue');
+const { getRegistrationQueue } = require('../../queues/registrationQueue');
 const optimizedCacheService = require('../../services/optimizedCacheService');
 
 // Pre-load models at module level to avoid repeated dynamic loading
@@ -270,7 +270,7 @@ const optimizedRegisterController = async (req, res) => {
 
             // OPTIMIZATION 7: Background jobs with proper configuration (maintain original)
             const bonusJobId = `bonus-${user.user_id}`;
-            await registrationQueue.add('applyBonus', {
+            await getRegistrationQueue().add('applyBonus', {
                 type: 'applyBonus',
                 data: { userId: user.user_id }
             }, {
@@ -284,7 +284,7 @@ const optimizedRegisterController = async (req, res) => {
 
             // Record referral job
             if (referred_by) {
-                await registrationQueue.add('recordReferral', {
+                await getRegistrationQueue().add('recordReferral', {
                     type: 'recordReferral',
                     data: { userId: user.user_id, referredBy: referred_by }
                 }, {

@@ -1,6 +1,6 @@
 const { getModels } = require('../../models');
 const { generateToken, generateRefreshToken } = require('../../utils/jwt');
-const attendanceQueue = require('../../queues/attendanceQueue');
+const { getAttendanceQueue } = require('../../queues/attendanceQueue');
 const optimizedCacheService = require('../../services/optimizedCacheService');
 
 // Pre-load models at module level to avoid repeated dynamic loading
@@ -252,7 +252,7 @@ const optimizedLoginController = async (req, res) => {
         const today = new Date().toISOString().split('T')[0];
         const jobId = `attendance:${user.user_id}:${today}`;
         
-        attendanceQueue.add('checkAttendance', 
+        getAttendanceQueue().add('checkAttendance', 
             { userId: user.user_id }, 
             { 
                 jobId, // Prevents duplicate jobs

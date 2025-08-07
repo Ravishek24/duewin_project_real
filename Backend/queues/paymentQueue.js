@@ -1,7 +1,15 @@
 const { Queue } = require('bullmq');
 const getQueueConnections = require('../config/queueConfig');
-const queueConnections = getQueueConnections();
 
-const paymentQueue = new Queue('payments', { connection: queueConnections.payments });
+// Lazy queue creation - only create when needed
+let paymentQueue = null;
 
-module.exports = paymentQueue; 
+function getPaymentQueue() {
+  if (!paymentQueue) {
+    const queueConnections = getQueueConnections();
+    paymentQueue = new Queue('payments', { connection: queueConnections.payments });
+  }
+  return paymentQueue;
+}
+
+module.exports = { getPaymentQueue }; 

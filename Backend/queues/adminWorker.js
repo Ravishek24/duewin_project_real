@@ -2,6 +2,7 @@ const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
 const getQueueConnections = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
+const { getWithdrawalQueue } = require('./withdrawalQueue');
 
 async function startWorker() {
   await unifiedRedis.initialize();
@@ -86,8 +87,7 @@ async function startWorker() {
     
     try {
       // Add withdrawal approval job
-      const withdrawalQueue = require('./withdrawalQueue');
-      withdrawalQueue.add('adminApproval', {
+      getWithdrawalQueue().add('adminApproval', {
         withdrawalId: withdrawalId,
         adminId: adminId,
         action: action,

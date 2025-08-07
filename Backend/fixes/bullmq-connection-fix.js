@@ -67,19 +67,18 @@ class FixedBullMQManager {
       connectTimeout: 15000,
       commandTimeout: 30000,
       
-      // CRITICAL FIX: Prevent connection leaks
-      enableOfflineQueue: false,
-      maxRetriesPerRequest: 3,
-      
-      // Retry strategy
-      retryStrategy: (times) => {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
-      },
-      
-      // Connection pooling
-      lazyConnect: false,
-      maxRetriesPerRequest: 3,
+             // CRITICAL FIX: Prevent connection leaks
+       enableOfflineQueue: false,
+       maxRetriesPerRequest: null, // BullMQ requirement for blocking operations
+       
+       // Retry strategy
+       retryStrategy: (times) => {
+         const delay = Math.min(times * 50, 2000);
+         return delay;
+       },
+       
+       // Connection pooling
+       lazyConnect: false,
       
       // Event handlers
       reconnectOnError: (err) => {
@@ -216,27 +215,33 @@ class FixedBullMQManager {
       return this.schedulers.get(name);
     }
 
-    const schedulerConfig = {
-      connection: this.redisConnection,
-      stalledInterval: 30000,
-      maxStalledCount: 1,
-      ...config
-    };
+    try {
+      const schedulerConfig = {
+        connection: this.redisConnection,
+        stalledInterval: 30000,
+        maxStalledCount: 1,
+        ...config
+      };
 
-    const scheduler = new QueueScheduler(name, schedulerConfig);
-    
-    scheduler.on('error', (error) => {
-      console.error(`❌ Scheduler ${name} error:`, error.message);
-    });
+      const scheduler = new QueueScheduler(name, schedulerConfig);
+      
+      scheduler.on('error', (error) => {
+        console.error(`❌ Scheduler ${name} error:`, error.message);
+      });
 
-    scheduler.on('stalled', (jobId) => {
-      console.warn(`⚠️ Scheduler ${name}: Job ${jobId} stalled`);
-    });
+      scheduler.on('stalled', (jobId) => {
+        console.warn(`⚠️ Scheduler ${name}: Job ${jobId} stalled`);
+      });
 
-    this.schedulers.set(name, scheduler);
-    console.log(`✅ Created scheduler: ${name}`);
-    
-    return scheduler;
+      this.schedulers.set(name, scheduler);
+      console.log(`✅ Created scheduler: ${name}`);
+      
+      return scheduler;
+    } catch (error) {
+      console.warn(`⚠️ QueueScheduler not available for ${name}:`, error.message);
+      console.log(`ℹ️ Continuing without scheduler for ${name}`);
+      return null;
+    }
   }
 
   /**

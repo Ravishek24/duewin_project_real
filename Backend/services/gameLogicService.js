@@ -1387,11 +1387,19 @@ async function addUserToNumberTracking(exposureKey, number, userData) {
         // Update users list
         await getRedisHelper().hset(exposureKey, userKey, JSON.stringify(existingUsers));
         
-        // Update statistics
-        await updateNumberStatistics(exposureKey, number, existingUsers);
+        // Update statistics (with error handling)
+        try {
+            await updateNumberStatistics(exposureKey, number, existingUsers);
+        } catch (statsError) {
+            console.error('❌ [STATS_UPDATE] Error updating number statistics:', statsError);
+        }
         
-        // Update global period statistics
-        await updatePeriodStatistics(exposureKey);
+        // Update global period statistics (with error handling)
+        try {
+            await updatePeriodStatistics(exposureKey);
+        } catch (periodStatsError) {
+            console.error('❌ [PERIOD_STATS] Error updating period statistics:', periodStatsError);
+        }
         
         console.log(`✅ [USER_TRACKING] Added user ${userData.userId} to number ${number}`);
         
@@ -1457,9 +1465,10 @@ async function updatePeriodStatistics(exposureKey) {
         };
         
         Object.entries(allStats).forEach(([number, stats]) => {
-            globalStats.totalUsers += stats.totalUsers;
-            globalStats.totalBetAmount += stats.totalBetAmount;
-            globalStats.numberDistribution[number] = stats.totalUsers;
+            globalStats.totalUsers += stats.totalUsers || 0;
+            globalStats.totalBetAmount += stats.totalBetAmount || 0;
+            globalStats.numberDistribution[number] = stats.totalUsers || 0;
+            globalStats.numberDistribution[`totalBetAmount:${number}`] = stats.totalBetAmount || 0;
         });
         
         // Count unique users from all user arrays
@@ -1521,13 +1530,20 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                     await getRedisHelper().hincrby(exposureKey, `number:${betValue}`, exposure);
                     
                     // NEW: Add user tracking for NUMBER bet
-                    await addUserToNumberTracking(exposureKey, betValue, {
-                        userId: bet.userId,
-                        betAmount: actualBetAmount,
-                        betType: betType,
-                        betValue: betValue,
-                        timestamp: Date.now()
-                    });
+                    if (bet.userId) {
+                        try {
+                            await addUserToNumberTracking(exposureKey, betValue, {
+                                userId: bet.userId,
+                                betAmount: actualBetAmount,
+                                betType: betType,
+                                betValue: betValue,
+                                timestamp: Date.now()
+                            });
+                        } catch (userTrackingError) {
+                            console.error('❌ [USER_TRACKING] Error in NUMBER bet user tracking:', userTrackingError);
+                            // Don't fail the entire bet processing for user tracking errors
+                        }
+                    }
                 }
                 // For other bets, update all matching numbers with correct odds
                 else {
@@ -1589,13 +1605,20 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
                             await getRedisHelper().hincrby(exposureKey, `number:${num}`, exposure);
                             
                             // NEW: Add user tracking for this number
-                            await addUserToNumberTracking(exposureKey, num, {
-                                userId: bet.userId,
-                                betAmount: actualBetAmount,
-                                betType: betType,
-                                betValue: betValue,
-                                timestamp: Date.now()
-                            });
+                            if (bet.userId) {
+                                try {
+                                    await addUserToNumberTracking(exposureKey, num, {
+                                        userId: bet.userId,
+                                        betAmount: actualBetAmount,
+                                        betType: betType,
+                                        betValue: betValue,
+                                        timestamp: Date.now()
+                                    });
+                                } catch (userTrackingError) {
+                                    console.error(`❌ [USER_TRACKING] Error in COLOR/SIZE/PARITY bet user tracking for number ${num}:`, userTrackingError);
+                                    // Don't fail the entire bet processing for user tracking errors
+                                }
+                            }
                         } else {
                             console.log(`🔍 [EXPOSURE_DEBUG] Number ${num} (${combo?.color}) does NOT win for bet ${betType}:${betValue}`);
                         }
@@ -1737,7 +1760,8 @@ async function updateBetExposure(gameType, duration, periodId, bet, timeline = '
 
     } catch (error) {
         console.error('🔍 [EXPOSURE_DEBUG] Error in updateBetExposure:', error);
-        logger.error('Error updating bet exposure', { error: error.message, gameType, periodId });
+        // Don't let user tracking errors break the entire system
+        console.log('⚠️ [EXPOSURE_DEBUG] Continuing with bet processing despite user tracking error');
     }
 }
 
@@ -7105,6 +7129,7 @@ async function storeBetInRedis(betData) {
 
         // Update exposure tracking - FIXED: Pass production format that actually works
         await updateBetExposure(gameType, duration, periodId, {
+            userId: userId,                         // Add userId for user tracking
             bet_type: `${betType}:${betValue}`,    // Use production format: "COLOR:red"
             amount_after_tax: betAmount,            // Use production field name
             netBetAmount: betAmount,                // Keep legacy fallback
@@ -7350,6 +7375,7 @@ const storeBetInRedisWithTimeline = async (betData) => {
 
         // Update exposure tracking (separate operation due to complexity)
         await updateBetExposure(gameType, duration, periodId, {
+            userId: userId,                         // Add userId for user tracking
             bet_type: `${betType}:${betValue}`,    // Use production format: "COLOR:red"
             amount_after_tax: netBetAmount,         // Use production field name
             netBetAmount,                           // Keep legacy fallback

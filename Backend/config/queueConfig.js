@@ -1,7 +1,9 @@
-// config/queueConfig.js - Separate Redis databases to prevent deadlocks
+// config/queueConfig.js - Unified Redis connection manager (Lazy Loading)
 const unifiedRedis = require('./unifiedRedisManager');
 
 function getQueueConnections() {
+  // Use the unified Redis manager for all queue connections
+  // This is now lazy-loaded - connections are only retrieved when this function is called
   return {
     attendance: unifiedRedis.getConnection('main'),
     registration: unifiedRedis.getConnection('main'),

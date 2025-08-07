@@ -104,6 +104,22 @@ export PLAYWIN6_AES_IV=your_16_character_aes_iv_here
 node -e "const { testPlayWin6API } = require('./fixes/playwin6-config-fix'); testPlayWin6API();"
 ```
 
+### Step 6: Fix BullMQ Workers
+```bash
+# Stop existing BullMQ workers
+pm2 stop bullmq-worker
+
+# The workerManager.js has been updated to use the fixed BullMQ manager
+# Simply restart the workers
+pm2 start workers/workerManager.js --name "fixed-bullmq-workers"
+
+# Or if you want to use the standalone script
+node scripts/fix-bullmq-workers.js start
+
+# Monitor BullMQ status
+node scripts/fix-bullmq-workers.js status
+```
+
 ## 📊 Expected Results
 
 ### Before Fix:
@@ -112,6 +128,7 @@ node -e "const { testPlayWin6API } = require('./fixes/playwin6-config-fix'); tes
 - ❌ "Connection is closed" errors
 - ❌ Server restarts
 - ❌ PlayWin6 API 404 errors
+- ❌ BullMQ memory leaks and connection exhaustion
 
 ### After Fix:
 - ✅ 6-10 Redis connections max
@@ -119,6 +136,7 @@ node -e "const { testPlayWin6API } = require('./fixes/playwin6-config-fix'); tes
 - ✅ Stable Redis connections
 - ✅ No server restarts
 - ✅ PlayWin6 API working properly
+- ✅ BullMQ optimized with connection pooling and memory leak prevention
 
 ## 🔍 Monitoring
 

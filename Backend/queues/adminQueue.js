@@ -1,7 +1,15 @@
 const { Queue } = require('bullmq');
 const getQueueConnections = require('../config/queueConfig');
-const queueConnections = getQueueConnections();
 
-const adminQueue = new Queue('admin', { connection: queueConnections.admin });
+// Lazy queue creation - only create when needed
+let adminQueue = null;
 
-module.exports = adminQueue; 
+function getAdminQueue() {
+  if (!adminQueue) {
+    const queueConnections = getQueueConnections();
+    adminQueue = new Queue('admin', { connection: queueConnections.admin });
+  }
+  return adminQueue;
+}
+
+module.exports = { getAdminQueue }; 

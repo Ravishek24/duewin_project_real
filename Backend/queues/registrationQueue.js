@@ -1,7 +1,15 @@
 const { Queue } = require('bullmq');
 const getQueueConnections = require('../config/queueConfig');
-const queueConnections = getQueueConnections();
 
-const registrationQueue = new Queue('registration', { connection: queueConnections.registration });
+// Lazy queue creation - only create when needed
+let registrationQueue = null;
 
-module.exports = registrationQueue; 
+function getRegistrationQueue() {
+  if (!registrationQueue) {
+    const queueConnections = getQueueConnections();
+    registrationQueue = new Queue('registration', { connection: queueConnections.registration });
+  }
+  return registrationQueue;
+}
+
+module.exports = { getRegistrationQueue }; 

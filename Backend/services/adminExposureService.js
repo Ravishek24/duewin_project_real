@@ -135,14 +135,14 @@ class AdminExposureService {
     }
 
     /**
-     * Get exposure for all Wingo rooms
+     * Get exposure for all Wingo rooms (Enhanced with user details)
      */
     async getAllWingoRoomsExposure() {
         try {
             const allRooms = {};
 
             for (const duration of this.wingoDurations) {
-                const roomData = await this.getWingoExposure(duration);
+                const roomData = await this.getEnhancedWingoExposure(duration);
                 if (roomData.success) {
                     allRooms[`wingo-${duration}s`] = roomData;
                 }
@@ -261,11 +261,20 @@ class AdminExposureService {
             const usersJson = await unifiedRedisHelper.hget(exposureKey, `users:number:${number}`);
             const statsJson = await unifiedRedisHelper.hget(exposureKey, `stats:number:${number}`);
             
+            const users = usersJson ? JSON.parse(usersJson) : [];
+            const statistics = statsJson ? JSON.parse(statsJson) : {
+                totalUsers: 0,
+                totalBetAmount: 0,
+                uniqueUsers: 0,
+                betTypes: {}
+            };
+            
             return {
                 success: true,
                 number: number,
-                users: usersJson ? JSON.parse(usersJson) : [],
-                stats: statsJson ? JSON.parse(statsJson) : null
+                duration: duration,
+                users: users,
+                statistics: statistics
             };
         } catch (error) {
             console.error('❌ [ADMIN_EXPOSURE] Error getting user details:', error);
@@ -352,6 +361,93 @@ class AdminExposureService {
             // Get user counts for all numbers
             const userCounts = await this.getAllNumbersUserCounts(duration, periodId);
 
+            // Format numbers data with user counts
+            const numbers = {};
+            for (let num = 0; num <= 9; num++) {
+                const exposureCents = parseInt(exposureData[`number:${num}`] || 0);
+                const exposureRupees = exposureCents / 100;
+                const userCount = userCounts.numberDistribution?.[num] || 0;
+                const totalBetAmount = userCounts.numberDistribution?.[`totalBetAmount:${num}`] || 0;
+                
+                numbers[num] = {
+                    amount: exposureCents, // Keep in cents for consistency
+                    users: userCount,
+                    totalBetAmount: totalBetAmount
+                };
+            }
+
+            // Get user details for each number
+            const userDetails = {};
+            for (let num = 0; num <= 9; num++) {
+                try {
+                    const usersJson = await unifiedRedisHelper.hget(exposureKey, `users:number:${num}`);
+                    if (usersJson && typeof usersJson === 'string') {
+                        userDetails[num] = JSON.parse(usersJson);
+                    } else if (Array.isArray(usersJson)) {
+                        userDetails[num] = usersJson;
+                    } else {
+                        userDetails[num] = [];
+                    }
+                } catch (parseError) {
+                    console.error(`❌ [ADMIN_EXPOSURE] Error parsing user details for number ${num}:`, parseError);
+                    userDetails[num] = [];
+                }
+            }
+
+            // Get statistics for each number
+            const statistics = {};
+            for (let num = 0; num <= 9; num++) {
+                try {
+                    const statsJson = await unifiedRedisHelper.hget(exposureKey, `stats:number:${num}`);
+                    if (statsJson && typeof statsJson === 'string') {
+                        statistics[`number:${num}`] = JSON.parse(statsJson);
+                    } else if (statsJson && typeof statsJson === 'object') {
+                        statistics[`number:${num}`] = statsJson;
+                    } else {
+                        statistics[`number:${num}`] = {
+                            totalUsers: 0,
+                            totalBetAmount: 0,
+                            uniqueUsers: 0,
+                            betTypes: {}
+                        };
+                    }
+                } catch (parseError) {
+                    console.error(`❌ [ADMIN_EXPOSURE] Error parsing statistics for number ${num}:`, parseError);
+                    statistics[`number:${num}`] = {
+                        totalUsers: 0,
+                        totalBetAmount: 0,
+                        uniqueUsers: 0,
+                        betTypes: {}
+                    };
+                }
+            }
+
+            // Get period summary
+            let periodStats;
+            try {
+                const periodStatsJson = await unifiedRedisHelper.hget(exposureKey, 'period:stats');
+                if (periodStatsJson && typeof periodStatsJson === 'string') {
+                    periodStats = JSON.parse(periodStatsJson);
+                } else if (periodStatsJson && typeof periodStatsJson === 'object') {
+                    periodStats = periodStatsJson;
+                } else {
+                    periodStats = {
+                        totalUsers: 0,
+                        totalBetAmount: 0,
+                        uniqueUsers: 0,
+                        totalBets: 0
+                    };
+                }
+            } catch (parseError) {
+                console.error('❌ [ADMIN_EXPOSURE] Error parsing period statistics:', parseError);
+                periodStats = {
+                    totalUsers: 0,
+                    totalBetAmount: 0,
+                    uniqueUsers: 0,
+                    totalBets: 0
+                };
+            }
+
             return {
                 success: true,
                 room: `wingo-${duration}s`,
@@ -367,13 +463,12 @@ class AdminExposureService {
                     minExposure: minExposure.toFixed(2),
                     betDistribution: betDistribution
                 },
-                userAnalysis: {
-                    numberDistribution: userCounts.numberDistribution || {},
-                    totalUsers: userCounts.totalUsers || 0,
-                    totalBetAmount: userCounts.totalBetAmount || 0,
-                    uniqueUsers: userCounts.uniqueUsers || 0
-                },
-                periodInfo: periodInfo
+                periodInfo: periodInfo,
+                // Enhanced data structure
+                numbers: numbers,
+                userDetails: userDetails,
+                statistics: statistics,
+                periodSummary: periodStats
             };
 
         } catch (error) {
@@ -433,7 +528,7 @@ class AdminExposureService {
         adminNamespace.on('connection', (socket) => {
             console.log(`🔐 [ADMIN_EXPOSURE] Admin connected: ${socket.admin.username}`);
 
-            // Subscribe to Wingo exposure updates
+            // Subscribe to Wingo exposure updates (Enhanced with user details)
             socket.on('subscribeToWingoExposure', async (data) => {
                 try {
                     const { duration } = data;
@@ -446,15 +541,15 @@ class AdminExposureService {
                     const roomName = `admin:exposure:wingo:${duration}`;
                     socket.join(roomName);
                     
-                    console.log(`📊 [ADMIN_EXPOSURE] Admin ${socket.admin.username} subscribed to ${roomName}`);
+                    console.log(`📊 [ADMIN_EXPOSURE] Admin ${socket.admin.username} subscribed to enhanced ${roomName}`);
 
-                    // Send initial exposure data
-                    const exposureData = await this.getWingoExposure(duration);
-                    socket.emit('wingoExposureUpdate', exposureData);
+                    // Send initial enhanced exposure data
+                    const enhancedData = await this.getEnhancedWingoExposure(duration);
+                    socket.emit('wingoExposureUpdate', enhancedData);
 
                 } catch (error) {
-                    console.error('❌ [ADMIN_EXPOSURE] Subscription error:', error);
-                    socket.emit('error', { message: 'Subscription failed' });
+                    console.error('❌ [ADMIN_EXPOSURE] Enhanced subscription error:', error);
+                    socket.emit('error', { message: 'Enhanced subscription failed' });
                 }
             });
 
@@ -486,7 +581,7 @@ class AdminExposureService {
             // Get user details for specific number
             socket.on('getUserDetailsForNumber', async (data) => {
                 try {
-                    const { duration, periodId, number } = data;
+                    const { duration, number } = data;
                     
                     if (!this.wingoDurations.includes(duration)) {
                         socket.emit('error', { message: 'Invalid duration' });
@@ -498,6 +593,8 @@ class AdminExposureService {
                         return;
                     }
 
+                    // Get current period if not provided
+                    const periodId = await this.getCurrentPeriod(duration);
                     const userDetails = await this.getUserDetailsForNumber(duration, periodId, number);
                     socket.emit('userDetailsForNumber', userDetails);
 
@@ -526,23 +623,28 @@ class AdminExposureService {
                 }
             });
 
-            // Subscribe to all Wingo rooms
-            socket.on('subscribeToAllWingoRooms', async () => {
+            // Subscribe to specific Wingo room only
+            socket.on('subscribeToWingoRoom', async (data) => {
                 try {
-                    for (const duration of this.wingoDurations) {
-                        const roomName = `admin:exposure:wingo:${duration}`;
-                        socket.join(roomName);
+                    const { duration } = data;
+                    
+                    if (!this.wingoDurations.includes(duration)) {
+                        socket.emit('error', { message: 'Invalid duration' });
+                        return;
                     }
 
-                    console.log(`📊 [ADMIN_EXPOSURE] Admin ${socket.admin.username} subscribed to all Wingo rooms`);
+                    const roomName = `admin:exposure:wingo:${duration}`;
+                    socket.join(roomName);
+                    
+                    console.log(`📊 [ADMIN_EXPOSURE] Admin ${socket.admin.username} subscribed to room: ${roomName}`);
 
-                    // Send initial data for all rooms
-                    const allRoomsData = await this.getAllWingoRoomsExposure();
-                    socket.emit('allWingoRoomsUpdate', allRoomsData);
+                    // Send initial data for this specific room only
+                    const roomData = await this.getEnhancedWingoExposure(duration);
+                    socket.emit('wingoExposureUpdate', roomData);
 
                 } catch (error) {
-                    console.error('❌ [ADMIN_EXPOSURE] All rooms subscription error:', error);
-                    socket.emit('error', { message: 'All rooms subscription failed' });
+                    console.error('❌ [ADMIN_EXPOSURE] Room subscription error:', error);
+                    socket.emit('error', { message: 'Room subscription failed' });
                 }
             });
 
@@ -565,24 +667,11 @@ class AdminExposureService {
         setInterval(async () => {
             try {
                 for (const duration of this.wingoDurations) {
-                    // Regular exposure updates
-                    const exposureData = await this.getWingoExposure(duration);
-                    if (exposureData.success) {
-                        adminNamespace.to(`admin:exposure:wingo:${duration}`).emit('wingoExposureUpdate', exposureData);
-                    }
-
-                    // Enhanced exposure updates with user details
+                    // Enhanced exposure updates with user details for specific room only
                     const enhancedData = await this.getEnhancedWingoExposure(duration);
                     if (enhancedData.success) {
-                        adminNamespace.to(`admin:enhanced:exposure:wingo:${duration}`).emit('enhancedWingoExposureUpdate', enhancedData);
-                    }
-                }
-
-                // Send all rooms update every 2.5 seconds
-                if (Date.now() % 2500 < 500) {
-                    const allRoomsData = await this.getAllWingoRoomsExposure();
-                    if (allRoomsData.success) {
-                        adminNamespace.emit('allWingoRoomsUpdate', allRoomsData);
+                        // Send to specific room only
+                        adminNamespace.to(`admin:exposure:wingo:${duration}`).emit('wingoExposureUpdate', enhancedData);
                     }
                 }
 
@@ -591,7 +680,7 @@ class AdminExposureService {
             }
         }, 500);
 
-        console.log('🔄 [ADMIN_EXPOSURE] Periodic exposure updates started (every 500ms)');
+        console.log('🔄 [ADMIN_EXPOSURE] Periodic exposure updates started (every 500ms) - Room specific only');
     }
 
     /**

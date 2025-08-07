@@ -84,6 +84,8 @@ const { sequelize } = require('../config/db');
 const WithdrawalAdmin = require('../models/WithdrawalAdmin');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
 const WalletRecharge = require('../models/WalletRecharge');
+const { getPaymentQueue } = require('../queues/paymentQueue');
+const { getDepositQueue } = require('../queues/depositQueue');
 
 // Controller to handle payment creation (adding money to wallet) with gateway selection
 // Updated section for paymentController.js to include MxPay
@@ -790,8 +792,7 @@ const initiateUTRDeposit = async (req, res) => {
         });
 
         // Add background job to check UTR status
-        const paymentQueue = require('../queues/paymentQueue');
-        paymentQueue.add('checkUTRStatus', {
+        getPaymentQueue().add('checkUTRStatus', {
             orderId: orderId,
             utr: utr,
             userId: userId,
@@ -935,8 +936,7 @@ const initiateDeposit = async (req, res) => {
             }).catch(console.error);
             
             // Job 2: Check payment status after 30 seconds
-            const paymentQueue = require('../queues/paymentQueue');
-            paymentQueue.add('checkPaymentStatus', {
+            getPaymentQueue().add('checkPaymentStatus', {
                 orderId: orderId,
                 gateway: payment_method,
                 type: 'deposit'

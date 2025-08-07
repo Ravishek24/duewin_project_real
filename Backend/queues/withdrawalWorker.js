@@ -3,6 +3,7 @@ const { Sequelize } = require('sequelize');
 const { getWorkerModels } = require('../workers/workerInit');
 const getQueueConnections = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
+const { getPaymentQueue } = require('./paymentQueue');
 
 async function startWorker() {
   await unifiedRedis.initialize();
@@ -354,8 +355,7 @@ async function startWorker() {
         console.log(`✅ Payment processing initiated for withdrawal ${withdrawalId} via ${paymentGateway}`);
         
         // Add a job to check payment status after some time
-        const paymentQueue = require('./paymentQueue');
-        paymentQueue.add('checkPaymentStatus', {
+        getPaymentQueue().add('checkPaymentStatus', {
           withdrawalId: withdrawalId,
           paymentGateway: paymentGateway
         }, {

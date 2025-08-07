@@ -4,7 +4,7 @@ const { Op } = require('sequelize');
 const crypto = require('crypto');
 const { autoRecordReferral } = require('../../services/referralService'); // Fixed path
 const referralCodeGenerator = require('../../utils/referralCodeGenerator');
-const registrationQueue = require('../../queues/registrationQueue');
+const { getRegistrationQueue } = require('../../queues/registrationQueue');
 
 // Fallback function to generate referral code if utility is not available
 const generateReferringCode = () => {
@@ -200,11 +200,10 @@ const registerController = async (req, res) => {
             await transaction.commit();
 
             // Add background jobs with proper configuration
-            const registrationQueue = require('../../queues/registrationQueue');
             
             // Job 1: Apply bonus (higher priority)
             const bonusJobId = `bonus-${user.user_id}`;
-            await registrationQueue.add('applyBonus', {
+            await getRegistrationQueue().add('applyBonus', {
                 type: 'applyBonus',
                 data: { userId: user.user_id }
             }, {
@@ -218,7 +217,7 @@ const registerController = async (req, res) => {
             
             // Job 2: Record referral (waits for bonus job)
             if (referred_by) {
-                await registrationQueue.add('recordReferral', {
+                await getRegistrationQueue().add('recordReferral', {
                     type: 'recordReferral',
                     data: { userId: user.user_id, referredBy: referred_by }
                 }, {

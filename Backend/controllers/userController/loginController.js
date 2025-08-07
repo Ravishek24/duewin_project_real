@@ -1,7 +1,7 @@
 const { getModels } = require('../../models');
 const { generateToken, generateRefreshToken } = require('../../utils/jwt');
 const { Op } = require('sequelize');
-const attendanceQueue = require('../../queues/attendanceQueue');
+const { getAttendanceQueue } = require('../../queues/attendanceQueue');
 
 const loginController = async (req, res) => {
     try {
@@ -59,7 +59,7 @@ const loginController = async (req, res) => {
         const today = new Date().toISOString().split('T')[0];
         const jobId = `attendance:${user.user_id}:${today}`;
         
-        attendanceQueue.add('checkAttendance', 
+        getAttendanceQueue().add('checkAttendance', 
             { userId: user.user_id }, 
             { 
                 jobId, // Prevents duplicate jobs

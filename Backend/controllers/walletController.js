@@ -6,6 +6,8 @@ const {
     processWithdrawal
 } = require('../services/walletServices');
 const User = require('../models/User');
+const { getWithdrawalQueue } = require('../queues/withdrawalQueue');
+const { getAdminQueue } = require('../queues/adminQueue');
 
 // Controller to get user's wallet balance
 const getWalletBalanceController = async (req, res) => {
@@ -164,10 +166,9 @@ const initiateWithdrawalController = async (req, res) => {
         const orderId = `WD${Date.now()}${userId}`;
 
         // Add background withdrawal processing job
-        const withdrawalQueue = require('../queues/withdrawalQueue');
         
         // Job 1: Process withdrawal (immediate validation and processing)
-        withdrawalQueue.add('processWithdrawal', {
+        getWithdrawalQueue().add('processWithdrawal', {
             userId: userId,
             amount: amount,
             orderId: orderId,
@@ -183,8 +184,7 @@ const initiateWithdrawalController = async (req, res) => {
         }).catch(console.error);
         
         // Job 2: Send admin notification (delayed)
-        const adminQueue = require('../queues/adminQueue');
-        adminQueue.add('notifyAdmin', {
+        getAdminQueue().add('notifyAdmin', {
             type: 'withdrawal_request',
             userId: userId,
             amount: amount,

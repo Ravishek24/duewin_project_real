@@ -2,6 +2,9 @@ const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
 const getQueueConnections = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
+const { getDepositQueue } = require('./depositQueue');
+const { getPaymentQueue } = require('./paymentQueue');
+const { getWithdrawalQueue } = require('./withdrawalQueue');
 
 async function startWorker() {
   await unifiedRedis.initialize();
@@ -88,8 +91,7 @@ async function startWorker() {
         // If successful, process the deposit
         if (status === 'success') {
           // Add deposit processing job
-          const depositQueue = require('./depositQueue');
-          depositQueue.add('processDeposit', {
+          getDepositQueue().add('processDeposit', {
             userId: deposit.user_id,
             amount: amount || deposit.amount,
             orderId: orderId,
@@ -229,8 +231,7 @@ async function startWorker() {
         
         if (status === 'pending' && attempt < maxRetries) {
           // Schedule another check
-          const paymentQueue = require('./paymentQueue');
-          paymentQueue.add('checkPaymentStatus', {
+          getPaymentQueue().add('checkPaymentStatus', {
             orderId,
             gateway,
             type
@@ -245,8 +246,7 @@ async function startWorker() {
         
         // Process the status
         if (type === 'deposit') {
-          const depositQueue = require('./depositQueue');
-          depositQueue.add('updateDepositStatus', {
+          getDepositQueue().add('updateDepositStatus', {
             orderId,
             status,
             transactionId: status === 'success' ? `TXN_${Date.now()}` : null
@@ -255,8 +255,7 @@ async function startWorker() {
             attempts: 3
           }).catch(console.error);
         } else {
-          const withdrawalQueue = require('./withdrawalQueue');
-          withdrawalQueue.add('updateWithdrawalStatus', {
+          getWithdrawalQueue().add('updateWithdrawalStatus', {
             orderId,
             status,
             transactionId: status === 'success' ? `TXN_${Date.now()}` : null,
@@ -300,8 +299,7 @@ async function startWorker() {
         return { success: true };
       } else {
         // Schedule another retry
-        const paymentQueue = require('./paymentQueue');
-        paymentQueue.add('retryPayment', {
+        getPaymentQueue().add('retryPayment', {
           orderId,
           gateway,
           type,
