@@ -51,7 +51,7 @@ class OptimizedCacheService {
             console.log('🔄 Initializing OptimizedCacheService using unified Redis...');
             
             // FIXED: Use existing unified Redis connection instead of creating new one
-            this.cacheClient = unifiedRedisManager.getConnection('main');
+            this.cacheClient = await unifiedRedisManager.getConnection('main');
             
             if (!this.cacheClient) {
                 throw new Error('Unable to get Redis connection from unified manager');

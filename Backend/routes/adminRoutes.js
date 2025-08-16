@@ -21,7 +21,10 @@ const {
   sendAdminOtpController,
   verifyAdminOtpController
 } = require('../controllers/adminController/adminOtpController');
-const { auth, isAdmin } = require('../middlewares/authMiddleware');
+
+module.exports = (authMiddleware) => {
+const express = require('express');
+const { auth, isAdmin } = authMiddleware;
 const adminIpWhitelist = require('../middleware/adminIpWhitelist');
 const { 
   loginSystemConfig,
@@ -82,7 +85,7 @@ router.post('/otp/send', sendAdminOtpController);
 router.post('/otp/verify', verifyAdminOtpController);
 
 // TESTING ONLY: Direct admin login without OTP (bypass for testing)
-// FIXED: Make sure this is properly async
+// FIXED: Make sure this is properly async and creates a session
 router.post('/direct-login', async (req, res) => {
   try {
     const { email } = req.body;
@@ -111,14 +114,32 @@ router.post('/direct-login', async (req, res) => {
     
     console.log('⚠️ WARNING: Using direct admin login (OTP bypassed) for testing purposes');
     
-    // Generate JWT token
+    // Create session using sessionService (FIXED: Now creates proper session)
+    const sessionService = require('../services/sessionService');
+    const { getModels } = require('../models');
+    const models = await getModels();
+    const sessionServiceInstance = sessionService(models);
+    
+    const deviceInfo = {
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+      loginTime: new Date(),
+      isAdmin: true
+    };
+    
+    const session = await sessionServiceInstance.createSession(admin.user_id, deviceInfo, req);
+    
+    // Generate JWT token with session info
     const token = jwt.sign(
       { 
         user_id: admin.user_id,
-        is_admin: true
+        userId: admin.user_id, // Add both for compatibility
+        is_admin: true,
+        sessionToken: session.session_token,
+        deviceId: session.device_id
       },
       process.env.JWT_SECRET || 'default_jwt_secret_for_development_only',
-      { expiresIn: '24h' }
+                  { expiresIn: '7h' }
     );
     
     // Remove sensitive data
@@ -130,7 +151,11 @@ router.post('/direct-login', async (req, res) => {
       message: 'Direct admin login successful (for testing only)',
       data: {
         token,
-        user: adminData
+        user: adminData,
+        session: {
+          deviceId: session.device_id,
+          expiresAt: session.expires_at
+        }
       }
     });
   } catch (error) {
@@ -145,9 +170,10 @@ router.post('/direct-login', async (req, res) => {
 // System Config Login Route (no auth required)
 router.post('/system-config/login', loginSystemConfig);
 
-// Apply IP whitelist and auth middleware to protected routes
+// Apply IP whitelist, auth middleware, and admin authorization to protected routes
 router.use(adminIpWhitelist);
 router.use(auth);
+router.use(isAdmin); // 🚨 SECURITY FIX: Add missing admin authorization check
 
 // Admin profile management routes
 router.get('/profile', getAdminProfileController);
@@ -238,4 +264,5 @@ router.get('/stats/games/spribe', getSpribeTransactionStatsController);
 router.get('/stats/games/seamless', getSeamlessTransactionStatsController);
 router.get('/stats/games/combined', getCombinedTransactionStatsController);
 
-module.exports = router;
+return router;
+};

@@ -1,15 +1,15 @@
 const { Worker, Queue } = require('bullmq');
 const { Sequelize } = require('sequelize');
 const { getWorkerModels } = require('../workers/workerInit');
-const getQueueConnections = require('../config/queueConfig');
+const { createWorker } = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
 const { getPaymentQueue } = require('./paymentQueue');
 
 async function startWorker() {
   await unifiedRedis.initialize();
-  const queueConnections = getQueueConnections();
+  // connections handled within createWorker via unifiedRedis
 
-  const worker = new Worker('withdrawals', async job => {
+  const worker = createWorker('withdrawals', async job => {
     // Use job.name as the type, and job.data as the data
     const type = job.name;
     const data = job.data;
@@ -57,25 +57,24 @@ async function startWorker() {
       }
     }
   }, {
-    connection: queueConnections.withdrawals,
-    concurrency: 3,
-    settings: {
-      stalledInterval: 30000,
-      maxStalledCount: 1
-    }
+    concurrency: 3
   });
 
   // Enhanced withdrawal processing with validation and consistent lock ordering
   async function processWithdrawalWithRetry(data, models, maxRetries = 3) {
     const { userId, amount, orderId, withdrawalType, bankAccountId, usdtAccountId } = data;
     
-    // FIXED: Use unified Redis manager
-    const redis = unifiedRedis.getConnection('main');
+    // FIXED: Use unified Redis helper instead of direct connection
+    const redisHelper = await unifiedRedis.getHelper();
+    if (!redisHelper) {
+      throw new Error('Redis helper not available');
+    }
+    
     const lockKey = `withdrawal:${orderId}:lock`;
     const lockValue = Date.now().toString();
     
     // Try to acquire lock (5 min expiry)
-    const acquired = await redis.set(lockKey, lockValue, 'EX', 300, 'NX');
+    const acquired = await redisHelper.set(lockKey, lockValue, 'EX', 300, 'NX');
     if (!acquired) {
       throw new Error('Withdrawal already processing or processed');
     }
@@ -190,9 +189,9 @@ async function startWorker() {
     } finally {
       // Only release lock if we still own it
       try {
-        const currentValue = await redis.get(lockKey);
+        const currentValue = await redisHelper.get(lockKey);
         if (currentValue === lockValue) {
-          await redis.del(lockKey);
+          await redisHelper.del(lockKey);
           console.log(`🔓 Released withdrawal lock: ${lockKey}`);
         } else {
           console.log(`⚠️ Lock value mismatch for ${lockKey}, not releasing`);
@@ -545,7 +544,7 @@ async function startWorker() {
     }
   });
 
-  const withdrawalQueue = new Queue('withdrawals', { connection: queueConnections.withdrawals });
+  const withdrawalQueue = new Queue('withdrawals', { connection: await unifiedRedis.getConnection('main') });
   setInterval(() => {
     withdrawalQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
     withdrawalQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});
@@ -554,4 +553,12 @@ async function startWorker() {
   return worker;
 }
 
-module.exports = startWorker(); 
+// Export the withdrawal processing functions for use by worker manager
+module.exports = {
+  startWorker: startWorker(),
+  processWithdrawalWithRetry,
+  processAdminApprovalWithRetry,
+  processPaymentWithRetry,
+  updateWithdrawalStatusWithRetry,
+  refundWithdrawalWithRetry
+}; 

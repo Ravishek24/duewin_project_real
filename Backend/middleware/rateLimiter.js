@@ -92,7 +92,72 @@ const rateLimiters = {
     withdrawal: bypassMiddleware,
 
     // Game Launch: 20 requests per minute per user
-    gameLaunch: bypassMiddleware
+    gameLaunch: bypassMiddleware,
+
+    // ===== NEW RATE LIMITERS FOR UNPROTECTED ROUTES =====
+
+    // User Registration: 10 requests per 15 minutes per IP
+    userRegistration: bypassMiddleware,
+
+    // User Login: 10 requests per 15 minutes per IP
+    userLogin: bypassMiddleware,
+
+    // Profile Management: 10 requests per hour per user AND per IP
+    profileManagement: bypassMiddleware,
+
+    // Enhanced Wallet Operations: 50 requests per hour per user
+    enhancedWallet: bypassMiddleware,
+
+    // Spribe Game Operations: 100 requests per minute per user
+    spribeGame: bypassMiddleware,
+
+    // Announcements: 20 requests per hour per IP
+    announcements: bypassMiddleware,
+
+    // PPayPro Operations: 30 requests per hour per user
+    ppaypro: bypassMiddleware,
+
+    // Referral System: 20 requests per hour per user
+    referralSystem: bypassMiddleware,
+
+    // Transaction Reports: 30 requests per hour per user
+    transactionReports: bypassMiddleware,
+
+    // Gift Codes: 10 requests per hour per user
+    giftCodes: bypassMiddleware,
+
+    // Game Move Transactions: 50 requests per minute per user
+    gameMoveTransactions: bypassMiddleware,
+
+    // Activity Rewards: 20 requests per hour per user
+    activityRewards: bypassMiddleware,
+
+    // VIP System: 15 requests per hour per user
+    vipSystem: bypassMiddleware,
+
+    // USDT Operations: 30 requests per hour per user
+    usdtOperations: bypassMiddleware,
+
+    // User Feedback: 10 requests per hour per user
+    userFeedback: bypassMiddleware,
+
+    // WebSocket Connections: 20 connections per hour per user, 10 operations per minute per user
+    websocketConnections: bypassMiddleware,
+
+    // Vault Operations: 20 requests per hour per user
+    vaultOperations: bypassMiddleware,
+
+    // Third Party Wallet: 30 requests per hour per user
+    thirdPartyWallet: bypassMiddleware,
+
+    // Payment Gateway Operations: 20 requests per hour per user
+    paymentGateway: bypassMiddleware,
+
+    // MxPay Integration: 25 requests per hour per user
+    mxPayIntegration: bypassMiddleware,
+
+    // Rebate System: 15 requests per hour per user
+    rebateSystem: bypassMiddleware
 };
 
 // Rate limiter for game history API - bypassed for testing

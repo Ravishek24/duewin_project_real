@@ -129,14 +129,16 @@ const createOtpSession = async (mobileNo, countryCode, userName, userData = {}, 
 };
 
 /**
- * Check the status of an OTP session (verify the code) using Prelude Verify API
+ * Verify an OTP code using Prelude Verify API
  * @param {string} otpSessionId - OTP session ID (verification.id from Prelude)
  * @param {string} phoneNumber - Phone number (E.164 format)
  * @param {string} code - The OTP code to verify
- * @returns {Object} - Session status and details
+ * @returns {Object} - Verification result
  */
-const checkOtpSession = async (otpSessionId, phoneNumber, code) => {
+const verifyOtpCode = async (otpSessionId, phoneNumber, code) => {
     try {
+        console.log(`🔐 Verifying OTP: session=${otpSessionId}, phone=${phoneNumber}, code=${code}`);
+        
         // Verify the code using Prelude
         const check = await preludeClient.verification.check({
             target: {
@@ -146,24 +148,112 @@ const checkOtpSession = async (otpSessionId, phoneNumber, code) => {
             code: code,
         });
 
-        // Update OTP request status if found
-        await OtpRequest.update(
-            { status: 'verified' },
-            { where: { otp_session_id: otpSessionId } }
-        );
+        console.log(`📱 Prelude verification response:`, check);
 
-        return {
-            success: true,
-            message: 'OTP verified successfully',
-            verified: true,
-            status: 'verified',
-            phoneNumber: phoneNumber
-        };
+        // Check if verification was successful
+        if (check && check.status === 'approved') {
+            // ✅ OTP is correct - update status to verified
+            await OtpRequest.update(
+                { status: 'verified' },
+                { where: { otp_session_id: otpSessionId } }
+            );
+
+            console.log(`✅ OTP verified successfully for session: ${otpSessionId}`);
+            
+            return {
+                success: true,
+                message: 'OTP verified successfully',
+                verified: true,
+                status: 'verified',
+                phoneNumber: phoneNumber,
+                verificationDetails: check
+            };
+        } else {
+            // ❌ OTP is incorrect or verification failed
+            console.log(`❌ OTP verification failed for session: ${otpSessionId}. Status: ${check?.status}`);
+            
+            // Update OTP request status to failed
+            await OtpRequest.update(
+                { status: 'failed' },
+                { where: { otp_session_id: otpSessionId } }
+            );
+
+            return {
+                success: false,
+                message: 'Invalid OTP code. Please try again.',
+                verified: false,
+                status: 'failed',
+                phoneNumber: phoneNumber,
+                verificationDetails: check
+            };
+        }
     } catch (error) {
-        console.error('Error checking OTP session (Prelude):', error);
+        console.error('❌ Error verifying OTP code (Prelude):', error);
+        
+        // Update OTP request status to failed on error
+        try {
+            await OtpRequest.update(
+                { status: 'failed' },
+                { where: { otp_session_id: otpSessionId } }
+            );
+        } catch (updateError) {
+            console.error('Failed to update OTP status on error:', updateError);
+        }
+        
         return {
             success: false,
-            message: error.message || 'Error verifying OTP via Prelude'
+            message: 'OTP verification failed. Please try again.',
+            verified: false,
+            status: 'failed',
+            phoneNumber: phoneNumber,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * Check the status of an OTP session (without verifying code)
+ * @param {string} otpSessionId - OTP session ID (verification.id from Prelude)
+ * @returns {Object} - Session status details
+ */
+const checkOtpSession = async (otpSessionId) => {
+    try {
+        console.log(`📱 Checking OTP session status: ${otpSessionId}`);
+        
+        // Get OTP request from database
+        const otpRequest = await OtpRequest.findOne({
+            where: { otp_session_id: otpSessionId }
+        });
+
+        if (!otpRequest) {
+            return {
+                success: false,
+                message: 'OTP session not found',
+                verified: false,
+                status: 'not_found'
+            };
+        }
+
+        console.log(`📱 OTP session status: ${otpRequest.status}`);
+        
+        return {
+            success: true,
+            message: 'OTP session status retrieved',
+            verified: otpRequest.status === 'verified',
+            status: otpRequest.status,
+            phoneNumber: otpRequest.phone_no,
+            requestType: otpRequest.request_type,
+            createdAt: otpRequest.created_at
+        };
+    } catch (error) {
+        console.error('❌ Error checking OTP session status:', error);
+        
+        return {
+            success: false,
+            message: 'Failed to check OTP session status',
+            verified: false,
+            status: 'error',
+            error: error.message
         };
     }
 };
@@ -173,5 +263,6 @@ module.exports = {
     generateOTP, // Kept for compatibility, not used by Prelude
     checkOtpLimit,
     createOtpSession,
-    checkOtpSession
+    verifyOtpCode, // 🆕 NEW: For actual OTP verification
+    checkOtpSession // 🆕 UPDATED: For checking session status only
 };

@@ -98,7 +98,7 @@ const verifyOtpController = async (req, res) => {
             formattedPhone = `+91${phone}`;
         }
 
-        const result = await otpService.checkOtpSession(otp_session_id, formattedPhone, code);
+        const result = await otpService.verifyOtpCode(otp_session_id, formattedPhone, code);
 
         if (!result.success) {
             return res.status(400).json(result);

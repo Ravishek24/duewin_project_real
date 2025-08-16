@@ -3,10 +3,11 @@ function setRedisHelper(helper) { redisHelper = helper; }
 
 
 // routes/seamlessRoutes.js - FIXED VERSION
+module.exports = (authMiddleware) => {
 const express = require('express');
 const router = express.Router();
 const seamlessController = require('../controllers/seamlessController');
-const { auth } = require('../middlewares/authMiddleware');
+const { auth, isAdmin } = authMiddleware;
 const { validateSeamlessRequest, logSeamlessRequest } = require('../middlewares/seamlessMiddleware');
 const { cacheService } = require('../services/cacheService');
 const {
@@ -211,7 +212,6 @@ router.get('/hot-games', auth, async (req, res) => {
 router.post('/hot-games/refresh', auth, async (req, res) => {
   try {
     // Check if user is admin
-    const { isAdmin } = require('../middlewares/authMiddleware');
     const isUserAdmin = await isAdmin(req.user.user_id);
     
     if (!isUserAdmin) {
@@ -261,7 +261,6 @@ router.post('/hot-games/refresh', auth, async (req, res) => {
 router.get('/hot-games/cache-status', auth, async (req, res) => {
   try {
     // Check if user is admin
-    const { isAdmin } = require('../middlewares/authMiddleware');
     const isUserAdmin = await isAdmin(req.user.user_id);
     
     if (!isUserAdmin) {
@@ -822,5 +821,7 @@ router.get('/stats/sports-betting', auth, getSportsBettingStatsController);
 router.get('/stats/all', auth, getAllSeamlessGamesStatsController);
 router.get('/stats/:gameType/history', auth, getSeamlessGameHistoryController);
 
-module.exports = router;
+return router;
+};
+
 module.exports.setRedisHelper = setRedisHelper;

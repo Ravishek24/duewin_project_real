@@ -4,11 +4,12 @@ const express = require('express');
 const router = express.Router();
 const { verifyGameTicks } = require('../services/websocketService');
 const { getIo } = require('../config/socketConfig');
+const rateLimiters = require('../middleware/rateLimiter');
 
 /**
- * Get WebSocket system status
+ * Get WebSocket system status - Rate limited
  */
-router.get('/status', async (req, res) => {
+router.get('/status', rateLimiters.websocketConnections, async (req, res) => {
     try {
         // Check if Socket.IO is initialized
         const io = getIo();
@@ -76,9 +77,9 @@ router.get('/status', async (req, res) => {
 });
 
 /**
- * Trigger a test broadcast
+ * Trigger a test broadcast - Rate limited
  */
-router.post('/test-broadcast', async (req, res) => {
+router.post('/test-broadcast', rateLimiters.websocketConnections, async (req, res) => {
     try {
         const { gameType = 'wingo', duration = 60, message = 'Test broadcast' } = req.body;
         
@@ -127,9 +128,9 @@ router.post('/test-broadcast', async (req, res) => {
 });
 
 /**
- * Get current game periods status
+ * Get current game periods status - Rate limited
  */
-router.get('/periods', async (req, res) => {
+router.get('/periods', rateLimiters.websocketConnections, async (req, res) => {
     try {
         const periodService = require('../services/periodService');
         const gameTypes = ['wingo', 'trx_wix', 'k3', 'fiveD'];
@@ -171,9 +172,9 @@ router.get('/periods', async (req, res) => {
 });
 
 /**
- * Force restart game ticks
+ * Force restart game ticks - Rate limited
  */
-router.post('/restart-ticks', async (req, res) => {
+router.post('/restart-ticks', rateLimiters.websocketConnections, async (req, res) => {
     try {
         const { stopGameTicks, startGameTickSystem } = require('../services/websocketService');
         
@@ -202,9 +203,9 @@ router.post('/restart-ticks', async (req, res) => {
 });
 
 /**
- * Debug JWT token
+ * Debug JWT token - Rate limited
  */
-router.post('/debug-token', async (req, res) => {
+router.post('/debug-token', rateLimiters.websocketConnections, async (req, res) => {
     try {
         const { token } = req.body;
         
@@ -236,9 +237,9 @@ router.post('/debug-token', async (req, res) => {
 });
 
 /**
- * Test WebSocket connection with detailed logging
+ * Test WebSocket connection with detailed logging - Rate limited
  */
-router.get('/test-connection', async (req, res) => {
+router.get('/test-connection', rateLimiters.websocketConnections, async (req, res) => {
     try {
         const io = getIo();
         if (!io) {
@@ -279,9 +280,9 @@ router.get('/test-connection', async (req, res) => {
 });
 
 /**
- * Monitor incoming WebSocket connection attempts
+ * Monitor incoming WebSocket connection attempts - Rate limited
  */
-router.get('/monitor-connections', async (req, res) => {
+router.get('/monitor-connections', rateLimiters.websocketConnections, async (req, res) => {
     try {
         // This will help us see what's being sent from frontend
         res.json({
@@ -303,7 +304,7 @@ router.get('/monitor-connections', async (req, res) => {
         });
     }
 });
-router.post('/create-test-token', async (req, res) => {
+router.post('/create-test-token', rateLimiters.websocketConnections, async (req, res) => {
     try {
         const { userId = 'test123', email = 'test@example.com' } = req.body;
         

@@ -128,8 +128,35 @@ const getFirstBonusStatusController = async (req, res) => {
 // Controller to initiate withdrawal
 const initiateWithdrawalController = async (req, res) => {
     try {
+        // FIXED: Add proper user authentication validation
+        if (!req.user || !req.user.user_id) {
+            console.error('[WITHDRAWAL INITIATION] Authentication failed - no user or user_id:', {
+                hasReqUser: !!req.user,
+                userId: req.user?.user_id,
+                timestamp: new Date().toISOString()
+            });
+            return res.status(401).json({
+                success: false,
+                message: 'Authentication required. Please log in again.'
+            });
+        }
+
         const userId = req.user.user_id;
         const { amount, bank_account_id, usdt_account_id, withdrawal_type = 'BANK' } = req.body;
+
+        // FIXED: Additional validation for userId to prevent undefined jobs
+        if (!userId || userId === undefined || userId === null) {
+            console.error('[WITHDRAWAL INITIATION] Invalid userId:', {
+                userId,
+                userIdType: typeof userId,
+                reqUser: req.user,
+                timestamp: new Date().toISOString()
+            });
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid user session. Please log in again.'
+            });
+        }
 
         // Log withdrawal initiation attempt
         console.log('[WITHDRAWAL INITIATION] User:', userId, 'Amount:', amount, 'Withdrawal Type:', withdrawal_type, 'Bank Account ID:', bank_account_id, 'USDT Account ID:', usdt_account_id, 'Time:', new Date().toISOString());
@@ -177,24 +204,54 @@ const initiateWithdrawalController = async (req, res) => {
             usdtAccountId: usdt_account_id
         }, {
             priority: 10,
-            removeOnComplete: 5,
-            removeOnFail: 10,
+                    // BullMQ v5: use keepJobs instead of removeOnComplete/removeOnFail
+        keepJobs: {
+          completed: 5,
+          failed: 10
+        },
             attempts: 3,
             backoff: { type: 'exponential', delay: 2000 }
         }).catch(console.error);
         
-        // Job 2: Send admin notification (delayed)
-        getAdminQueue().add('notifyAdmin', {
+        // Job 2: Send admin notification (delayed) - FIXED: Add validation before creating job
+        console.log('[ADMIN NOTIFICATION] Creating admin job with data:', {
             type: 'withdrawal_request',
             userId: userId,
             amount: amount,
             withdrawalType: withdrawal_type,
-            orderId: orderId
-        }, {
-            delay: 5000, // Notify admin after 5 seconds
-            priority: 5,
-            attempts: 2
-        }).catch(console.error);
+            orderId: orderId,
+            userIdValid: userId && userId !== undefined && userId !== null,
+            timestamp: new Date().toISOString()
+        });
+
+        // FIXED: Only create admin job if userId is valid
+        if (userId && userId !== undefined && userId !== null) {
+            getAdminQueue().add('notifyAdmin', {
+                type: 'withdrawal_request',
+                userId: userId,
+                amount: amount,
+                withdrawalType: withdrawal_type,
+                orderId: orderId
+            }, {
+                delay: 5000, // Notify admin after 5 seconds
+                priority: 5,
+                attempts: 2
+            }).catch(error => {
+                console.error('[ADMIN NOTIFICATION] Failed to create admin job:', {
+                    error: error.message,
+                    userId: userId,
+                    orderId: orderId,
+                    timestamp: new Date().toISOString()
+                });
+            });
+        } else {
+            console.error('[ADMIN NOTIFICATION] Skipping admin job creation - invalid userId:', {
+                userId: userId,
+                userIdType: typeof userId,
+                orderId: orderId,
+                timestamp: new Date().toISOString()
+            });
+        }
 
         // Return immediate response
         return res.status(200).json({

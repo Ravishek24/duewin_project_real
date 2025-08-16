@@ -203,8 +203,35 @@ const claimGiftCode = async (req, res) => {
     // Credit main wallet
     const user = await User.findByPk(user_id);
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-    user.wallet_balance = Number(user.wallet_balance) + Number(giftCode.amount_per_user);
+    
+    // Get current balance before update
+    const currentBalance = parseFloat(user.wallet_balance);
+    const giftAmount = parseFloat(giftCode.amount_per_user);
+    const newBalance = currentBalance + giftAmount;
+    
+    // Update user's wallet balance
+    user.wallet_balance = newBalance;
     await user.save();
+    
+    // Create transaction record for gift code
+    const Transaction = require('../../models/Transaction');
+    await Transaction.create({
+        user_id: user_id,
+        type: 'gift_code',
+        amount: giftAmount,
+        status: 'completed',
+        description: `Gift code claimed: ${giftCode.code}`,
+        reference_id: `gift_code_${giftCode.id}_${user_id}_${Date.now()}`,
+        previous_balance: currentBalance,
+        new_balance: newBalance,
+        metadata: {
+            gift_code_id: giftCode.id,
+            gift_code: giftCode.code,
+            gift_code_amount: giftAmount,
+            claimed_ip: req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown',
+            processed_at: new Date().toISOString()
+        }
+    });
     // Record claim with IP address
     const claimed_ip = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
     await GiftCodeClaim.create({ 

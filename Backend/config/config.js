@@ -15,7 +15,7 @@ const env = process.env.NODE_ENV || 'development';
 // Default JWT settings
 const jwtSecret = process.env.JWT_SECRET || 'default_jwt_secret_replace_in_production';
 const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || 'default_refresh_secret_replace_in_production';
-const jwtExpiration = process.env.JWT_EXPIRATION || '1h';
+const jwtExpiration = process.env.JWT_EXPIRATION || '5h';
 const jwtRefreshExpiration = process.env.JWT_REFRESH_EXPIRATION || '7d';
 
 const config = {
@@ -26,13 +26,14 @@ const config = {
         host: process.env.DB_HOST || 'localhost',
         port: process.env.DB_PORT || 3306,
         dialect: 'mysql',
-        logging: console.log,  // Enable logging for debugging
+        logging: false,  // Disable logging for better performance
         pool: {
-            max: 100,
-            min: 20,
-            acquire: 60000,
-            idle: 30000,
-            evict: 60000
+            max: 50,           // Reduced from 100 - too many connections can slow things down
+            min: 10,           // Reduced from 20 - faster startup
+            acquire: 30000,    // Reduced from 60000 - fail faster if DB is slow
+            idle: 10000,       // Reduced from 30000 - release connections faster
+            evict: 30000,      // Reduced from 60000 - more aggressive cleanup
+            handleDisconnects: true  // Auto-reconnect on disconnection
         },
         retry: {
             max: 5,            // Increased retry attempts
@@ -63,11 +64,12 @@ const config = {
         dialect: 'mysql',
         logging: false,  // Disable logging in production
         pool: {
-            max: 100,
-            min: 20,
-            acquire: 60000,
-            idle: 30000,
-            evict: 60000
+            max: 80,           // Slightly reduced from 100 for production
+            min: 15,           // Reduced from 20 - faster startup
+            acquire: 30000,    // Reduced from 60000 - fail faster if DB is slow
+            idle: 15000,       // Reduced from 30000 - release connections faster
+            evict: 45000,      // Reduced from 60000 - more aggressive cleanup
+            handleDisconnects: true  // Auto-reconnect on disconnection
         },
         retry: {
             max: 5,            // Increased retry attempts

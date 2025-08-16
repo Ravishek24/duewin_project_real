@@ -3112,5 +3112,6 @@ module.exports = {
     processMultiLevelRebateCommission,
     getRebateCommissionHistory,
     getRebateCommissionStats,
-    getCommissionFromUser
+    getCommissionFromUser,
+    getInvitationRewardHistory
 };

@@ -1,14 +1,14 @@
 const { Worker } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
-const getQueueConnections = require('../config/queueConfig');
+const { createWorker } = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
 const { processReferralBonus } = require('../services/referralService');
 
 async function startWorker() {
   await unifiedRedis.initialize();
-  const queueConnections = getQueueConnections();
+  // connections handled within createWorker via unifiedRedis
 
-  const worker = new Worker('deposits', async job => {
+  const worker = createWorker('deposits', async job => {
     const { type, data } = job.data;
     try {
       const models = getWorkerModels();
@@ -42,27 +42,24 @@ async function startWorker() {
       }
     }
   }, {
-    connection: queueConnections.deposits,
-    concurrency: 5,
-    settings: {
-      stalledInterval: 30000,
-      maxStalledCount: 1
-    }
+    concurrency: 5
   });
 
   // Enhanced deposit processing with deadlock prevention
   async function processDepositWithRetry(data, models, maxRetries = 3) {
     const { userId, amount, orderId, gateway, bankInfo } = data;
     
-    // FIXED: Use unified Redis manager instead of old redisConfig
-    const unifiedRedis = require('../config/unifiedRedisManager');
-    const redis = unifiedRedis.getConnection('main');
+    // FIXED: Use unified Redis helper instead of direct connection
+    const redisHelper = await unifiedRedis.getHelper();
+    if (!redisHelper) {
+      throw new Error('Redis helper not available');
+    }
     
     const lockKey = `deposit:${orderId}:lock`;
     const lockValue = Date.now().toString();
     
     // Try to acquire lock (5 min expiry)
-    const acquired = await redis.set(lockKey, lockValue, 'EX', 300, 'NX');
+    const acquired = await redisHelper.set(lockKey, lockValue, 'EX', 300, 'NX');
     if (!acquired) {
       throw new Error('Deposit already processing or processed');
     }
@@ -163,23 +160,26 @@ async function startWorker() {
     
     // Add deduplication to prevent conflicts with cron jobs
     const unifiedRedis = require('../config/unifiedRedisManager');
-    const redis = unifiedRedis.getConnection('main');
+    const redisHelper = await unifiedRedis.getHelper();
+    if (!redisHelper) {
+      throw new Error('Redis helper not available');
+    }
     
     const deduplicationKey = `deposit_bonus:${userId}`;
     const cronDeduplicationKey = `deposit_bonus_cron:${userId}`;
     
     // Check if already processed by this worker
-    const isAlreadyProcessed = await redis.get(deduplicationKey);
+    const isAlreadyProcessed = await redisHelper.get(deduplicationKey);
     if (isAlreadyProcessed) {
       console.log(`Deposit bonus already processed for user ${userId}`);
       return { success: true, message: 'Bonus already applied' };
     }
     
     // Check if cron job is processing this user
-    const isCronProcessing = await redis.get(cronDeduplicationKey);
+    const isCronProcessing = await redisHelper.get(cronDeduplicationKey);
     if (isCronProcessing) {
       console.log(`Cron job is processing deposit bonus for user ${userId}, skipping...`);
-      return { success: true, message: 'Cron job is processing' };
+      return;
     }
     
     // Calculate bonus based on amount
@@ -266,7 +266,7 @@ async function startWorker() {
         await transaction.commit();
         
         // Set deduplication flag (expires in 30 days)
-        await redis.setex(deduplicationKey, 2592000, '1');
+        await redisHelper.set(deduplicationKey, '1', null, 2592000);
         
         console.log(`✅ First deposit bonus applied for user ${userId}: ${bonusAmount}`);
         return { success: true, bonusAmount };
@@ -285,18 +285,20 @@ async function startWorker() {
     }
   }
 
-  // Enhanced referral bonus processing
+  // Enhanced referral bonus processing - REMOVED: processReferralBonus function doesn't exist
+  // Referral bonuses are now handled by cron jobs and other referral service functions
   async function processReferralBonusWithRetry(data, models, maxRetries = 3) {
     const { userId, amount } = data;
     
     try {
-      // Process referral bonus using existing service
-      await processReferralBonus(userId, amount);
-      console.log(`✅ Referral bonus processed for user ${userId}`);
-      return { success: true };
+      console.log(`⚠️ Referral bonus processing removed - handled by cron jobs for user ${userId}`);
+      // Referral bonuses are now processed by:
+      // 1. processRebateCommission (daily cron)
+      // 2. processDirectInvitationBonus (manual claim)
+      // 3. claimInvitationBonus (manual claim)
+      return { success: true, message: 'Referral bonus processing handled by cron jobs' };
     } catch (error) {
       console.error(`Failed to process referral bonus for user ${userId}:`, error);
-      // Don't retry referral bonus failures as they're not critical
       return { success: false, error: error.message };
     }
   }

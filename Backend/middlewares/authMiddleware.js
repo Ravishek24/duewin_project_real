@@ -1,6 +1,4 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
-// REMOVED: const SystemConfig = require('../models/SystemConfig'); // This was causing the error
 const dotenv = require('dotenv');
 const config = require('../config/config');
 const { verifyToken } = require('../utils/jwt');
@@ -8,27 +6,19 @@ const { Op } = require('sequelize');
 
 dotenv.config();
 
-// Use same DEFAULT_JWT_SECRET as in jwt.js to ensure consistency
 const DEFAULT_JWT_SECRET = 'default_jwt_secret_for_development_only';
 
-// SQL injection protection middleware
 const sqlInjectionProtection = (req, res, next) => {
-    // Basic SQL injection protection
-    const sqlPattern = /(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|CREATE|TRUNCATE)\b)/i;
+    const sqlPattern = /((SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER|CREATE|TRUNCATE)\b)/i;
     const body = JSON.stringify(req.body);
     const query = JSON.stringify(req.query);
     const params = JSON.stringify(req.params);
-
     if (sqlPattern.test(body) || sqlPattern.test(query) || sqlPattern.test(params)) {
-        return res.status(403).json({
-            success: false,
-            message: 'Invalid request'
-        });
+        return res.status(403).json({ success: false, message: 'Invalid request' });
     }
     next();
 };
 
-// Get client IP address
 const getClientIp = (req) => {
     const forwardedFor = req.headers['x-forwarded-for'];
     if (forwardedFor) {
@@ -37,114 +27,83 @@ const getClientIp = (req) => {
     return req.ip || req.connection.remoteAddress;
 };
 
-// Auth middleware that verifies JWT token
-const auth = async (req, res, next) => {
-    try {
-        // Get token from header
-        const token = req.header('Authorization')?.replace('Bearer ', '');
-        
-        if (!token) {
-            return res.status(401).json({
-                success: false,
-                message: 'No token provided'
-            });
-        }
-
-        // Verify token
-        let decoded;
+function createAuthMiddleware(sessionService, User) {
+    // Auth middleware that verifies JWT token and session
+    const auth = async (req, res, next) => {
         try {
-            decoded = jwt.verify(token, config.jwtSecret || DEFAULT_JWT_SECRET);
-        } catch (jwtError) {
-            if (jwtError.name === 'TokenExpiredError') {
-                return res.status(401).json({
-                    success: false,
-                    message: 'Token expired'
-                });
+            const token = req.header('Authorization')?.replace('Bearer ', '');
+            if (!token) {
+                return res.status(401).json({ success: false, message: 'No token provided' });
             }
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid token'
-            });
+            let decoded;
+            try {
+                decoded = jwt.verify(token, config.jwtSecret || DEFAULT_JWT_SECRET);
+            } catch (jwtError) {
+                if (jwtError.name === 'TokenExpiredError') {
+                    return res.status(401).json({ success: false, message: 'Token expired' });
+                }
+                return res.status(401).json({ success: false, message: 'Invalid token' });
+            }
+            const userId = decoded.userId || decoded.user_id;
+            if (!userId) {
+                return res.status(401).json({ success: false, message: 'Invalid token format' });
+            }
+            // Extract session token from JWT payload for validation
+            const sessionToken = decoded.sessionToken;
+            if (!sessionToken) {
+                return res.status(401).json({ success: false, message: 'Invalid session token' });
+            }
+            const sessionValidation = await sessionService.validateSession(sessionToken, req);
+            if (!sessionValidation.valid) {
+                return res.status(401).json({ success: false, message: 'Session invalid or logged in from another device', reason: sessionValidation.reason });
+            }
+            const user = await User.findByPk(userId);
+            if (!user) {
+                return res.status(401).json({ success: false, message: 'User not found' });
+            }
+            if (user.is_blocked) {
+                return res.status(403).json({ success: false, message: 'Account is blocked' });
+            }
+            req.userId = userId;
+            req.user = user;
+            req.session = sessionValidation.session;
+            next();
+        } catch (error) {
+            console.error('Auth middleware error:', error);
+            res.status(500).json({ success: false, message: 'Authentication failed' });
         }
+    };
 
-        // Get user ID from token
-        const userId = decoded.userId || decoded.user_id;
-        if (!userId) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid token format'
-            });
+    const isAdmin = (req, res, next) => {
+        try {
+            if (!req.user || !req.user.is_admin) {
+                return res.status(403).json({ success: false, message: 'Admin access required' });
+            }
+            next();
+        } catch (error) {
+            next(error);
         }
+    };
 
-        // Fetch complete user data from database
-        const user = await User.findByPk(userId);
-        if (!user) {
-            return res.status(401).json({
-                success: false,
-                message: 'User not found'
-            });
+    const requirePhoneVerification = (req, res, next) => {
+        try {
+            if (!req.user || !req.user.is_phone_verified) {
+                return res.status(403).json({ success: false, message: 'Phone verification required' });
+            }
+            next();
+        } catch (error) {
+            console.error('Phone verification middleware error:', error);
+            res.status(500).json({ success: false, message: 'Phone verification check failed' });
         }
+    };
 
-        // Check if user is blocked
-        if (user.is_blocked) {
-            return res.status(403).json({
-                success: false,
-                message: 'Account is blocked'
-            });
-        }
+    return {
+        auth,
+        isAdmin,
+        sqlInjectionProtection,
+        getClientIp,
+        requirePhoneVerification
+    };
+}
 
-        // Set complete user object in request
-        req.userId = userId;
-        req.user = user;
-
-        next();
-    } catch (error) {
-        console.error('Auth middleware error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Authentication failed'
-        });
-    }
-};
-
-// Admin auth middleware
-const isAdmin = (req, res, next) => {
-    try {
-        if (!req.user || !req.user.is_admin) {
-            return res.status(403).json({
-                success: false,
-                message: 'Admin access required'
-            });
-        }
-        next();
-    } catch (error) {
-        next(error);
-    }
-};
-
-// Phone verification middleware
-const requirePhoneVerification = (req, res, next) => {
-    try {
-        if (!req.user || !req.user.is_phone_verified) {
-            return res.status(403).json({
-                success: false,
-                message: 'Phone verification required'
-            });
-        }
-        next();
-    } catch (error) {
-        console.error('Phone verification middleware error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Phone verification check failed'
-        });
-    }
-};
-
-module.exports = { 
-    auth,
-    isAdmin,
-    sqlInjectionProtection,
-    getClientIp,
-    requirePhoneVerification
-};
+module.exports = createAuthMiddleware;

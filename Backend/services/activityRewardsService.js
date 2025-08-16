@@ -191,6 +191,13 @@ const getTodayActivityStatus = async (userId) => {
             totalRewards: activityRecord.total_rewards
         });
 
+        // Debug: Check specific milestone keys
+        console.log(`🔍 [ACTIVITY_STATUS] Checking specific milestone keys:`, {
+            'lottery_50K': claimedMilestones.lottery_50K,
+            'lottery_100K': claimedMilestones.lottery_100K,
+            'all_games_500': claimedMilestones.all_games_500
+        });
+
         // Debug: Log the raw database record
         console.log(`🗄️ [ACTIVITY_STATUS] Raw database record:`, {
             id: activityRecord.id,
@@ -211,13 +218,13 @@ const getTodayActivityStatus = async (userId) => {
                         target: 50000,
                         achieved: lotteryAmount >= 50000,
                         reward: 200,
-                        claimed: claimedMilestones.lottery_50k || false
+                        claimed: claimedMilestones.lottery_50K || false
                     },
                     '100K': {
                         target: 100000,
                         achieved: lotteryAmount >= 100000,
                         reward: 500,
-                        claimed: claimedMilestones.lottery_100k || false
+                        claimed: claimedMilestones.lottery_100K || false
                     }
                 },
                 totalRewards: parseFloat(activityRecord.total_rewards)
@@ -301,8 +308,8 @@ const getActivityRewardHistory = async (userId, days = 30) => {
                     lotteryBetAmount: parseFloat(activity.lottery_bet_amount),
                     allGamesBetAmount: parseFloat(activity.all_games_bet_amount),
                     milestones: {
-                        lottery50k: claimedMilestones.lottery_50k || false,
-                        lottery100k: claimedMilestones.lottery_100k || false,
+                        lottery50K: claimedMilestones.lottery_50K || false,
+                        lottery100K: claimedMilestones.lottery_100K || false,
                         allGames500: claimedMilestones.all_games_500 || false
                     },
                     totalRewards: parseFloat(activity.total_rewards)

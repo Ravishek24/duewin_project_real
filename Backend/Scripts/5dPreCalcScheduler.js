@@ -39,22 +39,35 @@ const setup5DPreCalcCommunication = async () => {
         console.log('✅ [5D_PRECALC_COMM] Unified Redis Manager initialized');
         
         // Get Redis helper for operations
-        schedulerHelper = unifiedRedis.getHelper();
+        schedulerHelper = await unifiedRedis.getHelper();
         console.log('✅ [5D_PRECALC_COMM] Redis helper obtained');
         
-        // Create dedicated publisher using unifiedRedis
-        schedulerPublisher = await unifiedRedis.createConnection({
-            retryDelayOnFailover: 100,
-            retryDelayOnClusterDown: 300,
-            retryDelayOnFailover: (times) => {
-                return Math.min(times * 50, 2000);
-            },
+        // Create dedicated publisher for pub/sub functionality
+        schedulerPublisher = new (require('ioredis'))({
+            host: process.env.REDIS_HOST || 'localhost',
+            port: process.env.REDIS_PORT || 6379,
+            password: process.env.REDIS_PASSWORD || '',
+            db: process.env.REDIS_DB || 0,
+            
+            // TLS configuration for ElastiCache
+            tls: process.env.REDIS_HOST?.includes('cache.amazonaws.com') ? {
+                rejectUnauthorized: false,
+                requestCert: false,
+                agent: false
+            } : false,
+            
+            // Connection settings
             connectTimeout: 15000,
             commandTimeout: 30000, // INCREASED: 30 seconds for large operations
             lazyConnect: false,
             enableOfflineQueue: true,
             maxRetriesPerRequest: 3,
-            family: 4
+            family: 4,
+            
+            // Retry strategy
+            retryStrategy: (times) => {
+                return Math.min(times * 50, 2000);
+            }
         });
         
         // Wait for publisher to be ready
@@ -82,8 +95,58 @@ const setup5DPreCalcCommunication = async () => {
         
         console.log('✅ [5D_PRECALC_COMM] Publisher created and connected');
         
-        // Listen for 5D pre-calculation requests from WebSocket instances
-        schedulerSubscriber = unifiedRedis.getConnection('subscriber');
+        // Create dedicated subscriber for pub/sub functionality
+        schedulerSubscriber = new (require('ioredis'))({
+            host: process.env.REDIS_HOST || 'localhost',
+            port: process.env.REDIS_PORT || 6379,
+            password: process.env.REDIS_PASSWORD || '',
+            db: process.env.REDIS_DB || 0,
+            
+            // TLS configuration for ElastiCache
+            tls: process.env.REDIS_HOST?.includes('cache.amazonaws.com') ? {
+                rejectUnauthorized: false,
+                requestCert: false,
+                agent: false
+            } : false,
+            
+            // Connection settings
+            connectTimeout: 30000,
+            commandTimeout: 30000,
+            lazyConnect: false,
+            enableOfflineQueue: true,
+            maxRetriesPerRequest: null,
+            
+            // Retry strategy
+            retryStrategy: (times) => {
+                const delay = Math.min(times * 1000, 5000);
+                return delay;
+            }
+        });
+        
+        // Wait for subscriber to be ready
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('5D pre-calculation subscriber connection timeout'));
+            }, 15000);
+            
+            if (schedulerSubscriber.status === 'ready') {
+                clearTimeout(timeout);
+                resolve();
+                return;
+            }
+            
+            schedulerSubscriber.on('ready', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+            
+            schedulerSubscriber.on('error', (err) => {
+                clearTimeout(timeout);
+                reject(err);
+            });
+        });
+        
+        // Subscribe to the channel
         await schedulerSubscriber.subscribe('5d_precalc:trigger');
         
         schedulerSubscriber.on('message', async (channel, message) => {
@@ -289,37 +352,118 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
                 console.log(`⚠️ [5D_PRECALC_EXEC] Result already exists in database, skipping save`);
             } else {
                 console.log(`💾 [5D_PRECALC_EXEC] No existing result found, proceeding with database save...`);
-                // Save to database with retry logic
+                
+                // 🚀 DEADLOCK PREVENTION: Use database transaction with proper error handling
                 let savedResult = null;
                 let retryCount = 0;
                 const maxRetries = 3;
+                const baseDelay = 1000; // 1 second base delay
                 
                 while (!savedResult && retryCount < maxRetries) {
                     try {
-                        savedResult = await models.BetResult5D.create({
-                            bet_number: periodId,
-                            result_a: result.A,
-                            result_b: result.B,
-                            result_c: result.C,
-                            result_d: result.D,
-                            result_e: result.E,
-                            total_sum: result.sum,
-                            duration: duration,
-                            timeline: timeline
-                        });
+                        let transaction = null;
                         
-                        console.log(`✅ [5D_PRECALC_EXEC] Successfully saved to database, ID: ${savedResult.bet_id}`);
+                        // Try to create transaction, fallback to direct create if it fails
+                        try {
+                            // Create transaction with timeout only (compatible with all Sequelize versions)
+                            transaction = await models.sequelize.transaction({
+                                timeout: 30000 // 30 second timeout
+                            });
+                            
+                        } catch (transactionError) {
+                            console.warn(`⚠️ [5D_PRECALC_EXEC] Transaction creation failed, using direct create:`, transactionError.message);
+                            transaction = null;
+                        }
+                        
+                        try {
+                            // 🚀 CRITICAL FIX: Check for existing result before creating new one
+                            const existingResult = await models.BetResult5D.findOne({
+                                where: {
+                                    bet_number: periodId,
+                                    duration: duration,
+                                    timeline: timeline
+                                },
+                                transaction: transaction
+                            });
+                            
+                            if (existingResult) {
+                                console.log(`⚠️ [DUPLICATE_RESULT_PREVENTION] Result already exists for period ${periodId}, skipping creation`);
+                                savedResult = existingResult;
+                            } else {
+                                console.log(`💾 [RESULT_CREATION] Creating new BetResult5D for period ${periodId}`);
+                                
+                                if (transaction) {
+                                    // Use transaction if available
+                                    savedResult = await models.BetResult5D.create({
+                                        bet_number: periodId,
+                                        result_a: result.A,
+                                        result_b: result.B,
+                                        result_c: result.C,
+                                        result_d: result.D,
+                                        result_e: result.E,
+                                        total_sum: result.sum,
+                                        duration: duration,
+                                        timeline: timeline
+                                    }, { transaction });
+                                    
+                                    // Commit transaction
+                                    await transaction.commit();
+                                    console.log(`✅ [5D_PRECALC_EXEC] Successfully saved to database with transaction, ID: ${savedResult.bet_id}`);
+                                } else {
+                                    // Fallback to direct create without transaction
+                                    savedResult = await models.BetResult5D.create({
+                                        bet_number: periodId,
+                                        result_a: result.A,
+                                        result_b: result.B,
+                                        result_c: result.C,
+                                        result_d: result.D,
+                                        result_e: result.E,
+                                        total_sum: result.sum,
+                                        duration: duration,
+                                        timeline: timeline
+                                    });
+                                    
+                                    console.log(`✅ [5D_PRECALC_EXEC] Successfully saved to database without transaction, ID: ${savedResult.bet_id}`);
+                                }
+                            }
+                            
+                        } catch (createError) {
+                            // Rollback transaction on error if transaction exists
+                            if (transaction) {
+                                try {
+                                    await transaction.rollback();
+                                } catch (rollbackError) {
+                                    console.warn(`⚠️ [5D_PRECALC_EXEC] Transaction rollback failed:`, rollbackError.message);
+                                }
+                            }
+                            throw createError;
+                        }
+                        
                     } catch (createError) {
                         retryCount++;
-                        console.error(`❌ [5D_PRECALC_EXEC] Attempt ${retryCount} failed:`, createError.message);
+                        
+                        // Check if it's a deadlock error
+                        const isDeadlock = createError.message.includes('Lock wait timeout exceeded') || 
+                                         createError.message.includes('Deadlock found') ||
+                                         createError.message.includes('ER_LOCK_WAIT_TIMEOUT');
+                        
+                        if (isDeadlock) {
+                            console.error(`🚨 [5D_PRECALC_EXEC] DEADLOCK detected on attempt ${retryCount}:`, createError.message);
+                        } else {
+                            console.error(`❌ [5D_PRECALC_EXEC] Database error on attempt ${retryCount}:`, createError.message);
+                        }
                         
                         if (retryCount < maxRetries) {
-                            // Wait before retry (exponential backoff)
-                            const waitTime = Math.pow(2, retryCount) * 1000; // 2s, 4s, 8s
-                            console.log(`⏳ [5D_PRECALC_EXEC] Waiting ${waitTime}ms before retry...`);
-                            await new Promise(resolve => setTimeout(resolve, waitTime));
+                            // Exponential backoff with jitter for deadlocks
+                            const delay = isDeadlock ? 
+                                (baseDelay * Math.pow(2, retryCount) + Math.random() * 1000) : // Add jitter for deadlocks
+                                (baseDelay * Math.pow(2, retryCount));
+                            
+                            console.log(`⏳ [5D_PRECALC_EXEC] Waiting ${Math.round(delay)}ms before retry...`);
+                            await new Promise(resolve => setTimeout(resolve, delay));
                         } else {
                             console.error(`❌ [5D_PRECALC_EXEC] All retry attempts failed`);
+                            console.error(`❌ [5D_PRECALC_EXEC] Final error:`, createError.message);
                         }
                     }
                 }
@@ -370,7 +514,42 @@ const execute5DPreCalculation = async (gameType, duration, periodId) => {
         console.log(`   - Total combinations: ${result.totalCombinations || 'N/A'}`);
         console.log(`   - Zero exposure count: ${result.zeroExposureCount || 'N/A'}`);
         
-        // 6. Update tracking
+        // 6. 🚀 CRITICAL FIX: Process user bets immediately after result creation
+        console.log(`🔥 [5D_PRECALC_EXEC] Processing user bets for period ${periodId}...`);
+        try {
+            // Ensure models are initialized
+            await gameLogicService.ensureModelsInitialized();
+            const models = await gameLogicService.models;
+            
+            // Process winning bets using the result we just created
+            const winners = await gameLogicService.processWinningBetsWithTimeline(
+                gameType, 
+                duration, 
+                periodId, 
+                timeline, 
+                result, 
+                null // No transaction needed, we're already in a transaction
+            );
+            
+            console.log(`🏆 [5D_PRECALC_EXEC] User bets processed successfully for period ${periodId}:`, {
+                winnerCount: winners.length,
+                winners: winners.map(w => ({ userId: w.userId, winnings: w.winnings }))
+            });
+            
+            // Reset period exposure
+            try {
+                await gameLogicService.resetPeriodExposure(gameType, duration, periodId);
+                console.log(`✅ [5D_PRECALC_EXEC] Period exposure reset for period ${periodId}`);
+            } catch (cleanupError) {
+                console.error(`❌ [5D_PRECALC_EXEC] Error resetting period exposure:`, cleanupError.message);
+            }
+            
+        } catch (betProcessingError) {
+            console.error(`❌ [5D_PRECALC_EXEC] Error processing user bets:`, betProcessingError.message);
+            // Don't throw here - result creation succeeded, bet processing failed
+        }
+        
+        // 7. Update tracking
         fiveDPreCalcTracking.set(`${gameType}_${duration}_${periodId}`, {
             status: 'completed',
             result: result,
@@ -464,14 +643,50 @@ const getCurrentBetPatterns = async (gameType, duration, periodId, timeline) => 
         const betPatterns = {};
         for (const [betKey, exposure] of Object.entries(betExposures)) {
             if (!betKey.startsWith('bet:')) continue;
+            
+            // Remove 'bet:' prefix
             const actualBetKey = betKey.replace('bet:', '');
-            const [betType, betValue] = actualBetKey.split(':');
-            if (betType && betValue) {
-                betPatterns[`${betType}:${betValue}`] = parseFloat(exposure);
+            
+            // Handle different bet key formats
+            if (actualBetKey.includes('POSITION:')) {
+                // Format: POSITION:A_0 -> POSITION:A:0
+                const parts = actualBetKey.split(':');
+                if (parts.length >= 2) {
+                    const betType = parts[0]; // POSITION
+                    const positionValue = parts[1]; // A_0
+                    
+                    // Split position and value (e.g., A_0 -> A and 0)
+                    const [position, value] = positionValue.split('_');
+                    if (position && value) {
+                        betPatterns[`${betType}:${position}:${value}`] = parseFloat(exposure);
+                    }
+                }
+            } else if (actualBetKey.includes('SUM_')) {
+                // Format: SUM_SIZE:big -> SUM_SIZE:big
+                const [betType, betValue] = actualBetKey.split(':');
+                if (betType && betValue) {
+                    betPatterns[`${betType}:${betValue}`] = parseFloat(exposure);
+                }
+            } else {
+                // Default format: betType:betValue
+                const [betType, betValue] = actualBetKey.split(':');
+                if (betType && betValue) {
+                    betPatterns[`${betType}:${betValue}`] = parseFloat(exposure);
+                }
             }
         }
         
         console.log(`🔍 [5D_PRECALC_PATTERNS] Processed bet patterns:`, betPatterns);
+        
+        // Debug: Show how each bet key was parsed
+        console.log(`🔍 [5D_PRECALC_PATTERNS] Bet key parsing details:`);
+        for (const [betKey, exposure] of Object.entries(betExposures)) {
+            if (betKey.startsWith('bet:')) {
+                const actualBetKey = betKey.replace('bet:', '');
+                console.log(`   ${betKey} -> ${actualBetKey}`);
+            }
+        }
+        
         return betPatterns;
         
     } catch (error) {
@@ -601,11 +816,30 @@ const fiveDPreCalcTick = async (gameType, duration) => {
 };
 
 /**
- * Cleanup function
+ * Cleanup 5D pre-calculation resources
  */
-const cleanup5DPreCalc = () => {
+const cleanup5DPreCalc = async () => {
     try {
-        console.log('🧹 [5D_PRECALC_CLEANUP] Cleaning up 5D pre-calculation scheduler...');
+        console.log('🧹 [5D_PRECALC_CLEANUP] Starting cleanup...');
+        
+        // Close Redis connections
+        if (schedulerPublisher) {
+            try {
+                await schedulerPublisher.quit();
+                console.log('🔌 [5D_PRECALC_CLEANUP] Publisher connection closed');
+            } catch (error) {
+                console.error('❌ [5D_PRECALC_CLEANUP] Error closing publisher:', error.message);
+            }
+        }
+        
+        if (schedulerSubscriber) {
+            try {
+                await schedulerSubscriber.quit();
+                console.log('🔌 [5D_PRECALC_CLEANUP] Subscriber connection closed');
+            } catch (error) {
+                console.error('❌ [5D_PRECALC_CLEANUP] Error closing subscriber:', error.message);
+            }
+        }
         
         // Clear intervals
         if (global.fiveDPreCalcIntervals) {
@@ -657,7 +891,7 @@ async function initialize() {
         await start5DPreCalcMonitoring();
         console.log('✅ [5D_PRECALC_INIT] 5D pre-calculation monitoring started');
         
-        console.log('🎉 [5D_PRECALC_INIT] 5D pre-calculation scheduler initialized successfully');
+        console.log('🎉 [SCHEDULER_1_LOWERCASE] 5D pre-calculation scheduler initialized successfully');
         
     } catch (error) {
         console.error('❌ [5D_PRECALC_INIT] Error initializing 5D pre-calculation scheduler:', error);
@@ -670,7 +904,7 @@ async function initialize() {
  */
 const start5DPreCalcScheduler = async () => {
     try {
-        console.log('🚀 [5D_PRECALC_SCHEDULER] Starting 5D pre-calculation scheduler...');
+        console.log('🚀 [SCHEDULER_1_LOWERCASE] Starting 5D pre-calculation scheduler (lowercase version)...');
         
         // Initialize
         await initialize();
@@ -678,17 +912,17 @@ const start5DPreCalcScheduler = async () => {
         // Setup graceful shutdown
         process.on('SIGINT', async () => {
             console.log('🛑 [5D_PRECALC_SCHEDULER] Received SIGINT, shutting down gracefully...');
-            cleanup5DPreCalc();
+            await cleanup5DPreCalc(); // Call the new cleanup function
             process.exit(0);
         });
         
         process.on('SIGTERM', async () => {
             console.log('🛑 [5D_PRECALC_SCHEDULER] Received SIGTERM, shutting down gracefully...');
-            cleanup5DPreCalc();
+            await cleanup5DPreCalc(); // Call the new cleanup function
             process.exit(0);
         });
         
-        console.log('✅ [5D_PRECALC_SCHEDULER] 5D pre-calculation scheduler started successfully');
+        console.log('✅ [SCHEDULER_1_LOWERCASE] 5D pre-calculation scheduler started successfully');
         
     } catch (error) {
         console.error('❌ [5D_PRECALC_SCHEDULER] Error starting 5D pre-calculation scheduler:', error);
@@ -704,7 +938,8 @@ module.exports = {
     cleanup5DPreCalc
 };
 
-// Start scheduler if this file is run directly
+// 🚀 ENABLED: Auto-start for main scheduler (lowercase version)
+// This is the primary scheduler that should start automatically
 if (require.main === module) {
     start5DPreCalcScheduler();
 } 

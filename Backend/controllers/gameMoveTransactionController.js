@@ -28,12 +28,12 @@ const getUserGameMoveTransactions = async (req, res) => {
         const where = {
             user_id: user_id,
             type: {
-                [Op.in]: ['transfer_in', 'transfer_out']
+                [Op.in]: ['game_move_in', 'game_move_out'] // 🆕 Updated to use correct transaction types
             }
         };
 
         // Add type filter if provided
-        if (type && ['transfer_in', 'transfer_out'].includes(type)) {
+        if (type && ['game_move_in', 'game_move_out'].includes(type)) {
             where.type = type;
         }
 
@@ -296,7 +296,7 @@ const getGameMoveTransactionById = async (req, res) => {
                 id: id,
                 user_id: user_id,
                 type: {
-                    [Op.in]: ['transfer_in', 'transfer_out']
+                    [Op.in]: ['game_move_in', 'game_move_out'] // 🆕 Updated to use correct transaction types
                 }
             },
             include: [{

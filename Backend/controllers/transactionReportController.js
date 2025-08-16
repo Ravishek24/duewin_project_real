@@ -77,7 +77,12 @@ const getUserTransactionReport = async (req, res) => {
                 'deposit', 'withdrawal', 'admin_credit', 'admin_debit',
                 'game_win', 'game_loss', 'gift_code', 'referral_bonus',
                 'rebate', 'vip_reward', 'transfer_in', 'transfer_out',
-                'refund', 'game_move_in', 'game_move_out', 'activity_reward'
+                'refund', 'game_move_in', 'game_move_out', 'activity_reward',
+                // 🆕 New transaction types added
+                'registration_bonus', 'first_deposit_bonus', 'deposit_rejected',
+                'direct_bonus', 'attendance_bonus', 'deposit_failed',
+                'withdrawal_failed', 'withdrawal_rejected', 'self_rebate',
+                'referral_commission'
             ];
             
             if (validTypes.includes(type)) {
@@ -301,7 +306,18 @@ const calculateTransactionStats = (transactions, startDate, endDate) => {
             refund: { count: 0, total_amount: 0 },
             game_move_in: { count: 0, total_amount: 0 },
             game_move_out: { count: 0, total_amount: 0 },
-            activity_reward: { count: 0, total_amount: 0 }
+            activity_reward: { count: 0, total_amount: 0 },
+            // 🆕 New transaction types added
+            registration_bonus: { count: 0, total_amount: 0 },
+            first_deposit_bonus: { count: 0, total_amount: 0 },
+            deposit_rejected: { count: 0, total_amount: 0 },
+            direct_bonus: { count: 0, total_amount: 0 },
+            attendance_bonus: { count: 0, total_amount: 0 },
+            deposit_failed: { count: 0, total_amount: 0 },
+            withdrawal_failed: { count: 0, total_amount: 0 },
+            withdrawal_rejected: { count: 0, total_amount: 0 },
+            self_rebate: { count: 0, total_amount: 0 },
+            referral_commission: { count: 0, total_amount: 0 }
         }
     };
 
@@ -320,7 +336,9 @@ const calculateTransactionStats = (transactions, startDate, endDate) => {
         stats.total_amount += amount;
 
         // Net amount calculation (positive for credits, negative for debits)
-        if (['deposit', 'admin_credit', 'game_win', 'gift_code', 'referral_bonus', 'rebate', 'vip_reward', 'transfer_in', 'game_move_in', 'activity_reward', 'refund'].includes(type)) {
+        if (['deposit', 'admin_credit', 'game_win', 'gift_code', 'referral_bonus', 'rebate', 'vip_reward', 'transfer_in', 'game_move_in', 'activity_reward', 'refund', 
+             // 🆕 New credit transaction types
+             'registration_bonus', 'first_deposit_bonus', 'direct_bonus', 'attendance_bonus', 'self_rebate', 'referral_commission'].includes(type)) {
             stats.net_amount += amount;
         } else {
             stats.net_amount -= amount;

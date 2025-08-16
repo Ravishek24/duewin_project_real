@@ -100,6 +100,7 @@ const initializeModels = async () => {
                 'User',
                 'RefreshToken',
                 'UserSession',
+                'SessionInvalidation',
                 'SystemConfig',
                 'Announcement',
                 'Feedback',
@@ -173,6 +174,10 @@ const initializeModels = async () => {
                 // Add these for 5D logic
                 'GameCombinations5D',
                 'Game5DSummaryStats',
+                
+                // 🎯 WAGERING SYSTEM MODELS
+'CreditTransaction',
+
             ];
 
             // Initialize each model
@@ -400,6 +405,18 @@ module.exports = {
             throw new Error('Models not initialized. Call initializeModels() first.');
         }
         return models.User;
+    },
+    get UserSession() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.UserSession;
+    },
+    get SessionInvalidation() {
+        if (!isInitialized) {
+            throw new Error('Models not initialized. Call initializeModels() first.');
+        }
+        return models.SessionInvalidation;
     },
     get Transaction() {
         if (!isInitialized) {

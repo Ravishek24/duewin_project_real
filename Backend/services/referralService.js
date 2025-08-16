@@ -6,6 +6,7 @@ const moment = require('moment-timezone');
 // Import only the models that actually exist
 const User = require('../models/User');
 const WalletRecharge = require('../models/WalletRecharge');
+const WalletWithdrawal = require('../models/WalletWithdrawal');
 
 // Import models that exist in your codebase, but handle gracefully if they don't exist
 let ReferralTree, ReferralCommission, VipLevel, RebateLevel, UserRebateLevel, AttendanceRecord, ValidReferral, VipReward, Transaction;
@@ -70,6 +71,9 @@ const selfRebateService = require('./selfRebateService');
 
 // Import wallet balance utility
 const { updateWalletBalance } = require('./walletBalanceUtils');
+
+// 🎯 Import CreditService for wagering system integration
+const CreditService = require('./creditService');
 
 /**
  * Create or update a user's referral tree when a new user is registered
@@ -241,7 +245,8 @@ const processRebateCommission = async (gameType) => {
                 const level1Commission = betAmount * level1Rate;
 
                 if (level1Commission > 0) {
-                    await ReferralCommission.create({
+                    // Create commission record
+                    const commissionRecord = await ReferralCommission.create({
                         user_id: referrer.user_id,
                         referred_user_id: userId,
                         level: 1,
@@ -250,6 +255,27 @@ const processRebateCommission = async (gameType) => {
                         rebate_type: gameType,
                         distribution_batch_id: batchId,
                         created_at: new Date()
+                    }, { transaction: t });
+
+                    // Create transaction record for referral bonus
+                    const Transaction = require('../models/Transaction');
+                    await Transaction.create({
+                        user_id: referrer.user_id,
+                        type: 'referral_bonus',
+                        amount: level1Commission,
+                        status: 'completed',
+                        description: `${gameType} referral bonus from ${user.user_name || userId}`,
+                        reference_id: `referral_bonus_${batchId}_${userId}`,
+                        metadata: {
+                            bonus_type: 'referral_commission',
+                            referred_user_id: userId,
+                            referred_user_name: user.user_name,
+                            bet_amount: betAmount,
+                            commission_rate: level1Rate,
+                            game_type: gameType,
+                            commission_id: commissionRecord.id,
+                            distribution_batch_id: batchId
+                        }
                     }, { transaction: t });
 
                     await updateWalletBalance(
@@ -387,7 +413,7 @@ const getDirectReferrals = async (userId, dateFilter = null) => {
  * @param {Object} dateFilter - Optional date filter
  * @returns {Object} - Team referral data by level
  */
-const getTeamReferrals = async (userId, dateFilter = null) => {
+const getTeamReferrals = async (userId, dateFilter = null, page = 1, limit = 5) => {
     try {
         console.log('🏆 Getting team referrals for user:', userId);
         console.log('🔧 ReferralTree model available:', !!ReferralTree);
@@ -435,7 +461,7 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
                                 whereClause.created_at = dateFilter;
                             }
                             
-                            // Get users for this level
+                            // Get users for this level with enhanced financial data
                             const levelUsers = await User.findAll({
                                 where: whereClause,
                                 attributes: [
@@ -444,6 +470,35 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
                                 ],
                                 order: [['created_at', 'DESC']]
                             });
+
+                            // Get withdrawal data for all users in this level
+                            const levelUserIds = levelUsers.map(user => user.user_id);
+                            let withdrawalData = {};
+                            
+                            if (levelUserIds.length > 0 && WalletWithdrawal) {
+                                try {
+                                    const withdrawals = await WalletWithdrawal.findAll({
+                                        where: {
+                                            user_id: { [Op.in]: levelUserIds },
+                                            status: 'approved'
+                                        },
+                                        attributes: [
+                                            'user_id',
+                                            [sequelize.fn('SUM', sequelize.col('amount')), 'total_withdrawal']
+                                        ],
+                                        group: ['user_id']
+                                    });
+                                    
+                                    // Convert to lookup object
+                                    withdrawalData = withdrawals.reduce((acc, item) => {
+                                        acc[item.user_id] = parseFloat(item.dataValues.total_withdrawal || 0);
+                                        return acc;
+                                    }, {});
+                                } catch (error) {
+                                    console.log('⚠️ Error fetching withdrawal data:', error.message);
+                                    // Continue without withdrawal data
+                                }
+                            }
 
                             // Get commission data for each user if ReferralCommission model exists
                             const levelUsersWithCommission = [];
@@ -465,10 +520,16 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
                                     );
                                 }
 
-                                // Add commission data to user object
+                                // Add commission and withdrawal data to user object
                                 const userWithCommission = {
-                                    ...(typeof user.toJSON === 'function' ? user.toJSON() : user),
-                                    commission_earned: userCommission
+                                    userId: user.user_id,
+                                    userName: user.user_name,
+                                    createdAt: user.created_at,
+                                    walletBalance: user.wallet_balance,
+                                    vipLevel: user.vip_level,
+                                    totalDeposit: user.actual_deposit_amount,
+                                    commissionEarned: userCommission,
+                                    totalWithdrawal: withdrawalData[user.user_id] || 0
                                 };
                                 
                                 levelUsersWithCommission.push(userWithCommission);
@@ -530,10 +591,11 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
             // Fallback method - only direct referrals
             const directResult = await getDirectReferrals(userId, dateFilter);
             if (directResult.success) {
-                // Add commission data to direct referrals
+                // Add commission and withdrawal data to direct referrals
                 const directReferralsWithCommission = [];
                 for (const user of directResult.directReferrals) {
                     let userCommission = 0;
+                    let userWithdrawal = 0;
                     
                     if (ReferralCommission) {
                         // Get total commission earned from this user
@@ -550,10 +612,37 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
                         );
                     }
 
-                    // Add commission data to user object
+                    // Get withdrawal data for this user
+                    if (WalletWithdrawal) {
+                        try {
+                            const withdrawalRecord = await WalletWithdrawal.findOne({
+                                where: {
+                                    user_id: user.user_id,
+                                    status: 'approved'
+                                },
+                                attributes: [
+                                    [sequelize.fn('SUM', sequelize.col('amount')), 'total_withdrawal']
+                                ]
+                            });
+                            
+                            if (withdrawalRecord) {
+                                userWithdrawal = parseFloat(withdrawalRecord.dataValues.total_withdrawal || 0);
+                            }
+                        } catch (error) {
+                            console.log('⚠️ Error fetching withdrawal data for user:', user.user_id, error.message);
+                        }
+                    }
+
+                    // Add commission and withdrawal data to user object
                     const userWithCommission = {
-                        ...(typeof user.toJSON === 'function' ? user.toJSON() : user),
-                        commission_earned: userCommission
+                        userId: user.user_id,
+                        userName: user.user_name,
+                        createdAt: user.created_at,
+                        walletBalance: user.wallet_balance,
+                        vipLevel: user.vip_level,
+                        totalDeposit: user.actual_deposit_amount,
+                        commissionEarned: userCommission,
+                        totalWithdrawal: userWithdrawal
                     };
                     
                     directReferralsWithCommission.push(userWithCommission);
@@ -571,18 +660,113 @@ const getTeamReferrals = async (userId, dateFilter = null) => {
             const levelUsers = teamReferrals[levelKey] || [];
             
             for (const user of levelUsers) {
-                totalCommissionEarned += parseFloat(user.commission_earned || 0);
+                totalCommissionEarned += parseFloat(user.commissionEarned || 0);
             }
         }
 
         console.log(`🎉 Team referrals completed. Total: ${totalCount} users across all levels`);
         console.log(`💰 Total commission earned from team: ${totalCommissionEarned}`);
 
+        // ✅ FIXED: Only apply pagination if page and limit are provided
+        let paginatedTeamReferrals = teamReferrals;
+        let levelCounts = {};
+        let totalPages = 1;
+        
+        if (page && limit) {
+            console.log(`📊 Applying pagination: page ${page}, limit ${limit}`);
+            
+            // Track total counts for each level
+            levelCounts = {};
+            
+            for (let level = 1; level <= 6; level++) {
+                const levelKey = `level${level}`;
+                const levelUsers = teamReferrals[levelKey] || [];
+                
+                // Store total count for this level
+                levelCounts[levelKey] = levelUsers.length;
+            }
+            
+            // Apply pagination to the combined user list across all levels
+            const allUsers = [];
+            const levelMapping = {};
+            
+            // Collect all users from all levels with their level info
+            for (let level = 1; level <= 6; level++) {
+                const levelKey = `level${level}`;
+                const levelUsers = teamReferrals[levelKey] || [];
+                
+                levelUsers.forEach(user => {
+                    allUsers.push({
+                        ...user,
+                        level: level
+                    });
+                    levelMapping[user.userId] = level;
+                });
+            }
+            
+            // Apply pagination to the combined user list
+            const startIndex = (page - 1) * limit;
+            const endIndex = startIndex + limit;
+            const paginatedUsers = allUsers.slice(startIndex, endIndex);
+            
+            // Group paginated users back by level
+            paginatedTeamReferrals = {
+                level1: [],
+                level2: [],
+                level3: [],
+                level4: [],
+                level5: [],
+                level6: []
+            };
+            
+            paginatedUsers.forEach(user => {
+                const levelKey = `level${user.level}`;
+                const { level, ...userWithoutLevel } = user;
+                paginatedTeamReferrals[levelKey].push(userWithoutLevel);
+            });
+            
+            // Calculate total pages based on all users combined
+            totalPages = Math.ceil(allUsers.length / limit);
+            
+            console.log(`📊 Pagination applied: ${allUsers.length} total users, page ${page}, limit ${limit}`);
+            console.log(`📄 Showing users ${startIndex + 1}-${Math.min(endIndex, allUsers.length)} of ${allUsers.length}`);
+        } else {
+            // No pagination - return all users
+            console.log('📊 No pagination applied - returning all users');
+            
+            // Just count users per level
+            for (let level = 1; level <= 6; level++) {
+                const levelKey = `level${level}`;
+                const levelUsers = teamReferrals[levelKey] || [];
+                levelCounts[levelKey] = levelUsers.length;
+            }
+        }
+        
+        // Add level summary information
+        const levelSummary = {
+            totalLevels: Object.values(levelCounts).filter(count => count > 0).length,
+            levelsWithUsers: Object.entries(levelCounts)
+                .filter(([level, count]) => count > 0)
+                .map(([level, count]) => ({ level, userCount: count }))
+        };
+        
+        console.log(`📋 Users per level:`, levelCounts);
+        console.log(`📄 Total pages: ${totalPages}`);
+
         return {
             success: true,
-            teamReferrals,
+            teamReferrals: paginatedTeamReferrals,
             total: totalCount,
-            totalCommissionEarned: totalCommissionEarned
+            totalCommissionEarned: totalCommissionEarned,
+            pagination: {
+                currentPage: page,
+                limit: limit,
+                totalPages: totalPages,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1,
+                levelCounts: levelCounts, // ✅ Added: Total count for each level
+                levelSummary: levelSummary // ✅ Added: Summary of levels with users
+            }
         };
     } catch (error) {
         console.error('💥 Error getting team referrals:', error);
@@ -855,14 +1039,31 @@ const getCommissionEarnings = async (userId, dateFilter = null) => {
                 totalCount: 0,
                 byType: {},
                 byLevel: {},
-                commissions: []
+                // New section: Commission History with datewise data
+                commissionHistory: await getCommissionHistoryData(userId, dateFilter)
             };
         }
 
         const whereClause = { user_id: userId };
 
+        // Add date filtering if provided
         if (dateFilter) {
-            whereClause.created_at = dateFilter;
+            if (dateFilter.startDate && dateFilter.endDate) {
+                whereClause.created_at = {
+                    [Op.between]: [new Date(dateFilter.startDate), new Date(dateFilter.endDate)]
+                };
+            } else if (dateFilter.startDate) {
+                whereClause.created_at = {
+                    [Op.gte]: new Date(dateFilter.startDate)
+                };
+            } else if (dateFilter.endDate) {
+                whereClause.created_at = {
+                    [Op.lte]: new Date(dateFilter.endDate)
+                };
+            } else if (dateFilter.created_at) {
+                // Handle existing date filter format
+                whereClause.created_at = dateFilter.created_at;
+            }
         }
 
         const commissions = await ReferralCommission.findAll({
@@ -912,7 +1113,8 @@ const getCommissionEarnings = async (userId, dateFilter = null) => {
             totalCount: commissions.length,
             byType,
             byLevel,
-            commissions
+            // New section: Commission History with datewise data
+            commissionHistory: await getCommissionHistoryData(userId, dateFilter)
         };
     } catch (error) {
         console.error('Error getting commission earnings:', error);
@@ -1280,18 +1482,52 @@ const processDirectInvitationBonus = async (userId) => {
             await updateWalletBalance(userId, highestEligibleTier.amount, 'add', t);
 
             // Create commission record
-            await ReferralCommission.create({
+            const commissionRecord = await ReferralCommission.create({
                 user_id: userId,
                 referred_user_id: userId,
                 level: 0,
                 amount: highestEligibleTier.amount,
                 type: 'direct_bonus',
                 distribution_batch_id: `direct-bonus-${Date.now()}`,
+                status: 'paid', // Set status to 'paid' since bonus is awarded
                 created_at: new Date()
+            }, { transaction: t });
+
+            // Create transaction record for direct bonus
+            const Transaction = require('../models/Transaction');
+            await Transaction.create({
+                user_id: userId,
+                type: 'direct_bonus',
+                amount: highestEligibleTier.amount,
+                status: 'completed',
+                description: `Direct invitation bonus for ${highestEligibleTier.invitees} referrals`,
+                reference_id: `direct_bonus_${userId}_${Date.now()}`,
+                metadata: {
+                    bonus_type: 'direct_invitation',
+                    referral_count: highestEligibleTier.invitees,
+                    bonus_tier: highestEligibleTier,
+                    commission_id: commissionRecord.id
+                }
             }, { transaction: t });
         } else {
             // Simplified: just award the bonus
             await updateWalletBalance(userId, highestEligibleTier.amount, 'add', t);
+
+            // Create transaction record for direct bonus (when ReferralCommission doesn't exist)
+            const Transaction = require('../models/Transaction');
+            await Transaction.create({
+                user_id: userId,
+                type: 'direct_bonus',
+                amount: highestEligibleTier.amount,
+                status: 'completed',
+                description: `Direct invitation bonus for ${highestEligibleTier.invitees} referrals`,
+                reference_id: `direct_bonus_${userId}_${Date.now()}`,
+                metadata: {
+                    bonus_type: 'direct_invitation',
+                    referral_count: highestEligibleTier.invitees,
+                    bonus_tier: highestEligibleTier
+                }
+            }, { transaction: t });
         }
 
         const currentIndex = bonusTiers.findIndex(tier => tier.amount === highestEligibleTier.amount);
@@ -1380,8 +1616,44 @@ const processFirstRechargeBonus = async (userId, rechargeAmount) => {
             };
         }
 
+        // Get user data for balance tracking
+        const user = await sequelizeInstance.models.User.findByPk(userId, { 
+            attributes: ['wallet_balance'],
+            transaction: t 
+        });
+
         // Award bonus
         await updateWalletBalance(userId, applicableTier.bonus, 'add', t);
+
+        // 🎯 Create credit transaction for wagering tracking
+        await CreditService.addCredit(
+            userId,
+            applicableTier.bonus,
+            'welcome_bonus',
+            'external',
+            `first_deposit_bonus_${userId}_${Date.now()}`,
+            `First deposit bonus for ₹${rechargeAmount} deposit`
+        );
+
+        // Create transaction record for first deposit bonus
+        const Transaction = require('../models/Transaction');
+        await Transaction.create({
+            user_id: userId,
+            type: 'first_deposit_bonus',
+            amount: applicableTier.bonus,
+            status: 'completed',
+            description: `First deposit bonus for ₹${rechargeAmount} deposit`,
+            reference_id: `first_deposit_bonus_${userId}_${Date.now()}`,
+            metadata: {
+                bonus_type: 'first_deposit',
+                deposit_amount: rechargeAmount,
+                bonus_tier: applicableTier,
+                usage_restriction: 'house_games_only',
+                allowed_games: ['wingo', '5d', 'k3', 'trx_wix']
+            },
+            previous_balance: parseFloat(user?.wallet_balance || 0),
+            new_balance: parseFloat(user?.wallet_balance || 0) + applicableTier.bonus
+        }, { transaction: t });
 
         await t.commit();
 
@@ -1888,14 +2160,48 @@ const claimInvitationBonus = async (userId) => {
             }
 
             // Create commission record
-            await ReferralCommission.create({
+            const commissionRecord = await ReferralCommission.create({
                 user_id: userId,
                 referred_user_id: userId,
                 level: 0,
                 amount: eligibleTier.amount,
                 type: 'direct_bonus',
                 distribution_batch_id: `direct-bonus-${Date.now()}`,
+                status: 'paid', // Set status to 'paid' since bonus is awarded
                 created_at: new Date()
+            }, { transaction: t });
+
+            // Create transaction record for direct bonus
+            const Transaction = require('../models/Transaction');
+            await Transaction.create({
+                user_id: userId,
+                type: 'direct_bonus',
+                amount: eligibleTier.amount,
+                status: 'completed',
+                description: `Direct invitation bonus for ${eligibleTier.invitees} referrals`,
+                reference_id: `direct_bonus_${userId}_${Date.now()}`,
+                metadata: {
+                    bonus_type: 'direct_invitation',
+                    referral_count: eligibleTier.invitees,
+                    bonus_tier: eligibleTier,
+                    commission_id: commissionRecord.id
+                }
+            }, { transaction: t });
+        } else {
+            // Create transaction record for direct bonus (when ReferralCommission doesn't exist)
+            const Transaction = require('../models/Transaction');
+            await Transaction.create({
+                user_id: userId,
+                type: 'direct_bonus',
+                amount: eligibleTier.amount,
+                status: 'completed',
+                description: `Direct invitation bonus for ${eligibleTier.invitees} referrals`,
+                reference_id: `direct_bonus_${userId}_${Date.now()}`,
+                metadata: {
+                    bonus_type: 'direct_invitation',
+                    referral_count: eligibleTier.invitees,
+                    bonus_tier: eligibleTier
+                }
             }, { transaction: t });
         }
 
@@ -1905,6 +2211,16 @@ const claimInvitationBonus = async (userId) => {
             parseFloat(eligibleTier.amount),
             'add',
             t
+        );
+
+        // 🎯 Create credit transaction for wagering tracking
+        await CreditService.addCredit(
+            userId,
+            parseFloat(eligibleTier.amount),
+            'referral_reward',
+            'external',
+            `direct_bonus_${userId}_${Date.now()}`,
+            `Direct invitation bonus for ${eligibleTier.invitees} referrals`
         );
 
         console.log('💰 Added', eligibleTier.amount, 'to user wallet');
@@ -2057,6 +2373,339 @@ const getInvitationBonusStatus = async (userId) => {
         return {
             success: false,
             message: 'Error getting invitation bonus status: ' + error.message
+        };
+    }
+};
+
+/**
+ * 🆕 NEW: Get valid referral history for a user
+ * Shows all valid referrals with details like user ID, deposit amount, registration date
+ * @param {number} userId - User ID
+ * @param {number} page - Page number for pagination
+ * @param {number} limit - Items per page
+ * @returns {Object} - Valid referral history with pagination
+ */
+const getValidReferralHistory = async (userId, page = 1, limit = 10) => {
+    try {
+        console.log('👥 Getting valid referral history for user:', userId, 'Page:', page, 'Limit:', limit);
+        
+        const offset = (page - 1) * limit;
+        
+        // Get user info
+        const user = await User.findByPk(userId, {
+            attributes: ['user_id', 'user_name', 'direct_referral_count', 'valid_referral_count']
+        });
+
+        if (!user) {
+            return {
+                success: false,
+                message: 'User not found'
+            };
+        }
+
+        // Get valid referrals from ValidReferral table
+        let validReferrals = [];
+        let totalValidReferrals = 0;
+        
+        if (ValidReferral) {
+            try {
+                const validResult = await ValidReferral.findAndCountAll({
+                    where: {
+                        referrer_id: userId,
+                        is_valid: true
+                    },
+                    attributes: [
+                        'id', 'referrer_id', 'referred_id', 'total_recharge', 
+                        'is_valid', 'created_at', 'updated_at'
+                    ],
+                    order: [['updated_at', 'DESC']], // Most recent valid referrals first
+                    limit: limit,
+                    offset: offset
+                });
+                
+                validReferrals = validResult.rows;
+                totalValidReferrals = validResult.count;
+                console.log('✅ Found valid referrals:', totalValidReferrals);
+            } catch (error) {
+                console.log('⚠️ Could not fetch valid referrals:', error.message);
+            }
+        }
+
+        // Get detailed user information for each valid referral
+        const detailedReferrals = [];
+        
+        console.log('🔍 Processing', validReferrals.length, 'valid referrals...');
+        
+        for (const referral of validReferrals) {
+            try {
+                // Get referred user details
+                const referredUser = await User.findByPk(referral.referred_id, {
+                    attributes: [
+                        'user_id', 'user_name', 'created_at'
+                    ]
+                });
+
+                if (referredUser) {
+                    const referralRecord = {
+                        referralId: referral.id,
+                        userId: referredUser.user_id,
+                        userName: referredUser.user_name,
+                        registrationDate: referredUser.created_at,
+                        totalRecharge: parseFloat(referral.total_recharge)
+                    };
+
+                    detailedReferrals.push(referralRecord);
+                } else {
+                    console.log(`❌ Referred user not found for ID: ${referral.referred_id}`);
+                }
+            } catch (error) {
+                console.error('💥 Error processing referral:', referral.id, error);
+                console.error('Error details:', error.message);
+            }
+        }
+
+        console.log(`📊 Total detailed referrals processed: ${detailedReferrals.length}`);
+
+        // Sort by registration date (most recent first)
+        detailedReferrals.sort((a, b) => new Date(b.registrationDate) - new Date(a.registrationDate));
+
+        // Apply pagination to combined results
+        const totalReferrals = detailedReferrals.length;
+        const paginatedReferrals = detailedReferrals.slice(offset, offset + limit);
+
+        // Calculate summary statistics
+        const totalRechargeAmount = detailedReferrals.reduce((sum, referral) => sum + referral.totalRecharge, 0);
+
+        // Format the response
+        const history = paginatedReferrals.map(referral => ({
+            referralId: referral.referralId,
+            userId: referral.userId,
+            userName: referral.userName,
+            registrationDate: referral.registrationDate,
+            totalRecharge: referral.totalRecharge
+        }));
+
+        console.log(`📋 Final history array length: ${history.length}`);
+
+        return {
+            success: true,
+            summary: {
+                totalValidReferrals: totalValidReferrals,
+                totalRechargeAmount: totalRechargeAmount,
+                averageRechargePerReferral: totalValidReferrals > 0 ? totalRechargeAmount / totalValidReferrals : 0
+            },
+            history: history,
+            pagination: {
+                currentPage: page,
+                limit: limit,
+                totalPages: Math.ceil(totalValidReferrals / limit),
+                totalItems: totalValidReferrals,
+                hasNextPage: page * limit < totalValidReferrals,
+                hasPrevPage: page > 1
+            }
+        };
+
+    } catch (error) {
+        console.error('💥 Error getting valid referral history:', error);
+        return {
+            success: false,
+            message: 'Error getting valid referral history: ' + error.message
+        };
+    }
+};
+
+/**
+ * 🆕 NEW: Get invitation reward history for a user
+ * Shows all invitation bonuses claimed by the user
+ * @param {number} userId - User ID
+ * @param {number} page - Page number for pagination
+ * @param {number} limit - Items per page
+ * @returns {Object} - Invitation reward history with pagination
+ */
+const getInvitationRewardHistory = async (userId, page = 1, limit = 10) => {
+    try {
+        console.log('🎁 Getting invitation reward history for user:', userId, 'Page:', page, 'Limit:', limit);
+        
+        const offset = (page - 1) * limit;
+        
+        // Get user info
+        const user = await User.findByPk(userId, {
+            attributes: ['user_id', 'user_name', 'direct_referral_count', 'valid_referral_count']
+        });
+
+        if (!user) {
+            return {
+                success: false,
+                message: 'User not found'
+            };
+        }
+
+        // Get invitation rewards from ReferralCommission table
+        let commissionRewards = [];
+        let totalCommissionRewards = 0;
+        
+        if (ReferralCommission) {
+            try {
+                const commissionResult = await ReferralCommission.findAndCountAll({
+                    where: {
+                        user_id: userId,
+                        type: 'direct_bonus'
+                    },
+                    attributes: [
+                        'id', 'user_id', 'referred_user_id', 'level', 'amount', 
+                        'type', 'rebate_type', 'distribution_batch_id', 'status', 
+                        'created_at', 'updated_at'
+                    ],
+                    order: [['created_at', 'DESC']],
+                    limit: limit,
+                    offset: offset
+                });
+                
+                commissionRewards = commissionResult.rows;
+                totalCommissionRewards = commissionResult.count;
+                console.log('💰 Found commission rewards:', totalCommissionRewards);
+            } catch (error) {
+                console.log('⚠️ Could not fetch commission rewards:', error.message);
+            }
+        }
+
+        // Get invitation rewards from Transaction table
+        let transactionRewards = [];
+        let totalTransactionRewards = 0;
+        
+        try {
+            const Transaction = require('../models/Transaction');
+            const transactionResult = await Transaction.findAndCountAll({
+                where: {
+                    user_id: userId,
+                    type: 'direct_bonus'
+                },
+                attributes: [
+                    'id', 'user_id', 'type', 'amount', 'status', 'description',
+                    'reference_id', 'created_at', 'metadata'
+                ],
+                order: [['created_at', 'DESC']],
+                limit: limit,
+                offset: offset
+            });
+            
+            transactionRewards = transactionResult.rows;
+            totalTransactionRewards = transactionResult.count;
+            console.log('💳 Found transaction rewards:', totalTransactionRewards);
+        } catch (error) {
+            console.log('⚠️ Could not fetch transaction rewards:', error.message);
+        }
+
+        // Combine and deduplicate rewards based on reference_id or created_at
+        const allRewards = [];
+        const seenRewards = new Set();
+
+        // Add commission rewards first
+        for (const reward of commissionRewards) {
+            const key = `commission_${reward.id}`;
+            if (!seenRewards.has(key)) {
+                seenRewards.add(key);
+                allRewards.push({
+                    id: reward.id,
+                    type: 'commission_record',
+                    amount: parseFloat(reward.amount),
+                    status: reward.status,
+                    description: `Direct invitation bonus`,
+                    reference_id: reward.distribution_batch_id,
+                    created_at: reward.created_at,
+                    metadata: {
+                        bonus_type: 'direct_invitation',
+                        commission_id: reward.id,
+                        level: reward.level,
+                        rebate_type: reward.rebate_type
+                    }
+                });
+            }
+        }
+
+        // Add transaction rewards
+        for (const reward of transactionRewards) {
+            const key = `transaction_${reward.id}`;
+            if (!seenRewards.has(key)) {
+                seenRewards.add(key);
+                allRewards.push({
+                    id: reward.id,
+                    type: 'transaction_record',
+                    amount: parseFloat(reward.amount),
+                    status: reward.status,
+                    description: reward.description,
+                    reference_id: reward.reference_id,
+                    created_at: reward.created_at,
+                    metadata: reward.metadata || {}
+                });
+            }
+        }
+
+        // Sort by creation date (newest first)
+        allRewards.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+        // Apply pagination to combined results
+        const totalRewards = allRewards.length;
+        const paginatedRewards = allRewards.slice(offset, offset + limit);
+
+        // Calculate summary statistics
+        const totalAmount = allRewards.reduce((sum, reward) => sum + reward.amount, 0);
+        // Consider both 'completed' (Transaction) and 'paid' (ReferralCommission) as completed
+        const completedRewards = allRewards.filter(reward => 
+            reward.status === 'completed' || 
+            reward.status === 'paid' || 
+            reward.status === 'success'
+        );
+        const totalCompletedAmount = completedRewards.reduce((sum, reward) => sum + reward.amount, 0);
+
+        // Format the response
+        const history = paginatedRewards.map(reward => ({
+            id: reward.id,
+            recordType: reward.type,
+            amount: reward.amount,
+            status: reward.status,
+            // Show user-friendly status
+            displayStatus: reward.status === 'completed' || reward.status === 'paid' ? 'completed' : reward.status,
+            description: reward.description,
+            referenceId: reward.reference_id,
+            claimedAt: reward.created_at,
+            metadata: reward.metadata
+        }));
+
+        return {
+            success: true,
+            user: {
+                userId: user.user_id,
+                userName: user.user_name,
+                totalReferrals: user.direct_referral_count || 0,
+                validReferrals: user.valid_referral_count || 0
+            },
+            summary: {
+                totalRewards: totalRewards,
+                totalAmount: totalAmount,
+                completedRewards: completedRewards.length,
+                totalCompletedAmount: totalCompletedAmount
+            },
+            pagination: {
+                currentPage: page,
+                limit: limit,
+                totalPages: Math.ceil(totalRewards / limit),
+                totalItems: totalRewards,
+                hasNextPage: page * limit < totalRewards,
+                hasPrevPage: page > 1
+            },
+            history: history,
+            dataSources: {
+                commissionRecords: totalCommissionRewards,
+                transactionRecords: totalTransactionRewards
+            }
+        };
+
+    } catch (error) {
+        console.error('💥 Error getting invitation reward history:', error);
+        return {
+            success: false,
+            message: 'Error getting invitation reward history: ' + error.message
         };
     }
 };
@@ -3081,6 +3730,377 @@ const getCommissionFromUser = async (referrerId, referredUserId, dateFilter = nu
     }
 };
 
+/**
+ * Get team referrals for any user (Admin function) - SIMPLE VERSION
+ * @param {number} targetUserId - Target user ID to get team for
+ * @param {Object} dateFilter - Optional date filter
+ * @param {number} page - Page number for pagination
+ * @param {number} limit - Items per page
+ * @returns {Object} - Team referral data by level
+ */
+const getTeamReferralsForAdmin = async (targetUserId, dateFilter = null, page = 1, limit = 20) => {
+    try {
+        console.log('👑 [ADMIN] Getting team referrals for user:', targetUserId, 'Page:', page, 'Limit:', limit);
+        
+        // First verify the target user exists
+        const targetUser = await User.findByPk(targetUserId, {
+            attributes: ['user_id', 'user_name', 'created_at', 'wallet_balance', 'vip_level', 'actual_deposit_amount']
+        });
+        
+        if (!targetUser) {
+            return {
+                success: false,
+                message: 'Target user not found'
+            };
+        }
+
+        // ✅ ADMIN API: Per-Level Pagination (Fixed Version)
+        console.log('🔧 Admin API: Implementing per-level pagination...');
+        
+        // Get direct referrals (level 1) - no pagination initially
+        const directResult = await getDirectReferrals(targetUserId, dateFilter);
+        if (!directResult.success) {
+            return directResult;
+        }
+        
+        // Build complete team structure first (all levels)
+        const completeTeamReferrals = {
+            level1: [],
+            level2: [],
+            level3: [],
+            level4: [],
+            level5: [],
+            level6: []
+        };
+        
+        let totalCount = 0;
+        let totalCommissionEarned = 0;
+        
+        // Process level 1 (direct referrals)
+        if (directResult.directReferrals && directResult.directReferrals.length > 0) {
+            const level1Users = [];
+            
+            for (const user of directResult.directReferrals) {
+                let userCommission = 0;
+                
+                // Get commission data if available
+                if (ReferralCommission) {
+                    const commissionRecords = await ReferralCommission.findAll({
+                        where: {
+                            user_id: targetUserId,
+                            referred_user_id: user.user_id
+                        },
+                        attributes: ['amount']
+                    });
+                    
+                    userCommission = commissionRecords.reduce(
+                        (sum, record) => sum + parseFloat(record.amount), 0
+                    );
+                    totalCommissionEarned += userCommission;
+                }
+                
+                const userWithCommission = {
+                    userId: user.user_id,
+                    userName: user.user_name,
+                    createdAt: user.created_at,
+                    walletBalance: user.wallet_balance,
+                    vipLevel: user.vip_level,
+                    totalDeposit: user.actual_deposit_amount,
+                    commissionEarned: userCommission,
+                    totalWithdrawal: 0
+                };
+                
+                level1Users.push(userWithCommission);
+            }
+            
+            completeTeamReferrals.level1 = level1Users;
+            totalCount += level1Users.length;
+            console.log(`✅ Level 1: Found ${level1Users.length} users`);
+        }
+        
+        // For levels 2-6, build the referral chain
+        for (let level = 2; level <= 6; level++) {
+            const previousLevelUsers = completeTeamReferrals[`level${level - 1}`] || [];
+            const currentLevelUsers = [];
+            
+            for (const prevUser of previousLevelUsers) {
+                // Get users referred by this previous level user
+                const nextLevelReferrals = await getDirectReferrals(prevUser.userId, dateFilter);
+                
+                if (nextLevelReferrals.success && nextLevelReferrals.directReferrals) {
+                    for (const nextUser of nextLevelReferrals.directReferrals) {
+                        let userCommission = 0;
+                        
+                        // Get commission data if available
+                        if (ReferralCommission) {
+                            const commissionRecords = await ReferralCommission.findAll({
+                                where: {
+                                    user_id: targetUserId,
+                                    referred_user_id: nextUser.user_id
+                                },
+                                attributes: ['amount']
+                            });
+                            
+                            userCommission = commissionRecords.reduce(
+                                (sum, record) => sum + parseFloat(record.amount), 0
+                            );
+                            totalCommissionEarned += userCommission;
+                        }
+                        
+                        const userWithCommission = {
+                            userId: nextUser.user_id,
+                            userName: nextUser.user_name,
+                            createdAt: nextUser.created_at,
+                            walletBalance: nextUser.wallet_balance,
+                            vipLevel: nextUser.vip_level,
+                            totalDeposit: nextUser.actual_deposit_amount,
+                            commissionEarned: userCommission,
+                            totalWithdrawal: 0
+                        };
+                        
+                        currentLevelUsers.push(userWithCommission);
+                    }
+                }
+            }
+            
+            completeTeamReferrals[`level${level}`] = currentLevelUsers;
+            totalCount += currentLevelUsers.length;
+            console.log(`✅ Level ${level}: Found ${currentLevelUsers.length} users`);
+        }
+        
+        // ✅ IMPLEMENT PER-LEVEL PAGINATION (Fixed Version)
+        const paginatedTeamReferrals = {
+            level1: [],
+            level2: [],
+            level3: [],
+            level4: [],
+            level5: [],
+            level6: []
+        };
+        
+        // Apply pagination to each level independently
+        for (let level = 1; level <= 6; level++) {
+            const levelKey = `level${level}`;
+            const allUsersInLevel = completeTeamReferrals[levelKey] || [];
+            
+            // Calculate pagination for this specific level
+            const startIndex = (page - 1) * limit;
+            const endIndex = startIndex + limit;
+            const paginatedUsers = allUsersInLevel.slice(startIndex, endIndex);
+            
+            paginatedTeamReferrals[levelKey] = paginatedUsers;
+            
+            console.log(`📊 Level ${level}: ${paginatedUsers.length} users (page ${page}, limit ${limit})`);
+        }
+        
+        // Calculate level counts for admin overview (total available, not paginated)
+        const levelCounts = {};
+        for (let level = 1; level <= 6; level++) {
+            levelCounts[`level${level}`] = completeTeamReferrals[`level${level}`].length;
+        }
+        
+        // Calculate total pages based on the level with the most users
+        const maxUsersInAnyLevel = Math.max(...Object.values(levelCounts));
+        const totalPages = Math.ceil(maxUsersInAnyLevel / limit);
+        
+        // Calculate pagination info
+        const pagination = {
+            currentPage: page,
+            limit: limit,
+            totalPages: totalPages,
+            hasNextPage: page < totalPages,
+            hasPrevPage: page > 1,
+            levelCounts: levelCounts, // Total users available in each level
+            levelSummary: {
+                totalLevels: 6,
+                levelsWithUsers: Object.entries(levelCounts)
+                    .filter(([level, count]) => count > 0)
+                    .map(([level, count]) => ({ level, userCount: count }))
+            }
+        };
+        
+        console.log(`📄 Pagination: Page ${page} of ${totalPages}, showing ${limit} users per level`);
+        
+        return {
+            success: true,
+            teamReferrals: paginatedTeamReferrals, // Paginated data
+            total: totalCount, // Total users across all levels
+            totalCommissionEarned,
+            levelCounts, // Total available users per level
+            pagination, // Pagination details
+            targetUser: {
+                userId: targetUser.user_id,
+                userName: targetUser.user_name,
+                createdAt: targetUser.created_at,
+                walletBalance: targetUser.wallet_balance,
+                vipLevel: targetUser.vip_level,
+                totalDeposit: targetUser.actual_deposit_amount
+            },
+            message: `Admin API: Per-level pagination - Page ${page} of ${totalPages}`
+        };
+
+    } catch (error) {
+        console.error('💥 [ADMIN] Error getting team referrals for user:', error);
+        return {
+            success: false,
+            message: 'Error getting team referrals: ' + error.message
+        };
+    }
+};
+
+/**
+ * Get commission history data with datewise grouping (NEW FEATURE)
+ * @param {number} userId - User ID
+ * @param {Object} dateFilter - Optional date filter
+ * @returns {Object} - Commission history with datewise data
+ */
+const getCommissionHistoryData = async (userId, dateFilter = null) => {
+    try {
+        // If ReferralCommission doesn't exist, return empty data
+        if (!ReferralCommission) {
+            return {
+                totalUniqueUsers: 0,
+                totalCommission: 0,
+                totalBetAmount: 0,
+                byDate: {},
+                teamStructure: {
+                    level1: 0, level2: 0, level3: 0, level4: 0, level5: 0, level6: 0
+                }
+            };
+        }
+
+        // For summary calculations - get ONLY rebate type commissions
+        const summaryWhereClause = { 
+            user_id: userId,
+            type: 'rebate'  // Only rebate type for history
+        };
+        if (dateFilter) {
+            if (dateFilter.startDate && dateFilter.endDate) {
+                summaryWhereClause.created_at = {
+                    [Op.between]: [new Date(dateFilter.startDate), new Date(dateFilter.endDate)]
+                };
+            } else if (dateFilter.startDate) {
+                summaryWhereClause.created_at = {
+                    [Op.gte]: new Date(dateFilter.startDate)
+                };
+            } else if (dateFilter.endDate) {
+                summaryWhereClause.created_at = {
+                    [Op.lte]: new Date(dateFilter.endDate)
+                };
+            } else if (dateFilter.created_at) {
+                summaryWhereClause.created_at = dateFilter.created_at;
+            }
+        }
+
+        // Get ALL commissions for summary calculations (all types, no pagination)
+        const allCommissions = await ReferralCommission.findAll({
+            where: summaryWhereClause,
+            attributes: [
+                'amount',
+                'total_bet',
+                'level',
+                'rebate_type',
+                'created_at',
+                'referred_user_id'
+            ],
+            order: [['created_at', 'DESC']]
+        });
+
+        const totalCommission = allCommissions.reduce(
+            (sum, commission) => sum + parseFloat(commission.amount), 0
+        );
+
+        const totalBetAmount = allCommissions.reduce(
+            (sum, commission) => sum + parseFloat(commission.total_bet || 0), 0
+        );
+
+        // Calculate unique users count
+        const uniqueUsers = new Set();
+        for (const commission of allCommissions) {
+            uniqueUsers.add(commission.referred_user_id);
+        }
+
+        // Group by date
+        const byDate = {};
+
+        for (const commission of allCommissions) {
+            // Date grouping
+            const dateKey = commission.created_at.toISOString().split('T')[0];
+            if (!byDate[dateKey]) {
+                byDate[dateKey] = { 
+                    count: 0, amount: 0, totalBet: 0,
+                    uniqueUsers: new Set(),
+                    levelBreakdown: {}
+                };
+            }
+            byDate[dateKey].count++;
+            byDate[dateKey].amount += parseFloat(commission.amount);
+            byDate[dateKey].totalBet += parseFloat(commission.total_bet || 0);
+            byDate[dateKey].uniqueUsers.add(commission.referred_user_id);
+
+            // Level breakdown per date
+            const levelKey = `level${commission.level}`;
+            if (!byDate[dateKey].levelBreakdown[levelKey]) {
+                byDate[dateKey].levelBreakdown[levelKey] = { count: 0, amount: 0, totalBet: 0 };
+            }
+            byDate[dateKey].levelBreakdown[levelKey].count++;
+            byDate[dateKey].levelBreakdown[levelKey].amount += parseFloat(commission.amount);
+            byDate[dateKey].levelBreakdown[levelKey].totalBet += parseFloat(commission.total_bet || 0);
+        }
+
+        // Convert Sets to counts and sort dates
+        for (const dateKey in byDate) {
+            byDate[dateKey].uniqueUsers = byDate[dateKey].uniqueUsers.size;
+        }
+
+        // Sort byDate by date (newest first)
+        const sortedByDate = {};
+        Object.keys(byDate)
+            .sort((a, b) => new Date(b) - new Date(a))
+            .forEach(key => {
+                sortedByDate[key] = byDate[key];
+            });
+
+        // Get team structure data
+        let teamStructure = null;
+        try {
+            if (ReferralTree) {
+                const userTree = await ReferralTree.findOne({
+                    where: { user_id: userId }
+                });
+                
+                if (userTree) {
+                    teamStructure = {
+                        level1: userTree.level_1 ? userTree.level_1.split(',').filter(id => id.trim()).length : 0,
+                        level2: userTree.level_2 ? userTree.level_2.split(',').filter(id => id.trim()).length : 0,
+                        level3: userTree.level_3 ? userTree.level_3.split(',').filter(id => id.trim()).length : 0,
+                        level4: userTree.level_4 ? userTree.level_4.split(',').filter(id => id.trim()).length : 0,
+                        level5: userTree.level_5 ? userTree.level_5.split(',').filter(id => id.trim()).length : 0,
+                        level6: userTree.level_6 ? userTree.level_6.split(',').filter(id => id.trim()).length : 0
+                    };
+                }
+            }
+        } catch (error) {
+            console.log('⚠️ Could not fetch team structure:', error.message);
+        }
+
+        return {
+            totalUniqueUsers: uniqueUsers.size,
+            totalCommission: totalCommission,
+            totalBetAmount: totalBetAmount,
+            byDate: sortedByDate
+        };
+    } catch (error) {
+        console.error('Error getting commission history data:', error);
+        return {
+            totalUniqueUsers: 0,
+            totalCommission: 0,
+            totalBetAmount: 0,
+            byDate: {}
+        };
+    }
+};
+
 module.exports = {
     // New/modified attendance functions
     autoProcessRechargeForAttendance,
@@ -3113,5 +4133,8 @@ module.exports = {
     processMultiLevelRebateCommission,
     getRebateCommissionHistory,
     getRebateCommissionStats,
-    getCommissionFromUser
+    getCommissionFromUser,
+    getInvitationRewardHistory,
+    getValidReferralHistory,
+    getTeamReferralsForAdmin
 };

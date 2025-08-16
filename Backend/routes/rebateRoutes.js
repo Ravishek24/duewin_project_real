@@ -2,9 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { User, UserRebateLevel, RebateLevel, sequelize } = require('../models');
 const { auth } = require('../middlewares/authMiddleware');
+const rateLimiters = require('../middleware/rateLimiter');
 
-// Get user's rebate level
-router.get('/user-level', auth, async (req, res) => {
+// Get user's rebate level - Rate limited
+router.get('/user-level', auth, rateLimiters.rebateSystem, async (req, res) => {
     try {
         const userRebateLevel = await UserRebateLevel.findOne({
             where: { user_id: req.user.id },

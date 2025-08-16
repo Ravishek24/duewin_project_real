@@ -8,6 +8,7 @@ const WalletRecharge = require('../models/WalletRecharge');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
 const BankAccount = require('../models/BankAccount');
 const AttendanceRecord = require('../models/AttendanceRecord');
+const Transaction = require('../models/Transaction');
 const moment = require('moment-timezone');
 
 // Create secure axios instance for L Pay
@@ -250,6 +251,20 @@ const processLPayCollectionCallback = async (callbackData) => {
         wallet_balance: newBalance,
         actual_deposit_amount: newActualDeposit
       }, { where: { user_id: rechargeRecord.user_id }, transaction: t });
+      
+      // ✅ Create transaction record for deposit
+      await Transaction.create({
+          user_id: rechargeRecord.user_id,
+          type: 'deposit',
+          amount: addAmount,
+          status: 'completed',
+          payment_gateway_id: rechargeRecord.payment_gateway_id,
+          order_id: rechargeRecord.order_id,
+          transaction_id: callbackData.transactionNo,
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
       // First recharge bonus logic
       const referralService = require('./referralService');
       if (!user.has_received_first_bonus) {
@@ -302,6 +317,28 @@ const processLPayCollectionCallback = async (callbackData) => {
       console.log('❌ Payment failed or pending. Return code:', callbackData.returncode);
       
       await WalletRecharge.update({ status: 'failed' }, { where: { order_id: callbackData.orderNo }, transaction: t });
+      
+      // ✅ Create transaction record for failed deposit
+      await Transaction.create({
+          user_id: rechargeRecord.user_id,
+          type: 'deposit_failed',
+          amount: parseFloat(rechargeRecord.amount),
+          status: 'failed',
+          payment_gateway_id: rechargeRecord.payment_gateway_id,
+          order_id: callbackData.orderNo,
+          transaction_id: callbackData.transactionNo || null,
+          description: 'LPAY deposit failed',
+          reference_id: `lpay_deposit_failed_${callbackData.orderNo}`,
+          metadata: {
+            gateway: 'LPAY',
+            original_status: callbackData.returncode,
+            failure_reason: 'Payment failed or pending',
+            processed_at: new Date().toISOString()
+          },
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       
       console.log('❌ Order status updated to failed');
@@ -410,10 +447,38 @@ const processLPayWithdrawalCallback = async (callbackData) => {
         where: { order_id: callbackData.orderNo },
         transaction: t
       });
+      
+      // ✅ Create transaction record for withdrawal
+      await Transaction.create({
+          user_id: withdrawalRecord.user_id,
+          type: 'withdrawal',
+          amount: parseFloat(withdrawalRecord.amount),
+          status: 'completed',
+          payment_gateway_id: withdrawalRecord.payment_gateway_id,
+          order_id: withdrawalRecord.order_id,
+          transaction_id: callbackData.transactionNo,
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       return { success: true, message: 'Withdrawal processed successfully' };
     } else {
       await WalletWithdrawal.update({ status: 'failed' }, { where: { order_id: callbackData.orderNo }, transaction: t });
+      
+      // ✅ Create transaction record for failed withdrawal
+      await Transaction.create({
+          user_id: withdrawalRecord.user_id,
+          type: 'withdrawal',
+          amount: parseFloat(withdrawalRecord.amount),
+          status: 'failed',
+          payment_gateway_id: withdrawalRecord.payment_gateway_id,
+          order_id: withdrawalRecord.order_id,
+          transaction_id: callbackData.transactionNo,
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       return { success: false, message: 'Withdrawal failed or pending' };
     }

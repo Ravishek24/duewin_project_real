@@ -1,13 +1,13 @@
 const { Queue } = require('bullmq');
-const getQueueConnections = require('../config/queueConfig');
+const unifiedRedis = require('../config/unifiedRedisManager');
 
 // Lazy queue creation - only create when needed
 let withdrawalQueue = null;
 
 function getWithdrawalQueue() {
   if (!withdrawalQueue) {
-    const queueConnections = getQueueConnections();
-    withdrawalQueue = new Queue('withdrawals', { connection: queueConnections.withdrawals });
+    const connection = unifiedRedis.getConnectionSync('main');
+    withdrawalQueue = new Queue('withdrawals', { connection });
   }
   return withdrawalQueue;
 }

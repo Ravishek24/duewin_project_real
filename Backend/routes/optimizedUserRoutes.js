@@ -11,6 +11,7 @@ const originalLoginController = require('../controllers/userController/loginCont
 
 // Import validation middleware (maintain original validation)
 const validationRules = require('../middleware/inputValidator');
+const rateLimiters = require('../middleware/rateLimiter');
 
 // Configuration: Set to true to use optimized controllers, false for original
 const USE_OPTIMIZED_CONTROLLERS = process.env.USE_OPTIMIZED_CONTROLLERS === 'true' || true; // Default to optimized
@@ -24,8 +25,9 @@ const USE_OPTIMIZED_CONTROLLERS = process.env.USE_OPTIMIZED_CONTROLLERS === 'tru
  * - Graceful fallback on errors
  */
 
-// Route: User Registration
+// Route: User Registration - Rate limited
 router.post('/signup', 
+    rateLimiters.userRegistration,
     validationRules.signup, // Maintain original validation
     async (req, res, next) => {
         const startTime = Date.now();
@@ -61,8 +63,9 @@ router.post('/signup',
     }
 );
 
-// Route: User Login
+// Route: User Login - Rate limited
 router.post('/login', 
+    rateLimiters.userLogin,
     validationRules.login, // Maintain original validation
     async (req, res, next) => {
         const startTime = Date.now();
@@ -98,8 +101,10 @@ router.post('/login',
     }
 );
 
-// Route: Performance metrics endpoint (NEW)
-router.get('/performance-metrics', async (req, res) => {
+// Route: Performance metrics endpoint (NEW) - Rate limited
+router.get('/performance-metrics', 
+    rateLimiters.general,
+    async (req, res) => {
     try {
         const optimizedCacheService = require('../services/optimizedCacheService');
         const metrics = await optimizedCacheService.getCacheMetrics();
@@ -121,8 +126,10 @@ router.get('/performance-metrics', async (req, res) => {
     }
 });
 
-// Route: Toggle optimization mode (for testing - admin only)
-router.post('/toggle-optimization', async (req, res) => {
+// Route: Toggle optimization mode (for testing - admin only) - Rate limited
+router.post('/toggle-optimization', 
+    rateLimiters.general,
+    async (req, res) => {
     try {
         // This would typically be protected by admin middleware
         // For now, just return current status
@@ -141,8 +148,10 @@ router.post('/toggle-optimization', async (req, res) => {
     }
 });
 
-// Route: Cache health check (NEW)
-router.get('/cache-health', async (req, res) => {
+// Route: Cache health check (NEW) - Rate limited
+router.get('/cache-health', 
+    rateLimiters.general,
+    async (req, res) => {
     try {
         const optimizedCacheService = require('../services/optimizedCacheService');
         

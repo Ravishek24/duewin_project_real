@@ -11,42 +11,91 @@ const {
     getReferralTreeDetailsController,
     recordAttendanceController,
     getDirectReferralAnalyticsController,
-    getTeamReferralAnalyticsController
+    getTeamReferralAnalyticsController,
+    getTeamReferralsForAdminController
 } = require('../controllers/referralController');
 
 // Import the referral service for inline route handlers
 const referralService = require('../services/referralService');
 
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
+const rateLimiters = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
-// Direct referrals
-router.get('/direct', auth, getDirectReferralsController);
+// Direct referrals - Rate limited
+router.get('/direct', rateLimiters.referralSystem, getDirectReferralsController);
 
-// Team referrals
-router.get('/team', auth, getTeamReferralsController);
+// Team referrals - Rate limited
+router.get('/team', rateLimiters.referralSystem, getTeamReferralsController);
 
-// Direct referral deposits - both singular and plural paths
-router.get('/direct/deposits', auth,  getDirectReferralDepositsController);
-router.get('/direct/deposit', auth,  getDirectReferralDepositsController);
+// Direct referral deposits - both singular and plural paths - Rate limited
+router.get('/direct/deposits', rateLimiters.referralSystem, getDirectReferralDepositsController);
+router.get('/direct/deposit', rateLimiters.referralSystem, getDirectReferralDepositsController);
 
-// Team referral deposits
-router.get('/team/deposits', auth,  getTeamReferralDepositsController);
-router.get('/team/deposit', auth,  getTeamReferralDepositsController);
+// Team referral deposits - Rate limited
+router.get('/team/deposits', rateLimiters.referralSystem, getTeamReferralDepositsController);
+router.get('/team/deposit', rateLimiters.referralSystem, getTeamReferralDepositsController);
 
-// Commission earnings
-router.get('/commissions', auth,  getCommissionEarningsController);
+// Commission earnings - Rate limited
+router.get('/commissions', rateLimiters.referralSystem, getCommissionEarningsController);
 
-// Referral tree details
-router.get('/tree', auth, getReferralTreeDetailsController);
+// Referral tree details - Rate limited
+router.get('/tree', rateLimiters.referralSystem, getReferralTreeDetailsController);
 
-// Analytics
-router.get('/analytics/direct', auth, getDirectReferralAnalyticsController);
-router.get('/analytics/team', auth, getTeamReferralAnalyticsController);
+// Analytics - Rate limited
+router.get('/analytics/direct', rateLimiters.referralSystem, getDirectReferralAnalyticsController);
+router.get('/analytics/team', rateLimiters.referralSystem, getTeamReferralAnalyticsController);
 
-// Attendance bonus endpoints - FIXED WITH PROPER ASYNC HANDLERS
-router.post('/attendance', auth, async (req, res) => {
+// Admin team referrals - Rate limited + Admin only
+router.get('/admin/team', rateLimiters.referralSystem, (req, res, next) => {
+    // Check if user is admin
+    if (!req.user || !req.user.is_admin) {
+        return res.status(403).json({
+            success: false,
+            message: 'Admin access required'
+        });
+    }
+    next();
+}, getTeamReferralsForAdminController);
+
+// Valid referral history - Rate limited
+router.get('/valid/history', rateLimiters.referralSystem, async (req, res) => {
+    try {
+        console.log('👥 DEBUG: Valid referral history route hit');
+        const userId = req.user.user_id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        
+        console.log('🆔 User ID:', userId, 'Page:', page, 'Limit:', limit);
+        
+        if (!referralService || !referralService.getValidReferralHistory) {
+            return res.status(500).json({
+                success: false,
+                message: 'Valid referral history service not available'
+            });
+        }
+        
+        const result = await referralService.getValidReferralHistory(userId, page, limit);
+        console.log('📋 Valid referral history result:', result);
+
+        if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('💥 Error in valid referral history route:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting valid referral history',
+            debug: { error: error.message }
+        });
+    }
+});
+
+// Attendance bonus endpoints - FIXED WITH PROPER ASYNC HANDLERS - Rate limited
+router.post('/attendance', rateLimiters.referralSystem, async (req, res) => {
     try {
         console.log('📅 DEBUG: Attendance route hit');
         const userId = req.user.user_id;
@@ -77,7 +126,7 @@ router.post('/attendance', auth, async (req, res) => {
     }
 });
 
-router.get('/attendance/unclaimed', auth, requirePhoneVerification, async (req, res) => {
+router.get('/attendance/unclaimed', async (req, res) => {
     try {
         console.log('📅 DEBUG: Unclaimed attendance route hit');
         const userId = req.user.user_id;
@@ -106,7 +155,7 @@ router.get('/attendance/unclaimed', auth, requirePhoneVerification, async (req, 
     }
 });
 
-router.post('/attendance/claim', auth,  async (req, res) => {
+router.post('/attendance/claim',  async (req, res) => {
     try {
         console.log('📅 DEBUG: Claim attendance route hit');
         const userId = req.user.user_id;
@@ -136,7 +185,8 @@ router.post('/attendance/claim', auth,  async (req, res) => {
     }
 });
 
-router.get('/invitation/status', auth,  async (req, res) => {
+// Invitation bonus endpoints
+router.get('/invitation/status',  async (req, res) => {
     try {
         console.log('🎁 DEBUG: Invitation status route hit');
         const userId = req.user.user_id;
@@ -167,7 +217,7 @@ router.get('/invitation/status', auth,  async (req, res) => {
     }
 });
 
-router.post('/invitation/claim', auth, async (req, res) => {
+router.post('/invitation/claim', async (req, res) => {
     try {
         console.log('🎁 DEBUG: Invitation claim route hit');
         const userId = req.user.user_id;
@@ -198,8 +248,43 @@ router.post('/invitation/claim', auth, async (req, res) => {
     }
 });
 
+// 🆕 NEW: Get invitation reward history
+router.get('/invitation/history', async (req, res) => {
+    try {
+        console.log('🎁 DEBUG: Invitation reward history route hit');
+        const userId = req.user.user_id;
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        
+        console.log('🆔 User ID:', userId, 'Page:', page, 'Limit:', limit);
+        
+        if (!referralService || !referralService.getInvitationRewardHistory) {
+            return res.status(500).json({
+                success: false,
+                message: 'Invitation history service not available'
+            });
+        }
+        
+        const result = await referralService.getInvitationRewardHistory(userId, page, limit);
+        console.log('📋 Invitation history result:', result);
+        
+        if (result.success) {
+            return res.status(200).json(result);
+        } else {
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('💥 Error in invitation history route:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error getting invitation reward history',
+            debug: { error: error.message }
+        });
+    }
+});
+
 // Attendance history endpoint
-router.get('/attendance/history', auth, async (req, res) => {
+router.get('/attendance/history', async (req, res) => {
     try {
         console.log('📅 DEBUG: Attendance history route hit');
         const userId = req.user.user_id;
@@ -230,7 +315,7 @@ router.get('/attendance/history', auth, async (req, res) => {
 });
 
 // Self rebate history endpoint
-router.get('/self-rebate/history', auth, async (req, res) => {
+router.get('/self-rebate/history', async (req, res) => {
     try {
         console.log('💰 DEBUG: Self rebate history route hit');
         const userId = req.user.user_id;
@@ -263,7 +348,7 @@ router.get('/self-rebate/history', auth, async (req, res) => {
 });
 
 // Self rebate statistics endpoint
-router.get('/self-rebate/stats', auth, async (req, res) => {
+router.get('/self-rebate/stats', async (req, res) => {
     try {
         console.log('💰 DEBUG: Self rebate stats route hit');
         const userId = req.user.user_id;

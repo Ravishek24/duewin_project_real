@@ -1,6 +1,14 @@
 require('dotenv').config();
 const unifiedRedis = require('../config/unifiedRedisManager');
-function getRedisHelper() { return unifiedRedis.getHelper(); }
+
+// Fix: Make these functions async and properly await Redis connections
+async function getRedisHelper() { 
+    return await unifiedRedis.getHelper(); 
+}
+
+async function getPublisherRedis() {
+    return await unifiedRedis.getConnection('publisher');
+}
 
 
 // Backend/services/websocketService.js - ENHANCED: Added bet placement with validation
@@ -19,9 +27,7 @@ const { initializeModels } = require('../models');
 const { recordVipExperience } = require('./autoVipService');
 
 
-function getPublisherRedis() {
-  return unifiedRedis.getConnection('publisher');
-}
+
 
 const gameIntervals = new Map();
 let gameTicksStarted = false;
@@ -252,7 +258,12 @@ const getPeriodInfoFromRedis = async (gameType, duration) => {
         ////console.log(`🔍 [REDIS_READ_ATTEMPT] ${gameType}_${duration}: Attempting to read from Redis key: ${key}`);
         
         try {
-            const periodData = await getRedisHelper().get(key);
+            const helper = await getRedisHelper();
+            if (!helper) {
+                console.error(`❌ [REDIS_READ_ERROR] ${gameType}_${duration}: Redis helper not available`);
+                return null;
+            }
+            const periodData = await helper.get(key);
             
             // CRITICAL DEBUG: Log what we got from Redis
             if (periodData) {
@@ -376,8 +387,17 @@ const requestPeriodFromScheduler = async (gameType, duration) => {
         };
 
         // Publish request to scheduler
-        await getPublisherRedis().publish('scheduler:period_request', JSON.stringify(requestData));
-        ////console.log(`📤 [PERIOD_REQUEST] Requested period for ${gameType}_${duration}`);
+        try {
+            const publisher = await getPublisherRedis();
+            if (!publisher) {
+                console.error('❌ [PERIOD_REQUEST] Redis publisher not available');
+                return;
+            }
+            await publisher.publish('scheduler:period_request', JSON.stringify(requestData));
+        } catch (publishError) {
+            console.error('❌ [PERIOD_REQUEST] Error publishing to Redis:', publishError.message);
+        }
+        ////console.log(`📤 [PERIOD_REQUEST] Sent for ${gameType}_${duration}`);
 
     } catch (error) {
         console.error('❌ [PERIOD_REQUEST] Error requesting period:', error);
@@ -733,6 +753,9 @@ const cleanupEventSequencer = () => {
 
 // Run cleanup every minute
 setInterval(cleanupEventSequencer, 60000);
+
+
+
 /**
  * CRITICAL: Add this function to your initializeWebSocket function
  * Add this line RIGHT BEFORE returning io:
@@ -1324,7 +1347,19 @@ const calculateOddsForBet = (clientType, clientSelection, betData = {}) => {
 const getTotalBetsForPeriod = async (gameType, duration, periodId, timeline = 'default') => {
     try {
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const betsData = await getRedisHelper().hgetall(betHashKey);
+        const helper = await getRedisHelper();
+        if (!helper) {
+            console.error('❌ [TOTAL_BETS] Redis helper not available');
+            return {
+                totalAmount: '0',
+                totalGross: '0',
+                totalFees: '0',
+                betCount: 0,
+                uniqueUsers: 0,
+                timeline
+            };
+        }
+        const betsData = await helper.hgetall(betHashKey);
 
         let totalAmount = 0;
         let totalGross = 0;
@@ -1402,7 +1437,12 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
 
         // Check if user has already placed maximum bets using new hash structure
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
-        const allBets = await getRedisHelper().hgetall(betHashKey);
+        const helper = await getRedisHelper();
+        if (!helper) {
+            console.error('❌ [BET_VALIDATION] Redis helper not available');
+            return { valid: false, error: 'System temporarily unavailable' };
+        }
+        const allBets = await helper.hgetall(betHashKey);
 
         let userBetCount = 0;
         let userTotalAmount = 0;
@@ -1446,6 +1486,16 @@ const validateBetPlacement = async (userId, gameType, duration, periodId, betAmo
 const initializeWebSocket = async (server) => {
     try {
         console.log('🔄 Initializing WebSocket server for MULTI-INSTANCE setup...');
+
+        // Initialize Redis first
+        console.log('🔄 [WEBSOCKET] Initializing Redis...');
+        try {
+            await unifiedRedis.initialize();
+            console.log('✅ [WEBSOCKET] Redis initialized');
+        } catch (redisError) {
+            console.error('❌ [WEBSOCKET] Redis initialization failed:', redisError.message);
+            console.warn('⚠️ [WEBSOCKET] WebSocket will work without Redis (limited functionality)');
+        }
 
         // Initialize models
         await ensureModelsInitialized();
@@ -1564,19 +1614,23 @@ const initializeWebSocket = async (server) => {
                     try {
                         const user = await models.User.findByPk(socket.user.userId);
                         if (user) {
+                            const walletBalance = parseFloat(user.wallet_balance);
                             await models.Transaction.create({
                                 user_id: socket.user.userId,
                                 reference_id: `GAME_MOVE_IN_${Date.now()}_${socket.user.userId}`,
-                                type: 'transfer_in',
-                                amount: 0,
+                                type: 'game_move_in',
+                                amount: walletBalance,
                                 status: 'completed',
                                 description: `User entered ${gameType} ${duration}s room`,
+                                previous_balance: walletBalance,
+                                new_balance: walletBalance,
                                 metadata: {
                                     game_type: gameType,
                                     room_duration: duration,
                                     room_id: roomId,
-                                    wallet_balance: user.wallet_balance,
-                                    action: 'enter'
+                                    wallet_balance: walletBalance,
+                                    action: 'enter',
+                                    session_start: new Date().toISOString()
                                 }
                             });
                         }
@@ -1619,19 +1673,23 @@ const initializeWebSocket = async (server) => {
                     try {
                         const user = await models.User.findByPk(socket.user.userId);
                         if (user) {
+                            const walletBalance = parseFloat(user.wallet_balance);
                             await models.Transaction.create({
                                 user_id: socket.user.userId,
                                 reference_id: `GAME_MOVE_OUT_${Date.now()}_${socket.user.userId}`,
-                                type: 'transfer_out',
-                                amount: 0,
+                                type: 'game_move_out',
+                                amount: walletBalance,
                                 status: 'completed',
                                 description: `User left ${gameType} ${duration}s room`,
+                                previous_balance: walletBalance,
+                                new_balance: walletBalance,
                                 metadata: {
                                     game_type: gameType,
                                     room_duration: duration,
                                     room_id: roomId,
-                                    wallet_balance: user.wallet_balance,
-                                    action: 'exit'
+                                    wallet_balance: walletBalance,
+                                    action: 'exit',
+                                    session_end: new Date().toISOString()
                                 }
                             });
                         }
@@ -1935,7 +1993,12 @@ const initializeWebSocket = async (server) => {
         });
 
         // Setup Redis subscriptions FIRST
-        await setupRedisSubscriptions();
+        try {
+            await setupRedisSubscriptions();
+        } catch (redisSubError) {
+            console.error('❌ [WEBSOCKET] Redis subscription setup failed:', redisSubError.message);
+            console.warn('⚠️ [WEBSOCKET] WebSocket will work without Redis subscriptions (polling mode only)');
+        }
 
         // Then start broadcast ticks
         setTimeout(() => {
@@ -1969,7 +2032,7 @@ const setupRedisSubscriptions = async () => {
         }
 
         // Get the existing subscriber connection from unified Redis
-        redisSubscriber = unifiedRedis.getConnection('subscriber');
+        redisSubscriber = await unifiedRedis.getConnection('subscriber');
         
         if (!redisSubscriber) {
             ////console.log('❌ [REDIS_PUBSUB] No unified Redis subscriber available, skipping Redis pub/sub setup');
@@ -2199,7 +2262,8 @@ const requestPeriodFromSchedulerDebounced = async (gameType, duration) => {
             source: 'websocket_debounced'
         };
 
-        await getPublisherRedis().publish('scheduler:period_request', JSON.stringify(requestData));
+        const publisher = await getPublisherRedis();
+        await publisher.publish('scheduler:period_request', JSON.stringify(requestData));
         ////console.log(`📤 [PERIOD_REQUEST] Sent for ${gameType}_${duration}`);
         
         // Auto-cleanup
@@ -2321,27 +2385,10 @@ const handleGameSchedulerEvent = (channel, data) => {
                 break;
                 
             case 'period_result':
-                const periodResultData = {
-                    gameType,
-                    duration,
-                    periodId,
-                    result: data.result?.result || data.result,
-                    winners: data.result?.winners || [],
-                    winnerCount: data.result?.winnerCount || 0,
-                    totalPayout: data.result?.totalPayout || 0,
-                    verification: data.result?.verification,
-                    timeRemaining: 0,
-                    bettingOpen: false,
-                    bettingCloseTime: true,
-                    roomId,
-                    source: 'scheduler_result',
-                    timestamp: timestamp
-                };
+                // REMOVED: Duplicate broadcasting - scheduler already handles this
+                // The WebSocket service should not rebroadcast Redis messages
                 
-                io.to(roomId).emit('periodResult', periodResultData);
-                ////console.log(`✅ [PERIOD_RESULT] Sent to ${clientCount} clients: ${periodId}`);
-                
-                // Mark period as ended
+                // Mark period as ended (but don't broadcast)
                 const resultTrackingKey = `last_period_${gameType}_${duration}`;
                 const currentState = global.eventSequencer.periodStates.get(resultTrackingKey);
                 if (currentState && currentState.periodId === periodId) {
@@ -2768,38 +2815,8 @@ module.exports = {
         }
     },
 
-    // NEW: Broadcast general period result to all users in room (non-betting users get this)
-    broadcastPeriodResult: async (io, gameType, duration, periodId, result, timeline = 'default') => {
-        try {
-            const roomId = getRoomId(gameType, duration, timeline);
-
-            // Get total statistics using new hash structure
-            const stats = await getTotalBetsForPeriod(gameType, duration, periodId, timeline);
-
-            // Broadcast general period result to entire room
-            io.to(roomId).emit('periodResult', {
-                gameType,
-                duration,
-                periodId,
-                result: result,
-                timeline,
-                statistics: {
-                    totalBets: stats.totalAmount,
-                    totalGross: stats.totalGross,
-                    platformFees: stats.totalFees,
-                    betCount: stats.betCount,
-                    uniqueUsers: stats.uniqueUsers
-                },
-                timestamp: new Date().toISOString(),
-                source: 'period_result_general'
-            });
-
-            ////console.log(`📢 [PERIOD_RESULT] Broadcasted general result for ${gameType}_${duration}_${periodId} to all users in room`);
-
-        } catch (error) {
-            console.error('❌ Error broadcasting period result:', error);
-        }
-    },
+    // REMOVED: Duplicate broadcasting function - scheduler handles all result broadcasting
+    // This was causing duplicate broadcasts when combined with Redis Pub/Sub
 
     // NEW: Broadcast balance update to specific user
     broadcastBalanceUpdate: (userId, balanceData) => {
@@ -2963,8 +2980,14 @@ module.exports = {
 
             // Test Redis connectivity
             try {
-                await getRedisHelper().ping();
-                health.redis.latency = 'low';
+                const helper = await getRedisHelper();
+                if (!helper) {
+                    health.redis.status = 'unavailable';
+                    health.redis.error = 'Redis helper not available';
+                } else {
+                    await helper.ping();
+                    health.redis.latency = 'low';
+                }
             } catch (redisError) {
                 health.redis.status = 'error';
                 health.redis.error = redisError.message;

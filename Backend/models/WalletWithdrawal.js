@@ -61,6 +61,17 @@ class WalletWithdrawal extends Model {
                 type: DataTypes.STRING,
                 allowNull: true
             },
+            // 🎯 WAGERING SYSTEM FIELDS
+            wagering_status: {
+                type: DataTypes.JSON,
+                allowNull: true,
+                comment: 'Wagering verification details at time of withdrawal'
+            },
+            wagering_checked: {
+                type: DataTypes.BOOLEAN,
+                defaultValue: false,
+                comment: 'Whether wagering requirements were verified'
+            },
             bank_account_id: {
                 type: DataTypes.INTEGER,
                 allowNull: true,

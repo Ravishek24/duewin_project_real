@@ -1,6 +1,6 @@
 const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
-const getQueueConnections = require('../config/queueConfig');
+const { createWorker } = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
 const { getDepositQueue } = require('./depositQueue');
 const { getPaymentQueue } = require('./paymentQueue');
@@ -8,9 +8,9 @@ const { getWithdrawalQueue } = require('./withdrawalQueue');
 
 async function startWorker() {
   await unifiedRedis.initialize();
-  const queueConnections = getQueueConnections();
+  // connections handled within createWorker via unifiedRedis
 
-  const worker = new Worker('payments', async job => {
+  const worker = createWorker('payments', async job => {
     const { type, data } = job.data;
     try {
       const models = getWorkerModels();
@@ -48,12 +48,7 @@ async function startWorker() {
       }
     }
   }, {
-    connection: queueConnections.payments,
-    concurrency: 10, // or your desired concurrency
-    settings: {
-      stalledInterval: 30000,
-      maxStalledCount: 1
-    }
+    concurrency: 10
   });
 
   // Enhanced deposit callback processing
@@ -423,7 +418,7 @@ async function startWorker() {
     }
   });
 
-  const paymentQueue = new Queue('payments', { connection: queueConnections.payments });
+  const paymentQueue = new Queue('payments', { connection: await unifiedRedis.getConnection('main') });
   setInterval(() => {
     paymentQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
     paymentQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});

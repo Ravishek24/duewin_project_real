@@ -6,6 +6,7 @@ const { autoRecordReferral } = require('../../services/referralService');
 const referralCodeGenerator = require('../../utils/referralCodeGenerator');
 const { getRegistrationQueue } = require('../../queues/registrationQueue');
 const optimizedCacheService = require('../../services/optimizedCacheService');
+const { getClientIp, sanitizeIp } = require('../../utils/ipAddressUtils');
 
 // Pre-load models at module level to avoid repeated dynamic loading
 let models = null;
@@ -239,6 +240,10 @@ const optimizedRegisterController = async (req, res) => {
         const transaction = await User.sequelize.transaction();
 
         try {
+            // Get client IP address using centralized utility
+            const clientIp = getClientIp(req);
+            const sanitizedIp = sanitizeIp(clientIp);
+            
             // Create new user with all original fields
             const user = await User.create({
                 phone_no,
@@ -249,8 +254,10 @@ const optimizedRegisterController = async (req, res) => {
                 referral_code: referred_by,
                 is_phone_verified: true,
                 wallet_balance: 0,
+                current_ip: sanitizedIp,
+                registration_ip: sanitizedIp,
                 last_login_at: new Date(),
-                last_login_ip: req.ip || req.connection.remoteAddress
+                last_login_ip: sanitizedIp
             }, { transaction });
 
             // Apply registration bonus (maintain original functionality)

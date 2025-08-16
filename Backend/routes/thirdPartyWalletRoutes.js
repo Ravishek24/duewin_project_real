@@ -2,12 +2,13 @@
 const express = require('express');
 const router = express.Router();
 const thirdPartyWalletController = require('../controllers/thirdPartyWalletController');
+const rateLimiters = require('../middleware/rateLimiter');
 
 // Note: Authentication is handled at the router level in index.js
 // All routes here will have auth middleware applied
 
-// Health check for third-party wallet service
-router.get('/health', (req, res) => {
+// Health check for third-party wallet service - Rate limited
+router.get('/health', rateLimiters.thirdPartyWallet, (req, res) => {
   res.json({
     success: true,
     message: 'Third-party wallet service is healthy',
@@ -15,26 +16,26 @@ router.get('/health', (req, res) => {
   });
 });
 
-// FIXED: Get wallet balance
-router.get('/balance', thirdPartyWalletController.getWalletBalance);
+// FIXED: Get wallet balance - Rate limited
+router.get('/balance', rateLimiters.thirdPartyWallet, thirdPartyWalletController.getWalletBalance);
 
-// FIXED: Get wallet status (new route for better debugging)
-router.get('/status', thirdPartyWalletController.getWalletStatus);
+// FIXED: Get wallet status (new route for better debugging) - Rate limited
+router.get('/status', rateLimiters.thirdPartyWallet, thirdPartyWalletController.getWalletStatus);
 
-// FIXED: Check if there are funds in the third-party wallet
-router.get('/check-funds', thirdPartyWalletController.checkThirdPartyFunds);
+// FIXED: Check if there are funds in the third-party wallet - Rate limited
+router.get('/check-funds', rateLimiters.thirdPartyWallet, thirdPartyWalletController.checkThirdPartyFunds);
 
-// ADDED: Create wallet route (was missing)
-router.post('/create', thirdPartyWalletController.createWallet);
+// ADDED: Create wallet route (was missing) - Rate limited
+router.post('/create', rateLimiters.thirdPartyWallet, thirdPartyWalletController.createWallet);
 
-// FIXED: Transfer funds to third-party wallet
-router.post('/transfer-to-third-party', thirdPartyWalletController.transferToThirdPartyWallet);
+// FIXED: Transfer funds to third-party wallet - Rate limited
+router.post('/transfer-to-third-party', rateLimiters.thirdPartyWallet, thirdPartyWalletController.transferToThirdPartyWallet);
 
-// FIXED: Transfer funds back to main wallet  
-router.post('/transfer-to-main', thirdPartyWalletController.transferToMainWallet);
+// FIXED: Transfer funds back to main wallet - Rate limited
+router.post('/transfer-to-main', rateLimiters.thirdPartyWallet, thirdPartyWalletController.transferToMainWallet);
 
-// ADDED: Debug route to check complete wallet info
-router.get('/debug', async (req, res) => {
+// ADDED: Debug route to check complete wallet info - Rate limited
+router.get('/debug', rateLimiters.thirdPartyWallet, async (req, res) => {
   try {
     const userId = req.user.user_id;
     const thirdPartyWalletService = require('../services/thirdPartyWalletService');
@@ -79,8 +80,8 @@ router.get('/debug', async (req, res) => {
   }
 });
 
-// ADDED: Test route to simulate the full transfer flow
-router.post('/test-flow', async (req, res) => {
+// ADDED: Test route to simulate the full transfer flow - Rate limited
+router.post('/test-flow', rateLimiters.thirdPartyWallet, async (req, res) => {
   try {
     const userId = req.user.user_id;
     const thirdPartyWalletService = require('../services/thirdPartyWalletService');

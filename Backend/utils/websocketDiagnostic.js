@@ -5,6 +5,18 @@ function setRedisHelper(helper) {
   redisHelper = helper;
 }
 
+const unifiedRedis = require('../config/unifiedRedisManager');
+
+async function ensureRedisHelper() {
+  try {
+    if (!redisHelper) {
+      redisHelper = await unifiedRedis.getHelper();
+    }
+  } catch (e) {
+    console.error('❌ WebSocketDiagnostic: failed to initialize Redis helper:', e.message);
+  }
+}
+
 const websocketService = require('../services/websocketService');
 
 
@@ -27,6 +39,8 @@ class WebSocketDiagnostic {
      */
     startMonitoring() {
         console.log('🔍 Starting WebSocket diagnostic monitoring...');
+        // Best-effort initialize Redis helper for diagnostics
+        ensureRedisHelper();
         
         const io = websocketService.getIo();
         if (!io) {
@@ -128,9 +142,9 @@ class WebSocketDiagnostic {
     checkCrossContamination(room, data) {
         const gameType = data?.gameType;
         const duration = data?.duration;
-        const timeline = data?.timeline;
+        const timeline = data?.timeline || 'default';
 
-        if (!gameType || !duration || !timeline) {
+        if (!gameType || !duration) {
             this.logEvent('CONTAMINATION_WARNING', 'Result data missing game info', {
                 room,
                 data: this.sanitizeData(data)
@@ -139,8 +153,9 @@ class WebSocketDiagnostic {
         }
 
         const expectedRoom = `${gameType}_${duration}_${timeline}`;
+        const expectedRoomNoTimeline = `${gameType}_${duration}`;
         
-        if (room !== expectedRoom) {
+        if (room !== expectedRoom && room !== expectedRoomNoTimeline) {
             const contamination = {
                 timestamp: new Date().toISOString(),
                 issue: 'ROOM_MISMATCH',
@@ -208,10 +223,10 @@ class WebSocketDiagnostic {
             return {
                 gameType: data.gameType,
                 duration: data.duration,
-                timeline: data.timeline,
+                timeline: data.timeline || 'default',
                 periodId: data.periodId,
-                event: data.event,
-                room: data.room,
+                event: data.event || undefined,
+                room: data.room || data.roomId,
                 roomId: data.roomId,
                 source: data.source,
                 timestamp: data.timestamp,
@@ -352,6 +367,7 @@ class WebSocketDiagnostic {
     async checkGameTickIsolation() {
         try {
             console.log('⏰ GAME TICK ISOLATION CHECK:');
+            await ensureRedisHelper();
             
             // Define game configs directly
             const GAME_CONFIGS = {
@@ -370,6 +386,10 @@ class WebSocketDiagnostic {
                 for (const duration of durations) {
                     // Get current period from Redis
                     const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+                    if (!redisHelper) {
+                        console.warn('⚠️ Diagnostic Redis helper unavailable, skipping tick isolation for now');
+                        continue;
+                    }
                     const periodData = await redisHelper.get(periodKey);
                     
                     if (!periodData) {

@@ -48,20 +48,8 @@ const setupSchedulerCommunication = async () => {
     try {
         ////console.log('🔄 [SCHEDULER_COMM] Setting up multi-instance communication...');
         
-        // Create dedicated publisher using unifiedRedis
-        schedulerPublisher = await unifiedRedis.createConnection({
-            retryDelayOnFailover: 100,
-            retryDelayOnClusterDown: 300,
-            retryDelayOnFailover: (times) => {
-                return Math.min(times * 50, 2000);
-            },
-            connectTimeout: 15000,
-            commandTimeout: 5000,
-            lazyConnect: false,
-            enableOfflineQueue: true,
-            maxRetriesPerRequest: 3,
-            family: 4
-        });
+        // Use predefined connections from unifiedRedis
+        schedulerPublisher = await unifiedRedis.getConnection('publisher');
         
         // Wait for publisher to be ready
         await new Promise((resolve, reject) => {
@@ -89,7 +77,20 @@ const setupSchedulerCommunication = async () => {
         ////console.log('✅ [SCHEDULER_COMM] Publisher created and connected');
         
         // Listen for period requests from WebSocket instances
-        schedulerSubscriber = unifiedRedis.getConnection('subscriber');
+        schedulerSubscriber = await unifiedRedis.getConnection('subscriber');
+        // Ensure subscriber is ready
+        if (schedulerSubscriber.status !== 'ready') {
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error('Subscriber not ready in time')), 30000);
+                if (schedulerSubscriber.status === 'ready') {
+                    clearTimeout(timeout);
+                    resolve();
+                    return;
+                }
+                schedulerSubscriber.once('ready', () => { clearTimeout(timeout); resolve(); });
+                schedulerSubscriber.once('error', (e) => { clearTimeout(timeout); reject(e); });
+            });
+        }
         await schedulerSubscriber.subscribe('scheduler:period_request');
         
         schedulerSubscriber.on('message', async (channel, message) => {
@@ -558,20 +559,12 @@ async function initialize() {
         
         // Initialize schedulerHelper if not already done
         if (!schedulerHelper) {
-            schedulerHelper = unifiedRedis.getHelper();
+            schedulerHelper = await unifiedRedis.getHelper();
         }
         
         if (!schedulerPublisher) {
-            schedulerPublisher = unifiedRedis.getConnection('publisher');
-            ////console.log('🔄 Waiting for Redis to be ready...');
-            await new Promise((resolve) => {
-                if (schedulerPublisher.status === 'ready') {
-                    resolve();
-                } else {
-                    schedulerPublisher.on('ready', resolve);
-                }
-            });
-            ////console.log('DEBUG: initialize() - after redis ready');
+            // Reuse unified Redis 'publisher' connection (TLS/env consistent)
+            schedulerPublisher = await unifiedRedis.getConnection('publisher');
         }
         ////console.log('✅ Redis connection verified for game scheduler');
         
@@ -1108,8 +1101,10 @@ const storePeriodInRedisForWebSocket = async (gameType, duration, periodInfo) =>
                           if (existingResult) {
                               console.log(`✅ [SCHEDULER_DEBUG] Found existing result for ${periodId}`);
                               if (['5d', 'fived'].includes(gameType.toLowerCase())) {
-                                  console.log(`⚠️ [SCHEDULER_5D_EXISTING_RESULT] Existing 5D result found, but proceeding to process bets for period ${periodId}`);
-                                  // DO NOT RETURN HERE FOR 5D. Continue to call processGameResultsWithPreCalc.
+                                  console.log(`🚨 [SCHEDULER_5D_EXISTING_RESULT] Existing 5D result found, SKIPPING main scheduler processing for period ${periodId}`);
+                                  console.log(`🚨 [SCHEDULER_5D_EXISTING_RESULT] 5D games are handled by parallel process scheduler only`);
+                                  await publishPeriodResult(gameType, duration, periodId, existingResult, 'existing');
+                                  return; // 🚨 CRITICAL: Return early for 5D games to prevent duplicate processing
                               } else {
                                   console.log(`✅ [SCHEDULER_DEBUG] Using existing result for ${periodId}, skipping new processing.`);
                                   await publishPeriodResult(gameType, duration, periodId, existingResult, 'existing');
@@ -1146,39 +1141,53 @@ const storePeriodInRedisForWebSocket = async (gameType, duration, periodInfo) =>
                     is5D: ['5d', 'fived'].includes(gameType.toLowerCase())
                 });
                 
-                // Use the correct function for 5D games with pre-calculated results
+                // 🔧 SMART FIX: Process 5D games for bet settlement but skip result creation
+                // This ensures bets are settled while preventing duplicate results
                 if (['5d', 'fived'].includes(gameType.toLowerCase())) {
-                    console.log(`🎯 [SCHEDULER_5D] Using processGameResultsWithPreCalc for 5D game`);
-                    console.log(`🎯 [SCHEDULER_5D] Calling processGameResultsWithPreCalc with:`, {
-                        gameType: gameType,
-                        duration: duration,
-                        periodId: periodId,
-                        timeline: 'default'
+                    console.log(`🔧 [SCHEDULER_5D] Processing 5D game for BET SETTLEMENT only`);
+                    console.log(`🔧 [SCHEDULER_5D] Skipping result creation (handled by parallel process scheduler)`);
+                    console.log(`🔧 [SCHEDULER_5D] Period ${periodId} will be processed for bet settlement`);
+                    
+                    // Get existing result from database (created by parallel process)
+                    const models = await gameLogicService.ensureModelsInitialized();
+                    const existingResult = await models.BetResult5D.findOne({
+                        where: { bet_number: periodId }
                     });
                     
-                    const result = await gameLogicService.processGameResultsWithPreCalc(
-                        gameType, 
-                        duration, 
-                        periodId,
-                        'default'
-                    );
-                    
-                    console.log(`🎯 [SCHEDULER_5D] processGameResultsWithPreCalc completed:`, {
-                        success: result.success,
-                        source: result.source,
-                        winnersCount: result.winners?.length || 0,
-                        hasGameResult: !!result.gameResult,
-                        gameResultKeys: result.gameResult ? Object.keys(result.gameResult) : []
-                    });
-                    
-                    // ADDITIONAL 5D VERIFICATION
-                    if (result.success) {
-                        console.log(`✅ [SCHEDULER_5D] 5D processing successful for period ${periodId}`);
+                    if (existingResult) {
+                        console.log(`✅ [SCHEDULER_5D] Found existing result for period ${periodId}:`, {
+                            A: existingResult.result_a,
+                            B: existingResult.result_b,
+                            C: existingResult.result_c,
+                            D: existingResult.result_d,
+                            E: existingResult.result_e,
+                            sum: existingResult.total_sum
+                        });
+                        
+                        // Process winning bets using existing result
+                        const result = await gameLogicService.processGameResultsWithPreCalc(
+                            gameType, 
+                            duration, 
+                            periodId,
+                            'default'
+                        );
+                        
+                        console.log(`✅ [SCHEDULER_5D] Bet settlement completed for period ${periodId}:`, {
+                            success: result.success,
+                            winnersCount: result.winners?.length || 0
+                        });
+                        
+                        return result;
                     } else {
-                        console.error(`❌ [SCHEDULER_5D] 5D processing failed for period ${periodId}:`, result.message || 'Unknown error');
+                        console.log(`⚠️ [SCHEDULER_5D] No existing result found for period ${periodId}, skipping`);
+                        return {
+                            success: true,
+                            source: 'no_result_found',
+                            message: 'No result found for bet settlement',
+                            gameResult: null,
+                            winners: []
+                        };
                     }
-                    
-                    return result;
                 } else {
                     console.log(`🎯 [SCHEDULER_OTHER] Using processGameResults for ${gameType} game`);
                     const result = await gameLogicService.processGameResults(

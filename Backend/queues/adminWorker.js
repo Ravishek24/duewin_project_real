@@ -1,34 +1,69 @@
 const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
-const getQueueConnections = require('../config/queueConfig');
+const { createQueue } = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
 const { getWithdrawalQueue } = require('./withdrawalQueue');
 
 async function startWorker() {
   await unifiedRedis.initialize();
-  const queueConnections = getQueueConnections();
+  // connections handled within createQueue via unifiedRedis
 
-  const worker = new Worker('admin', async job => {
-    // Support both {type, data} and flat job.data
-    let type, data;
-    if (job.data && typeof job.data === 'object' && 'type' in job.data && 'data' in job.data) {
-      // { type, data }
-      type = job.data.type;
-      data = job.data.data;
-    } else if (job.data && typeof job.data === 'object' && 'type' in job.data) {
-      // Flat: { type, ... }
-      type = job.data.type;
-      data = job.data;
-    } else {
-      throw new Error('Invalid admin job data structure');
-    }
+  const worker = createWorker('admin', async job => {
     try {
+      // FIXED: Enhanced job data validation and logging
+      console.log(`[BullMQ] Processing admin job:`, {
+        jobId: job.id,
+        jobName: job.name,
+        jobData: job.data,
+        timestamp: new Date().toISOString()
+      });
+      
+      // FIXED: Better job data structure handling with validation
+      let type, data;
+      
+      if (job.data && typeof job.data === 'object') {
+        if ('type' in job.data && 'data' in job.data) {
+          // { type, data } structure
+          type = job.data.type;
+          data = job.data.data;
+        } else if ('type' in job.data) {
+          // Flat structure with type
+          type = job.data.type;
+          data = job.data;
+        } else {
+          // Direct data structure
+          type = job.name || 'unknown';
+          data = job.data;
+        }
+      } else {
+        throw new Error('Invalid admin job data structure');
+      }
+      
+      // FIXED: Validate job data before processing
+      if (!type) {
+        throw new Error('Job type is missing');
+      }
+      
+      if (!data || typeof data !== 'object') {
+        throw new Error('Job data is missing or invalid');
+      }
+      
+      // FIXED: Additional validation for specific job types
+      if (type === 'notifyAdmin' || type === 'withdrawal_request') {
+        if (!data.userId && !data.data?.userId) {
+          throw new Error(`User ID is missing for ${type} job`);
+        }
+      }
+      
+      // FIXED: Log the extracted data for debugging
+      console.log(`[BullMQ] Admin job data extracted:`, { type, data });
+      
       const models = getWorkerModels();
       switch (type) {
         case 'notifyAdmin':
         case 'withdrawal_request':
           await processAdminNotification(data, models);
-          console.log(`[BullMQ] Admin notification sent for ${data.type}`);
+          console.log(`[BullMQ] Admin notification sent for ${data.type || type}`);
           break;
         case 'processAdminApproval':
           await processAdminApprovalAction(data, models);
@@ -42,15 +77,15 @@ async function startWorker() {
           throw new Error(`Unknown admin job type: ${type}`);
       }
     } catch (error) {
-      console.error(`[BullMQ] Admin job failed (${type}):`, error.message);
-      console.error(`[BullMQ] Admin job failed details:`, {
+      console.error(`[BullMQ] Admin job failed:`, {
         jobId: job.id,
-        type,
-        data,
+        jobName: job.name,
+        jobData: job.data,
         error: error.message,
         stack: error.stack,
         timestamp: new Date().toISOString()
       });
+      
       if (isRetryableError(error)) {
         throw error;
       } else {
@@ -59,18 +94,23 @@ async function startWorker() {
       }
     }
   }, {
-    connection: queueConnections.admin,
-    concurrency: 2, // Low concurrency for admin tasks
-    settings: {
-      stalledInterval: 30000,
-      maxStalledCount: 1
-    }
+    concurrency: 2 // Low concurrency for admin tasks
   });
 
   // Enhanced admin notification processing
   async function processAdminNotification(data, models) {
-    const { type, userId, amount, withdrawalType, orderId } = data;
     try {
+      // FIXED: Better userId extraction and validation
+      const userId = data.userId || data.data?.userId;
+      const { type, amount, withdrawalType, orderId } = data;
+      
+      if (!userId) {
+        console.warn(`[ADMIN NOTIFY] Warning: No userId provided for ${type} notification`);
+        // Log the notification without failing the job
+        console.log(`[ADMIN NOTIFY] ${type}: Amount ${amount}, Type ${withdrawalType}, Order ${orderId}`);
+        return { success: true, warning: 'No userId provided' };
+      }
+      
       // Only log to console, do not create DB notification
       console.log(`[ADMIN NOTIFY] ${type}: User ${userId}, Amount ${amount}, Type ${withdrawalType}, Order ${orderId}`);
       // Here you could also send email/SMS notifications to admins if needed
@@ -277,27 +317,103 @@ async function startWorker() {
   });
 
   worker.on('failed', (job, err) => {
-    console.error(`[BullMQ] Admin job failed:`, job.id, err.message);
-    console.error(`[BullMQ] Admin job failed details:`, {
+    console.error(`[BullMQ] Admin job failed:`, {
       jobId: job.id,
-      data: job.data,
+      jobName: job.name,
+      jobData: job.data,
       error: err.message,
+      errorName: err.name,
       stack: err.stack,
       timestamp: new Date().toISOString()
     });
+    
+    // FIXED: Better error categorization
     if (err.name === 'SequelizeDeadlockError') {
       console.error('🚨 DEADLOCK DETECTED in admin worker:', {
         job: job.data,
         timestamp: new Date().toISOString(),
         stack: err.stack
       });
+    } else if (err.message.includes('User ID is missing')) {
+      console.error('⚠️ USER ID MISSING in admin job:', {
+        jobId: job.id,
+        jobData: job.data,
+        timestamp: new Date().toISOString()
+      });
+    } else if (err.message.includes('User undefined not found')) {
+      console.error('🚨 CRITICAL: User undefined error in admin job:', {
+        jobId: job.id,
+        jobData: job.data,
+        timestamp: new Date().toISOString()
+      });
     }
   });
 
-  const adminQueue = new Queue('admin', { connection: queueConnections.admin });
-  setInterval(() => {
-    adminQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
-    adminQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});
+  const adminQueue = new Queue('admin', { connection: await unifiedRedis.getConnection('main') });
+  
+  // FIXED: Enhanced queue cleanup and maintenance
+  setInterval(async () => {
+    try {
+      // Clean completed jobs
+      await adminQueue.clean(24 * 60 * 60 * 1000, 100, 'completed');
+      
+      // Clean failed jobs
+      await adminQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed');
+      
+      // FIXED: Clean old invalid jobs that might be causing issues
+      const oldJobs = await adminQueue.getJobs(['waiting', 'active', 'delayed'], 0, 1000);
+      let cleanedCount = 0;
+      
+      for (const job of oldJobs) {
+        try {
+          // Check if job data is valid
+          if (!job.data || typeof job.data !== 'object') {
+            console.log(`[BullMQ] Cleaning invalid job ${job.id} - no data`);
+            await job.remove();
+            cleanedCount++;
+            continue;
+          }
+          
+          // Check if job is too old (more than 1 hour)
+          const jobAge = Date.now() - job.timestamp;
+          if (jobAge > 60 * 60 * 1000) { // 1 hour
+            console.log(`[BullMQ] Cleaning old job ${job.id} - age: ${Math.round(jobAge / 1000 / 60)} minutes`);
+            await job.remove();
+            cleanedCount++;
+            continue;
+          }
+          
+          // FIXED: Check for specific invalid patterns that cause "User undefined not found"
+          if (job.data.type === 'notifyAdmin' || job.data.type === 'withdrawal_request') {
+            const hasValidUserId = job.data.userId || job.data.data?.userId;
+            if (!hasValidUserId) {
+              console.log(`[BullMQ] Cleaning invalid admin job ${job.id} - missing userId`);
+              await job.remove();
+              cleanedCount++;
+              continue;
+            }
+          }
+          
+          // FIXED: Check for jobs with undefined or null userId
+          if (job.data.userId === undefined || job.data.userId === null) {
+            console.log(`[BullMQ] Cleaning job ${job.id} - userId is undefined/null`);
+            await job.remove();
+            cleanedCount++;
+            continue;
+          }
+          
+        } catch (cleanupError) {
+          console.error(`[BullMQ] Error cleaning job ${job.id}:`, cleanupError.message);
+        }
+      }
+      
+      if (cleanedCount > 0) {
+        console.log(`[BullMQ] Cleaned ${cleanedCount} invalid/old admin jobs`);
+      }
+      
+    } catch (error) {
+      console.error(`[BullMQ] Admin queue cleanup error:`, error.message);
+    }
   }, 6 * 60 * 60 * 1000); // Every 6 hours
 
   return worker;

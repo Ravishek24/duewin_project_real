@@ -7,6 +7,7 @@ const User = require('../models/User');
 const WalletRecharge = require('../models/WalletRecharge');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
 const BankAccount = require('../models/BankAccount');
+const Transaction = require('../models/Transaction');
 const { Op } = require('sequelize');
 
 /**
@@ -192,6 +193,26 @@ const processMxPayCollectionCallback = async (callbackData) => {
         transaction: t
       });
       
+      // ✅ Create transaction record for successful deposit
+      await Transaction.create({
+          user_id: rechargeRecord.user_id,
+          type: 'deposit',
+          amount: addAmount,
+          status: 'completed',
+          payment_gateway_id: rechargeRecord.payment_gateway,
+          order_id: rechargeRecord.order_id,
+          transaction_id: callbackData.transactionNo,
+          description: 'MXPAY deposit successful',
+          reference_id: `mxpay_deposit_${rechargeRecord.order_id}`,
+          metadata: {
+            gateway: 'MXPAY',
+            original_status: callbackData.returncode,
+            processed_at: new Date().toISOString()
+          },
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       
       return {
@@ -199,7 +220,28 @@ const processMxPayCollectionCallback = async (callbackData) => {
         message: "Payment processed successfully"
       };
     } else {
-      // Payment failed
+      // Payment failed - create failed transaction record
+      await Transaction.create({
+          user_id: rechargeRecord.user_id,
+          type: 'deposit_failed',
+          amount: parseFloat(rechargeRecord.amount),
+          status: 'failed',
+          payment_gateway_id: rechargeRecord.payment_gateway,
+          order_id: rechargeRecord.order_id,
+          transaction_id: callbackData.transactionNo || null,
+          description: 'MXPAY deposit failed',
+          reference_id: `mxpay_deposit_failed_${rechargeRecord.order_id}`,
+          metadata: {
+            gateway: 'MXPAY',
+            original_status: callbackData.returncode,
+            failure_reason: `Payment failed with return code: ${callbackData.returncode}`,
+            processed_at: new Date().toISOString()
+          },
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
+      // Update recharge record status
       await WalletRecharge.update({
         payment_status: false,
         remark: `Payment failed with status: ${callbackData.returncode}`
@@ -211,8 +253,8 @@ const processMxPayCollectionCallback = async (callbackData) => {
       await t.commit();
       
       return {
-        success: true,
-        message: "Payment failure recorded"
+        success: false,
+        message: "Payment failed"
       };
     }
   } catch (error) {
@@ -479,6 +521,20 @@ const processMxPayTransferCallback = async (callbackData) => {
         where: { order_id: callbackData.orderNo },
         transaction: t
       });
+      
+      // ✅ Create transaction record for withdrawal
+      await Transaction.create({
+          user_id: withdrawalRecord.user_id,
+          type: 'withdrawal',
+          amount: parseFloat(withdrawalRecord.withdrawal_amount),
+          status: 'completed',
+          payment_gateway_id: withdrawalRecord.payment_gateway,
+          order_id: withdrawalRecord.order_id,
+          transaction_id: withdrawalRecord.transaction_id,
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       return {
         success: true,
@@ -514,6 +570,20 @@ const processMxPayTransferCallback = async (callbackData) => {
         where: { order_id: callbackData.orderNo },
         transaction: t
       });
+      
+      // ✅ Create transaction record for failed withdrawal
+      await Transaction.create({
+          user_id: withdrawalRecord.user_id,
+          type: 'withdrawal',
+          amount: parseFloat(withdrawalRecord.withdrawal_amount),
+          status: 'failed',
+          payment_gateway_id: withdrawalRecord.payment_gateway,
+          order_id: withdrawalRecord.order_id,
+          transaction_id: withdrawalRecord.transaction_id,
+          created_at: new Date(),
+          updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       return {
         success: true,

@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
-const { auth } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const vaultService = require('../services/vaultService');
 const { validateRequest } = require('../middleware/validation');
 const Joi = require('joi');
+const rateLimiters = require('../middleware/rateLimiter');
 
 // Validation schemas
 const depositSchema = Joi.object({
@@ -25,7 +26,8 @@ const historySchema = Joi.object({
  * @access Private
  */
 router.post('/deposit', 
-    auth,
+    
+    rateLimiters.vaultOperations,
     validateRequest(depositSchema),
     async (req, res) => {
         try {
@@ -55,7 +57,8 @@ router.post('/deposit',
  * @access Private
  */
 router.post('/withdraw',
-    auth,
+    
+    rateLimiters.vaultOperations,
     validateRequest(withdrawSchema),
     async (req, res) => {
         try {
@@ -85,7 +88,8 @@ router.post('/withdraw',
  * @access Private
  */
 router.get('/status',
-    auth,
+    
+    rateLimiters.vaultOperations,
     async (req, res) => {
         try {
             const userId = req.user.user_id;
@@ -112,7 +116,8 @@ router.get('/status',
  * @access Private
  */
 router.get('/history',
-    auth,
+    
+    rateLimiters.vaultOperations,
     validateRequest(historySchema, 'query'),
     async (req, res) => {
         try {

@@ -631,6 +631,20 @@ const addBankAccount = async (userId, accountData) => {
       is_primary = false 
     } = accountData;
 
+    // Check if bank account number already exists (globally unique)
+    const existingAccountNumber = await BankAccount.findOne({
+      where: { account_number: account_number },
+      transaction: t
+    });
+
+    if (existingAccountNumber) {
+      await t.rollback();
+      return {
+        success: false,
+        message: 'Bank account number already exists. Please use a different account number.'
+      };
+    }
+
     // Check if this is the first account (should be primary)
     const existingAccounts = await BankAccount.count({
       where: { user_id: userId },

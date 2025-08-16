@@ -1,102 +1,129 @@
-let redisHelper = null;
-function setRedisHelper(helper) { redisHelper = helper; }
-
-
-
-
-// Redis client setup
-const redisClient = 
-
-redisClient.on('error', (err) => console.log('Redis Client Error', err));
-redisClient.on('connect', () => console.log('Redis client connected'));
-redisClient.on('ready', () => console.log('Redis client ready'));
-
+#!/usr/bin/env node
 /**
- * Check scheduler status and monitor for specific period
+ * Check scheduler status and Redis data for period 20250808000000044
  */
+
+const { getRedisHelper } = require('./config/unifiedRedisManager');
+
 async function checkSchedulerStatus() {
+    console.log('🔍 [SCHEDULER_CHECK] ===== CHECKING SCHEDULER STATUS =====');
+    
+    const periodId = '20250808000000044';
+    const duration = 30;
+    const durationKey = '30s';
+    
     try {
-        console.log('🔍 [SCHEDULER_CHECK] ==========================================');
-        console.log('🔍 [SCHEDULER_CHECK] Checking scheduler status');
-        console.log('🔍 [SCHEDULER_CHECK] ==========================================');
-
-        // Check if scheduler is running by looking for scheduler keys
-        const schedulerKeys = await redisClient.keys('scheduler_*');
-        console.log('📊 [SCHEDULER_CHECK] Scheduler keys found:', schedulerKeys.length);
+        console.log(`🔍 [SCHEDULER_CHECK] Checking Redis data for period: ${periodId}`);
         
-        if (schedulerKeys.length > 0) {
-            console.log('✅ [SCHEDULER_CHECK] Scheduler appears to be running');
-            console.log('📊 [SCHEDULER_CHECK] Sample keys:', schedulerKeys.slice(0, 5));
+        // Check all Redis keys for this period
+        const keysToCheck = [
+            `wingo:${durationKey}:${periodId}:result`,
+            `wingo:${durationKey}:${periodId}:result:override`,
+            `wingo:${periodId}:admin:override`,
+            `wingo:result:${periodId}:forced`,
+            `game:wingo:${durationKey}:${periodId}:admin_result`,
+            `wingo:${durationKey}:${periodId}:admin_meta`,
+            `game_scheduler:wingo:${duration}:current`,
+            `game_scheduler:wingo:${duration}:last_processed`
+        ];
+        
+        console.log('\n🔍 [SCHEDULER_CHECK] === REDIS KEY STATUS ===');
+        for (const key of keysToCheck) {
+            try {
+                const value = await getRedisHelper().get(key);
+                if (value) {
+                    console.log(`✅ ${key}: EXISTS`);
+                    try {
+                        const parsed = JSON.parse(value);
+                        console.log(`   Data: ${JSON.stringify(parsed, null, 2)}`);
+                    } catch {
+                        console.log(`   Data: ${value}`);
+                    }
+                } else {
+                    console.log(`❌ ${key}: NOT FOUND`);
+                }
+            } catch (error) {
+                console.log(`⚠️  ${key}: ERROR - ${error.message}`);
+            }
+        }
+        
+        // Check database for this period
+        console.log('\n🔍 [SCHEDULER_CHECK] === DATABASE STATUS ===');
+        const { GamePeriod, BetResultWingo } = require('./models');
+        
+        try {
+            const dbPeriod = await GamePeriod.findOne({
+                where: { period_id: periodId, game_type: 'wingo' }
+            });
+            
+            if (dbPeriod) {
+                console.log(`✅ Period found in database:`);
+                console.log(`   Period ID: ${dbPeriod.period_id}`);
+                console.log(`   Is Completed: ${dbPeriod.is_completed}`);
+                console.log(`   Start Time: ${dbPeriod.start_time}`);
+                console.log(`   End Time: ${dbPeriod.end_time}`);
+                console.log(`   Created At: ${dbPeriod.createdAt}`);
+                console.log(`   Updated At: ${dbPeriod.updatedAt}`);
+            } else {
+                console.log(`❌ Period NOT found in database`);
+            }
+        } catch (dbError) {
+            console.log(`⚠️  Database error: ${dbError.message}`);
+        }
+        
+        try {
+            const betResult = await BetResultWingo.findOne({
+                where: { period_id: periodId }
+            });
+            
+            if (betResult) {
+                console.log(`✅ Bet result found in database:`);
+                console.log(`   Period ID: ${betResult.period_id}`);
+                console.log(`   Number: ${betResult.number}`);
+                console.log(`   Color: ${betResult.color}`);
+                console.log(`   Size: ${betResult.size}`);
+                console.log(`   Is Override: ${betResult.is_override}`);
+                console.log(`   Override By: ${betResult.override_by}`);
+            } else {
+                console.log(`❌ Bet result NOT found in database`);
+            }
+        } catch (dbError) {
+            console.log(`⚠️  Database error: ${dbError.message}`);
+        }
+        
+        // Check scheduler timing
+        console.log('\n🔍 [SCHEDULER_CHECK] === SCHEDULER TIMING ===');
+        const moment = require('moment-timezone');
+        
+        const dateStr = periodId.substring(0, 8);
+        const sequenceStr = periodId.substring(8);
+        const sequenceNumber = parseInt(sequenceStr, 10);
+        
+        const periodStart = moment.tz(`${dateStr}`, 'YYYYMMDD', 'Asia/Kolkata')
+            .add(sequenceNumber * duration, 'seconds');
+        const periodEnd = moment(periodStart).add(duration, 'seconds');
+        const now = moment().tz('Asia/Kolkata');
+        
+        console.log(`Period Start: ${periodStart.format('YYYY-MM-DD HH:mm:ss')} IST`);
+        console.log(`Period End:   ${periodEnd.format('YYYY-MM-DD HH:mm:ss')} IST`);
+        console.log(`Current Time: ${now.format('YYYY-MM-DD HH:mm:ss')} IST`);
+        
+        const secondsSinceEnd = now.diff(periodEnd, 'seconds');
+        console.log(`Time since period ended: ${secondsSinceEnd} seconds`);
+        
+        if (secondsSinceEnd > 0) {
+            console.log(`✅ Period has ended - scheduler should have processed this`);
         } else {
-            console.log('❌ [SCHEDULER_CHECK] No scheduler keys found - scheduler may not be running');
+            console.log(`⏳ Period is still active or future`);
         }
-
-        // Check for specific period processing
-        const periodId = '20250706000000434'; // Your period
-        const gameType = 'wingo';
-        const duration = 30;
         
-        console.log(`\n🎯 [SCHEDULER_CHECK] Checking for period: ${periodId}`);
+        console.log('\n🔍 [SCHEDULER_CHECK] ===== CHECK COMPLETE =====');
         
-        // Check for processing locks
-        const processingLocks = await redisClient.keys(`*${periodId}*`);
-        console.log('🔒 [SCHEDULER_CHECK] Processing locks for this period:', processingLocks);
-        
-        // Check for existing results
-        const resultKeys = await redisClient.keys(`*result*${periodId}*`);
-        console.log('🏆 [SCHEDULER_CHECK] Result keys for this period:', resultKeys);
-        
-        // Check for exposure data (try both patterns)
-        const exposureKey1 = `exposure:${gameType}:${duration}:${periodId}`;
-        const exposureKey2 = `duewin:exposure:${gameType}:${duration}:${periodId}`;
-        let exposureData = await redisClient.hgetall(exposureKey1);
-        if (Object.keys(exposureData).length === 0) {
-            exposureData = await redisClient.hgetall(exposureKey2);
-        }
-        console.log('📊 [SCHEDULER_CHECK] Exposure data for this period:', exposureData);
-        console.log('📊 [SCHEDULER_CHECK] Exposure keys tried:', [exposureKey1, exposureKey2]);
-        
-        // Check for bet data (try both patterns)
-        const betKey1 = `bets:${gameType}:${duration}:default:${periodId}`;
-        const betKey2 = `duewin:bets:${gameType}:${duration}:default:${periodId}`;
-        let betData = await redisClient.hgetall(betKey1);
-        if (Object.keys(betData).length === 0) {
-            betData = await redisClient.hgetall(betKey2);
-        }
-        console.log('🎲 [SCHEDULER_CHECK] Bet data for this period:', betData);
-        console.log('🎲 [SCHEDULER_CHECK] Bet keys tried:', [betKey1, betKey2]);
-        
-        // Also check for the latest period you bet on
-        const latestPeriodId = '20250706000000443'; // Your latest bet
-        console.log(`\n🎯 [SCHEDULER_CHECK] Checking for latest period: ${latestPeriodId}`);
-        
-        const latestExposureKey1 = `exposure:${gameType}:${duration}:${latestPeriodId}`;
-        const latestExposureKey2 = `duewin:exposure:${gameType}:${duration}:${latestPeriodId}`;
-        let latestExposureData = await redisClient.hgetall(latestExposureKey1);
-        if (Object.keys(latestExposureData).length === 0) {
-            latestExposureData = await redisClient.hgetall(latestExposureKey2);
-        }
-        console.log('📊 [SCHEDULER_CHECK] Latest period exposure data:', latestExposureData);
-        
-        const latestBetKey1 = `bets:${gameType}:${duration}:default:${latestPeriodId}`;
-        const latestBetKey2 = `duewin:bets:${gameType}:${duration}:default:${latestPeriodId}`;
-        let latestBetData = await redisClient.hgetall(latestBetKey1);
-        if (Object.keys(latestBetData).length === 0) {
-            latestBetData = await redisClient.hgetall(latestBetKey2);
-        }
-        console.log('🎲 [SCHEDULER_CHECK] Latest period bet data:', latestBetData);
-        
-        console.log('\n🔍 [SCHEDULER_CHECK] ==========================================');
-        console.log('🔍 [SCHEDULER_CHECK] Scheduler status check completed');
-        console.log('🔍 [SCHEDULER_CHECK] ==========================================');
-
     } catch (error) {
-        console.error('❌ [SCHEDULER_CHECK] Error checking scheduler status:', error);
+        console.error('❌ [SCHEDULER_CHECK] Error:', error);
     } finally {
-        await redisClient.quit();
+        process.exit(0);
     }
 }
 
-// Run the check
-checkSchedulerStatus(); 
-module.exports = { setRedisHelper };
+checkSchedulerStatus();

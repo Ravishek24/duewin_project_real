@@ -1,13 +1,13 @@
 const { Queue } = require('bullmq');
-const getQueueConnections = require('../config/queueConfig');
+const unifiedRedis = require('../config/unifiedRedisManager');
 
 // Lazy queue creation - only create when needed
 let paymentQueue = null;
 
 function getPaymentQueue() {
   if (!paymentQueue) {
-    const queueConnections = getQueueConnections();
-    paymentQueue = new Queue('payments', { connection: queueConnections.payments });
+    const connection = unifiedRedis.getConnectionSync('main');
+    paymentQueue = new Queue('payments', { connection });
   }
   return paymentQueue;
 }

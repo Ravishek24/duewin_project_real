@@ -109,6 +109,10 @@ app.use(cors(corsOptions));
 // 🔒 SECURITY: Apply comprehensive security middleware
 securityMiddleware(app);
 
+// 🚀 PERFORMANCE TRACKING: Add performance monitoring
+const { performanceTracker } = require('./middleware/performanceTracker');
+app.use(performanceTracker);
+
 // 🚨 ATTACK PROTECTION: Apply advanced attack detection
 const { attackProtection } = require('./middleware/attackProtection');
 app.use(attackProtection);
@@ -181,16 +185,50 @@ let sequelize = null;
 let models = null;
 
 
-// Initialize database and models
+// 🚀 ULTRA-FAST: Initialize database and models with performance tracking
 const initializeDatabaseAndModels = async () => {
+    const startTime = process.hrtime.bigint();
+    
     try {
         console.log('🔄 Initializing database and models...');
+        
+        // Initialize database first
+        const dbStart = process.hrtime.bigint();
         const sequelize = await getSequelizeInstance();
+        const dbTime = Number(process.hrtime.bigint() - dbStart) / 1000000;
+        console.log(`✅ Database initialized in ${dbTime.toFixed(2)}ms`);
+        
+        // Initialize models
+        const modelsStart = process.hrtime.bigint();
         const models = await initializeModels();
-        console.log('✅ Database and models initialized successfully');
+        const modelsTime = Number(process.hrtime.bigint() - modelsStart) / 1000000;
+        console.log(`✅ Models initialized in ${modelsTime.toFixed(2)}ms`);
+        
+        // Pre-warm session service
+        const sessionStart = process.hrtime.bigint();
+        const createSessionService = require('./services/sessionService');
+        const sessionService = createSessionService(models);
+        const sessionTime = Number(process.hrtime.bigint() - sessionStart) / 1000000;
+        console.log(`✅ Session service pre-warmed in ${sessionTime.toFixed(2)}ms`);
+        
+        // Pre-warm attendance queue
+        try {
+            const queueStart = process.hrtime.bigint();
+            const { getAttendanceQueue } = require('./queues/attendanceQueue');
+            const attendanceQueue = getAttendanceQueue();
+            const queueTime = Number(process.hrtime.bigint() - queueStart) / 1000000;
+            console.log(`✅ Attendance queue pre-warmed in ${queueTime.toFixed(2)}ms`);
+        } catch (error) {
+            console.warn('⚠️ Attendance queue pre-warming failed:', error.message);
+        }
+        
+        const totalTime = Number(process.hrtime.bigint() - startTime) / 1000000;
+        console.log(`🎉 Database and models initialization completed in ${totalTime.toFixed(2)}ms`);
+        
         return { sequelize, models };
     } catch (error) {
-        console.error('❌ Failed to initialize database and models:', error);
+        const errorTime = Number(process.hrtime.bigint() - startTime) / 1000000;
+        console.error(`❌ Failed to initialize database and models after ${errorTime.toFixed(2)}ms:`, error);
         throw error;
     }
 };
@@ -207,21 +245,10 @@ const setupAppRoutes = () => {
         // Mount API routes
         app.use('/api', apiRoutes);
         
-        // Mount admin routes
-        try {
-            const adminRoutes = require('./routes/adminRoutes');
-            const adminExposureRoutes = require('./routes/adminExposureRoutes');
-            
-            app.use('/admin', adminRoutes);
-            app.use('/admin/exposure', adminExposureRoutes);
-            
-            // 🔥 ADDED: Mount admin exposure routes under /api prefix for frontend compatibility
-            app.use('/api/admin/exposure', adminExposureRoutes);
-            
-            console.log('✅ Admin routes configured successfully');
-        } catch (adminError) {
-            console.warn('⚠️ Admin routes setup failed:', adminError.message);
-        }
+        // 🚨 SECURITY FIX: Remove insecure admin route mounting
+        // Admin routes are now properly handled through /api with authentication
+        // in routes/index.js with authMiddleware.auth and authMiddleware.isAdmin
+        console.log('✅ Admin routes handled securely through /api endpoint');
         
         console.log('✅ Routes configured successfully');
         console.log('DEBUG: Exiting setupAppRoutes()');
@@ -250,7 +277,7 @@ const initializeWebSocketWithRedis = async () => {
         
         console.log('✅ Redis connected, initializing WebSocket...');
         // Only pass the server argument, do not start any tick system
-        const io = initializeWebSocket(server);
+        const io = await initializeWebSocket(server);
         
         // Initialize admin exposure monitoring
         try {
@@ -346,8 +373,16 @@ const startServer = async () => {
         // After initializing unifiedRedis, set redisHelper for middlewares
         const { setRedisHelper: setRateLimiterRedisHelper } = require('./middleware/rateLimiter');
         const { setRedisHelper: setAttackProtectionRedisHelper } = require('./middleware/attackProtection');
-        setRateLimiterRedisHelper(unifiedRedis.getHelper());
-        setAttackProtectionRedisHelper(unifiedRedis.getHelper());
+        
+        // Get Redis helper and set it for middlewares
+        const redisHelper = await unifiedRedis.getHelper();
+        if (redisHelper) {
+            setRateLimiterRedisHelper(redisHelper);
+            setAttackProtectionRedisHelper(redisHelper);
+            console.log('✅ Redis helper set for rate limiter and attack protection');
+        } else {
+            console.warn('⚠️ Redis helper not available for middlewares');
+        }
         
         // OPTIMIZATION: Initialize cache service for performance optimization
         try {
@@ -372,11 +407,19 @@ const startServer = async () => {
         console.log('🚀 Starting server initialization...');
 
         // Initialize database and models first
-        await initializeDatabaseAndModels();
+        const { sequelize, models } = await initializeDatabaseAndModels();
+
+        // Create sessionService and authMiddleware with initialized models
+        const createSessionService = require('./services/sessionService');
+        const sessionService = createSessionService(models);
+        const createAuthMiddleware = require('./middlewares/authMiddleware');
+        const authMiddleware = createAuthMiddleware(sessionService, models.User);
 
         // Step 2: Setup routes
         console.log('DEBUG: About to call setupAppRoutes()');
-        setupAppRoutes();
+        // Pass authMiddleware to routes
+        const apiRoutes = require('./routes/index')(authMiddleware);
+        app.use('/api', apiRoutes);
         console.log('DEBUG: Finished calling setupAppRoutes()');
 
         // Step 3: Initialize WebSocket with Redis

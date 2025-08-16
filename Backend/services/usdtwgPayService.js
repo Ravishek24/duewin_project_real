@@ -5,6 +5,7 @@ const User = require('../models/User');
 const WalletRecharge = require('../models/WalletRecharge');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
 const AttendanceRecord = require('../models/AttendanceRecord');
+const Transaction = require('../models/Transaction');
 const moment = require('moment-timezone');
 
 // Helper to get current timestamp (10 digits, seconds)
@@ -228,8 +229,9 @@ async function processUsdtwgPayDepositCallback(req) {
       updated_at: new Date(), 
       transaction_id: data.orderno 
     });
+    
+    // Update user wallet balance
     const user = await User.findByPk(recharge.user_id);
-    console.log('User found:', user ? user.toJSON() : null);
     if (user) {
       const newBalance = parseFloat(user.wallet_balance) + inrAmount;
       const newActualDeposit = parseFloat(user.actual_deposit_amount || 0) + inrAmount;
@@ -237,6 +239,27 @@ async function processUsdtwgPayDepositCallback(req) {
         wallet_balance: newBalance,
         actual_deposit_amount: newActualDeposit
       });
+      
+      // ✅ Create transaction record for successful deposit
+      await Transaction.create({
+          user_id: recharge.user_id,
+          type: 'deposit',
+          amount: inrAmount,
+          status: 'completed',
+          payment_gateway_id: recharge.payment_gateway_id,
+          order_id: recharge.order_id,
+          transaction_id: data.orderno,
+          description: 'USDTWGPAY deposit successful',
+          reference_id: `usdtwgpay_deposit_${recharge.order_id}`,
+          metadata: {
+            gateway: 'USDTWGPAY',
+            original_status: status,
+            processed_at: new Date().toISOString()
+          },
+          created_at: new Date(),
+          updated_at: new Date()
+      });
+      
       // First recharge bonus logic
       const referralService = require('./referralService');
       if (!user.has_received_first_bonus) {
@@ -249,8 +272,10 @@ async function processUsdtwgPayDepositCallback(req) {
           });
         }
       }
+      
       // Referral update
       await referralService.updateReferralOnRecharge(user.user_id, inrAmount);
+      
       // --- Attendance update logic ---
       const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
       const [attendance, created] = await AttendanceRecord.findOrCreate({
@@ -281,14 +306,15 @@ async function processUsdtwgPayDepositCallback(req) {
     } else {
       console.log('❌ User not found for user_id:', recharge.user_id);
     }
-    console.log('--- USDTWG Callback End: Success ---');
-    return { success: true };
   } else {
     await recharge.update({ status: 'failed' });
     console.log('❌ Payment failed or pending. Status:', status);
     console.log('--- USDTWG Callback End: Fail ---');
     return { success: false, message: 'Payment failed or pending' };
   }
+  
+  console.log('--- USDTWG Callback End: Success ---');
+  return { success: true };
 }
 
 /**
@@ -375,9 +401,37 @@ async function processUsdtwgPayWithdrawalCallback(req) {
   if (!withdrawal) return { success: false, message: 'Order not found' };
   if (status === 'success') {
     await withdrawal.update({ status: 'completed', time_of_success: new Date(), transaction_id: data.orderno });
+    
+    // ✅ Create transaction record for withdrawal
+    await Transaction.create({
+        user_id: withdrawal.user_id,
+        type: 'withdrawal',
+        amount: parseFloat(withdrawal.amount),
+        status: 'completed',
+        payment_gateway_id: withdrawal.payment_gateway_id,
+        order_id: withdrawal.order_id,
+        transaction_id: data.orderno,
+        created_at: new Date(),
+        updated_at: new Date()
+    });
+    
     return { success: true };
   } else {
     await withdrawal.update({ status: 'failed' });
+    
+    // ✅ Create transaction record for failed withdrawal
+    await Transaction.create({
+        user_id: withdrawal.user_id,
+        type: 'withdrawal',
+        amount: parseFloat(withdrawal.amount),
+        status: 'failed',
+        payment_gateway_id: withdrawal.payment_gateway_id,
+        order_id: withdrawal.order_id,
+        transaction_id: data.orderno,
+        created_at: new Date(),
+        updated_at: new Date()
+    });
+    
     return { success: false, message: 'Withdrawal failed or pending' };
   }
 }

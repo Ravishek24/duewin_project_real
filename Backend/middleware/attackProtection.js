@@ -24,7 +24,7 @@ const attackProtection = (req, res, next) => {
         
         const ipAddress = clientIP ? clientIP.split(',')[0].trim().split(':').pop() : '';
 
-        // Check if IP is blacklisted
+        // Check if IP is blacklisted (fast lookup)
         if (securityConfig.firewall.blacklist.includes(ipAddress)) {
             console.log(`🚫 BLOCKED: Blacklisted IP ${ipAddress} attempted access`);
             return res.status(403).json({
@@ -33,8 +33,28 @@ const attackProtection = (req, res, next) => {
             });
         }
 
-        // Check for suspicious patterns
+        // 🚀 PERFORMANCE OPTIMIZATION: Skip ALL attack protection for auth endpoints
         const requestPath = (req.path || '').toLowerCase();
+        const isAuthEndpoint = requestPath.includes('/auth/') || requestPath.includes('/login');
+        
+        if (isAuthEndpoint && req.method === 'POST') {
+            // Ultra-lightweight check for auth endpoints - no Redis operations
+            const userAgent = req.headers['user-agent'] || '';
+            
+            // Only check for obvious automated requests
+            if (userAgent.length === 0 || /bot|crawler|spider|automated|curl|wget/i.test(userAgent)) {
+                console.log(`🚫 BLOCKED: Automated request on auth endpoint: ${userAgent}`);
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+            
+            // Skip ALL Redis operations and pattern matching for auth endpoints
+            return next();
+        }
+
+        // Full pattern matching for non-auth endpoints
         const requestBody = JSON.stringify(req.body || {}).toLowerCase();
         const requestQuery = JSON.stringify(req.query || {}).toLowerCase();
         const userAgent = req.headers['user-agent'] || '';

@@ -3,6 +3,7 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const { processPpayProDepositCallback, processPpayProWithdrawalCallback } = require('../services/ppayProService');
+const rateLimiters = require('../middleware/rateLimiter');
 
 // Utility: Write callback logs to a file
 function logPpayProCallback(data) {
@@ -14,8 +15,8 @@ function logPpayProCallback(data) {
   console.log(logEntry); // Also log to console
 }
 
-// PPayPro deposit callback route
-router.post('/payin-callback', (req, res, next) => {
+// PPayPro deposit callback route - Rate limited
+router.post('/payin-callback', rateLimiters.ppaypro, (req, res, next) => {
   // Log the callback
   logPpayProCallback({ headers: req.headers, body: req.body });
   next();
@@ -29,8 +30,8 @@ router.post('/payin-callback', (req, res, next) => {
   }
 });
 
-// PPayPro withdrawal callback route
-router.post('/payout-callback', (req, res, next) => {
+// PPayPro withdrawal callback route - Rate limited
+router.post('/payout-callback', rateLimiters.ppaypro, (req, res, next) => {
   // Log the callback
   logPpayProCallback({ headers: req.headers, body: req.body });
   next();

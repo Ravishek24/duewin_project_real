@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { autoRecordReferral } = require('../../services/referralService'); // Fixed path
 const referralCodeGenerator = require('../../utils/referralCodeGenerator');
 const { getRegistrationQueue } = require('../../queues/registrationQueue');
+const { getClientIp, sanitizeIp } = require('../../utils/ipAddressUtils');
 
 // Fallback function to generate referral code if utility is not available
 const generateReferringCode = () => {
@@ -182,6 +183,10 @@ const registerController = async (req, res) => {
             // Generate username if not provided
             const auto_username = user_name || `user_${Date.now().toString().slice(-8)}`;
 
+            // Get client IP address using centralized utility
+            const clientIp = getClientIp(req);
+            const sanitizedIp = sanitizeIp(clientIp);
+            
             // Create new user
             const user = await User.create({
                 phone_no,
@@ -192,18 +197,40 @@ const registerController = async (req, res) => {
                 referral_code: referred_by,
                 is_phone_verified: true,
                 wallet_balance: 0,
+                current_ip: sanitizedIp,
+                registration_ip: sanitizedIp,
                 last_login_at: new Date(),
-                last_login_ip: req.ip || req.connection.remoteAddress
+                last_login_ip: sanitizedIp
             }, { transaction });
-
-            // Commit transaction immediately after user creation
-            await transaction.commit();
 
             // Add background jobs with proper configuration
             
             // Job 1: Apply bonus (higher priority)
             const bonusJobId = `bonus-${user.user_id}`;
-            await getRegistrationQueue().add('applyBonus', {
+            console.log(`🔍 [REGISTRATION DEBUG] Creating bonus job:`, {
+              jobId: bonusJobId,
+              userId: user.user_id,
+              jobData: {
+                type: 'applyBonus',
+                data: { userId: user.user_id }
+              }
+            });
+            
+            // Debug queue creation
+            console.log(`🔍 [REGISTRATION DEBUG] Getting registration queue...`);
+            const registrationQueue = await getRegistrationQueue();
+            console.log(`🔍 [REGISTRATION DEBUG] Queue object:`, {
+              type: typeof registrationQueue,
+              hasAdd: typeof registrationQueue?.add === 'function',
+              queueName: registrationQueue?.name,
+              constructor: registrationQueue?.constructor?.name
+            });
+            
+            if (!registrationQueue || typeof registrationQueue.add !== 'function') {
+              throw new Error(`Invalid queue object: ${typeof registrationQueue}, add method: ${typeof registrationQueue?.add}`);
+            }
+            
+            await registrationQueue.add('applyBonus', {
                 type: 'applyBonus',
                 data: { userId: user.user_id }
             }, {
@@ -215,9 +242,23 @@ const registerController = async (req, res) => {
                 backoff: { type: 'exponential', delay: 2000 }
             });
             
+            console.log(`✅ [REGISTRATION DEBUG] Bonus job added successfully:`, {
+              jobId: bonusJobId,
+              userId: user.user_id
+            });
+            
             // Job 2: Record referral (waits for bonus job)
             if (referred_by) {
-                await getRegistrationQueue().add('recordReferral', {
+                console.log(`🔍 [REGISTRATION DEBUG] Creating referral job:`, {
+                  userId: user.user_id,
+                  referredBy: referred_by,
+                  jobData: {
+                    type: 'recordReferral',
+                    data: { userId: user.user_id, referredBy: referred_by }
+                  }
+                });
+                
+                await registrationQueue.add('recordReferral', {
                     type: 'recordReferral',
                     data: { userId: user.user_id, referredBy: referred_by }
                 }, {
@@ -229,6 +270,11 @@ const registerController = async (req, res) => {
                     attempts: 3,
                     backoff: { type: 'exponential', delay: 2000 }
                 });
+                
+                console.log(`✅ [REGISTRATION DEBUG] Referral job added successfully:`, {
+                  userId: user.user_id,
+                  referredBy: referred_by
+                });
             }
 
             // Generate tokens
@@ -237,6 +283,9 @@ const registerController = async (req, res) => {
 
             // Set security headers
             setSecurityHeaders(res);
+
+            // Commit transaction after all operations are successful
+            await transaction.commit();
 
             // Respond immediately
             res.status(201).json({
@@ -261,7 +310,10 @@ const registerController = async (req, res) => {
             });
 
         } catch (error) {
-            await transaction.rollback();
+            // Only rollback if transaction is still active
+            if (transaction && !transaction.finished) {
+                await transaction.rollback();
+            }
             throw error;
         }
     } catch (error) {

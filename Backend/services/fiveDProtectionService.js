@@ -1,10 +1,10 @@
 const unifiedRedis = require('../config/unifiedRedisManager');
 
-function getRedisHelper() {
+async function getRedisHelper() {
   if (!unifiedRedis.isInitialized) {
     throw new Error('Unified Redis Manager not initialized!');
   }
-  return unifiedRedis.getHelper();
+  return await unifiedRedis.getHelper();
 }
 
 
@@ -41,7 +41,7 @@ class FiveDProtectionService {
             const combinationKeys = combinations.map(combo => this.combinationToKey(combo));
             
             if (combinationKeys.length > 0) {
-                const redis = getRedisHelper();
+                const redis = await getRedisHelper();
                 await redis.sadd(setKey, ...combinationKeys);
                 await redis.expire(setKey, 3600); // 1 hour TTL
                 
@@ -68,7 +68,7 @@ class FiveDProtectionService {
             
             // Remove all winning combinations from zero-exposure set
             if (winningCombinations.length > 0) {
-                const redis = getRedisHelper();
+                const redis = await getRedisHelper();
                 const removedCount = await redis.srem(setKey, ...winningCombinations);
                 console.log(`🗑️ [5D_PROTECTION] Removed ${removedCount} combinations from zero-exposure set for bet: ${betType}:${betValue}`);
             }
@@ -127,7 +127,7 @@ class FiveDProtectionService {
             const setKey = this.getZeroExposureSetKey(gameType, duration, periodId, timeline);
             
             // Get all remaining zero-exposure combinations
-            const redis = getRedisHelper();
+            const redis = await getRedisHelper();
             const zeroExposureCombinations = await redis.smembers(setKey);
             
             if (!zeroExposureCombinations || zeroExposureCombinations.length === 0) {
@@ -191,7 +191,7 @@ class FiveDProtectionService {
             const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
             
             // Get all exposures
-            const redis = getRedisHelper();
+            const redis = await getRedisHelper();
             const allExposures = await redis.hgetall(exposureKey);
             
             if (!allExposures || Object.keys(allExposures).length === 0) {
@@ -522,7 +522,7 @@ class FiveDProtectionService {
     async isSystemReady() {
         try {
             // Check if Redis is available
-            const redis = getRedisHelper();
+            const redis = await getRedisHelper();
             const testKey = '5d_health_check';
             await redis.set(testKey, 'test', 'EX', 10);
             await redis.del(testKey);
@@ -547,7 +547,7 @@ class FiveDProtectionService {
             const setKey = this.getZeroExposureSetKey(gameType, duration, periodId, timeline);
             const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
             
-            const redis = getRedisHelper();
+            const redis = await getRedisHelper();
             const zeroExposureCount = await redis.scard(setKey);
             const exposureCount = await redis.hlen(exposureKey);
             

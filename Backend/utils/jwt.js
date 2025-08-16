@@ -4,16 +4,23 @@ const config = require('../config/config');
 // Default JWT settings if config is missing
 const DEFAULT_JWT_SECRET = 'default_jwt_secret_for_development_only';
 const DEFAULT_JWT_REFRESH_SECRET = 'default_refresh_secret_for_development_only';
-const DEFAULT_JWT_EXPIRATION = '1h';
+const DEFAULT_JWT_EXPIRATION = '5h';
 const DEFAULT_JWT_REFRESH_EXPIRATION = '7d';
 
 /**
  * Generate JWT token for user
- * @param {Object} user - User object
+ * @param {Object} user - User object or payload object
  * @returns {string} - JWT token
  */
 const generateToken = (user) => {
-    const payload = {
+    // Handle both user objects and direct payload objects
+    const payload = user.userId ? {
+        // Direct payload object (from login controller)
+        userId: user.userId,
+        sessionToken: user.sessionToken,
+        deviceId: user.deviceId
+    } : {
+        // User object (legacy format)
         userId: user.user_id,
         email: user.email,
         role: user.role || 'user'
@@ -29,11 +36,19 @@ const generateToken = (user) => {
 
 /**
  * Generate refresh token
- * @param {Object} user - User object
+ * @param {Object} user - User object or payload object
  * @returns {string} - Refresh token
  */
 const generateRefreshToken = (user) => {
-    const payload = {
+    // Handle both user objects and direct payload objects
+    const payload = user.userId ? {
+        // Direct payload object (from login controller)
+        userId: user.userId,
+        sessionToken: user.sessionToken,
+        deviceId: user.deviceId,
+        tokenType: 'refresh'
+    } : {
+        // User object (legacy format)
         userId: user.user_id,
         tokenType: 'refresh'
     };

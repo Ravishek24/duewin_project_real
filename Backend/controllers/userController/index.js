@@ -38,6 +38,14 @@ try {
     ReferralCommission = null;
 }
 
+const createSessionService = require('../../services/sessionService');
+
+/**
+ * Get user details for admin with correct financial data aggregation
+ * ✅ FIXED: Now uses wallet_recharges and wallet_withdrawals tables for accurate deposit/withdrawal amounts
+ * ✅ OPTIMIZED: Single query for both financial aggregations with fallback to separate queries
+ * ✅ PERFORMANCE: Fast aggregation using SUM() with proper indexing on user_id and status
+ */
 const getUserDetailsForAdmin = async (req, res) => {
     try {
         const { search, page = 1, limit = 10 } = req.query;
@@ -74,10 +82,13 @@ const getUserDetailsForAdmin = async (req, res) => {
                 'wallet_balance',
                 'is_phone_verified',
                 'is_blocked',
+                'block_reason',
                 'current_ip',
                 'registration_ip',
-                'actual_deposit_amount',
-                'total_bet_amount',
+                'last_login_ip',
+                'last_login_at',
+                'referring_code',
+                'referral_code',
                 'created_at'
             ],
             order: [['created_at', 'DESC']], // Show newest users first
@@ -124,6 +135,96 @@ const getUserDetailsForAdmin = async (req, res) => {
             console.log('ReferralCommission model not available, skipping commission calculation');
         }
 
+        // ✅ FAST AGGREGATION: Get total deposit and withdrawal amounts from actual transaction tables
+        // This replaces the incorrect usage of users.actual_deposit_amount and users.total_bet_amount
+        let depositMap = {};
+        let withdrawalMap = {};
+        const startTime = Date.now();
+        
+        try {
+            // Single optimized query to get both deposit and withdrawal totals
+            const userFinancials = await User.sequelize.query(`
+                SELECT 
+                    user_id,
+                    SUM(CASE WHEN source = 'deposit' THEN amount ELSE 0 END) as total_deposit_amount,
+                    SUM(CASE WHEN source = 'withdrawal' THEN amount ELSE 0 END) as total_withdrawal_amount
+                FROM (
+                    -- Deposits from wallet_recharges
+                    SELECT user_id, amount, 'deposit' as source
+                    FROM wallet_recharges 
+                    WHERE user_id IN (:userIds) AND (
+                        status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                        OR status = '' OR status IS NULL
+                    )
+                    UNION ALL
+                    -- Withdrawals (treat empty/NULL as completed in some datasets)
+                    SELECT user_id, amount, 'withdrawal' as source
+                    FROM wallet_withdrawals 
+                    WHERE user_id IN (:userIds) AND (
+                        status IN ('completed', 'approved', 'success', 'paid', 'processed', 'settled', 'payout_success')
+                        OR status = '' OR status IS NULL
+                    )
+                ) combined_financials
+                GROUP BY user_id
+            `, {
+                replacements: { userIds },
+                type: User.sequelize.QueryTypes.SELECT
+            });
+
+            // Create maps for quick lookup
+            userFinancials.forEach(financial => {
+                depositMap[financial.user_id] = parseFloat(financial.total_deposit_amount || 0);
+                withdrawalMap[financial.user_id] = parseFloat(financial.total_withdrawal_amount || 0);
+            });
+            
+            console.log(`✅ Financial aggregation completed in ${Date.now() - startTime}ms for ${userIds.length} users`);
+        } catch (financialError) {
+            console.error('Error fetching financial data:', financialError);
+            // Fallback to separate queries if the combined query fails
+            try {
+                console.log('🔄 Falling back to separate queries...');
+                // Fallback: Separate deposit query
+                const rechargeDeposits = await User.sequelize.query(`
+                    SELECT user_id, SUM(amount) as total_deposit_amount 
+                    FROM wallet_recharges 
+                    WHERE user_id IN (:userIds) AND (
+                        status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                        OR status = '' OR status IS NULL
+                    )
+                    GROUP BY user_id
+                `, {
+                    replacements: { userIds },
+                    type: User.sequelize.QueryTypes.SELECT
+                });
+                rechargeDeposits.forEach(deposit => {
+                    depositMap[deposit.user_id] = (depositMap[deposit.user_id] || 0) + parseFloat(deposit.total_deposit_amount || 0);
+                });
+
+                // Fallback: Separate withdrawal query
+                const userWithdrawals = await User.sequelize.query(`
+                    SELECT user_id, SUM(amount) as total_withdrawal_amount 
+                    FROM wallet_withdrawals 
+                    WHERE user_id IN (:userIds) AND (
+                        status IN ('completed', 'approved', 'success', 'paid', 'processed', 'settled', 'payout_success')
+                        OR status = '' OR status IS NULL
+                    )
+                    GROUP BY user_id
+                `, {
+                    replacements: { userIds },
+                    type: User.sequelize.QueryTypes.SELECT
+                });
+                userWithdrawals.forEach(withdrawal => {
+                    withdrawalMap[withdrawal.user_id] = parseFloat(withdrawal.total_withdrawal_amount || 0);
+                });
+                
+                console.log(`✅ Fallback queries completed in ${Date.now() - startTime}ms`);
+            } catch (fallbackError) {
+                console.error('Fallback queries also failed:', fallbackError);
+                depositMap = {};
+                withdrawalMap = {};
+            }
+        }
+
         // Debug: Log first user to see what we're getting
         if (users.length > 0) {
             console.log('Debug - First user data:', {
@@ -141,6 +242,9 @@ const getUserDetailsForAdmin = async (req, res) => {
                 isBlocked = Boolean(user.is_blocked);
             }
             
+            // Prefer last_login_ip if available; fall back to current_ip
+            const loginIp = user.last_login_ip || user.current_ip || null;
+            
             return {
                 sl: offset + index + 1, // Correct serial number based on pagination
                 user_id: user.user_id,
@@ -148,11 +252,16 @@ const getUserDetailsForAdmin = async (req, res) => {
                 balance: user.wallet_balance,
                 status: user.is_phone_verified ? 'Verified' : 'Unverified',
                 is_blocked: isBlocked,
+                block_reason: isBlocked ? user.block_reason : null,
                 total_commission: commissionMap[user.user_id] || 0,
-                login_ip: user.current_ip,
+                login_ip: loginIp,
                 register_ip: user.registration_ip,
-                total_deposit: user.actual_deposit_amount,
-                total_withdrawal: user.total_bet_amount,
+                last_login_ip: user.last_login_ip || null,
+                last_login_at: user.last_login_at || null,
+                referring_code: user.referring_code || null,
+                referral_code: user.referral_code || null,
+                total_deposit: depositMap[user.user_id] || 0,
+                total_withdrawal: withdrawalMap[user.user_id] || 0,
                 registered_at: user.created_at
             };
         });
@@ -624,6 +733,7 @@ const getUserTransactionHistory = async (req, res) => {
 const getUserTeamSummary = async (req, res) => {
     try {
         const { user_id } = req.params;
+        const startTime = Date.now();
 
         // Get user's referral tree
         const userTree = await User.sequelize.query(`
@@ -645,7 +755,7 @@ const getUserTeamSummary = async (req, res) => {
         const tree = userTree[0];
         const teamStats = [];
 
-        // Process each level (1-6)
+        // Process each level (1-6) with OPTIMIZED aggregation
         for (let level = 1; level <= 6; level++) {
             const levelField = `level_${level}`;
             const levelData = tree[levelField];
@@ -655,59 +765,66 @@ const getUserTeamSummary = async (req, res) => {
                 const userIds = levelData.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
                 
                 if (userIds.length > 0) {
-                    // Get user details for this level
-                    const levelUsers = await User.sequelize.query(`
-                        SELECT user_id, wallet_balance, is_active, last_login_at
-                        FROM users 
-                        WHERE user_id IN (:userIds)
+                    console.log(`🚀 Processing level ${level} with ${userIds.length} users...`);
+                    
+                    // ✅ OPTIMIZED: Single query for user details + financial aggregation
+                    const levelStats = await User.sequelize.query(`
+                        SELECT 
+                            COUNT(DISTINCT u.user_id) as member_count,
+                            COUNT(CASE WHEN u.is_active = 1 AND u.last_login_at > DATE_SUB(NOW(), INTERVAL 30 DAY) THEN 1 END) as active_members,
+                            COALESCE(SUM(u.wallet_balance), 0) as total_team_balance,
+                            -- Fast deposit aggregation from wallet_recharges
+                            COALESCE((
+                                SELECT SUM(amount) 
+                                FROM wallet_recharges 
+                                WHERE user_id IN (:userIds) AND (
+                                    status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                                    OR status = '' OR status IS NULL
+                                )
+                            ), 0) as total_recharge,
+                            -- Fast withdrawal aggregation from wallet_withdrawals  
+                            COALESCE((
+                                SELECT SUM(amount) 
+                                FROM wallet_withdrawals 
+                                WHERE user_id IN (:userIds) AND (
+                                    status IN ('completed', 'approved', 'success', 'paid', 'processed', 'settled', 'payout_success')
+                                    OR status = '' OR status IS NULL
+                                )
+                            ), 0) as total_withdraw
+                        FROM users u
+                        WHERE u.user_id IN (:userIds)
                     `, {
                         replacements: { userIds },
                         type: User.sequelize.QueryTypes.SELECT
                     });
 
-                    // Get transaction data for this level
-                    const levelTransactions = await User.sequelize.query(`
-                        SELECT user_id, type, amount, status
-                        FROM transactions 
-                        WHERE user_id IN (:userIds)
-                    `, {
-                        replacements: { userIds },
-                        type: User.sequelize.QueryTypes.SELECT
-                    });
-
-                    // Calculate stats
-                    const memberCount = userIds.length;
-                    const activeMembers = levelUsers.filter(user => 
-                        user.is_active === 1 && 
-                        user.last_login_at && 
-                        new Date(user.last_login_at) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-                    ).length;
+                    const stats = levelStats[0];
                     
-                    const totalTeamBalance = levelUsers.reduce((sum, user) => sum + parseFloat(user.wallet_balance || 0), 0);
-                    
-                    const totalRecharge = levelTransactions
-                        .filter(t => ['deposit', 'admin_credit'].includes(t.type) && t.status === 'completed')
-                        .reduce((sum, t) => sum + parseFloat(t.amount || 0), 0);
-                    
-                    const totalWithdraw = levelTransactions
-                        .filter(t => ['withdrawal', 'admin_debit'].includes(t.type) && t.status === 'completed')
-                        .reduce((sum, t) => sum + parseFloat(t.amount || 0), 0);
-
                     teamStats.push({
                         level: level,
-                        member_count: memberCount,
-                        active_members: activeMembers,
-                        total_team_balance: totalTeamBalance,
-                        total_recharge: totalRecharge,
-                        total_withdraw: totalWithdraw
+                        member_count: parseInt(stats.member_count || 0),
+                        active_members: parseInt(stats.active_members || 0),
+                        total_team_balance: parseFloat(stats.total_team_balance || 0),
+                        total_recharge: parseFloat(stats.total_recharge || 0),
+                        total_withdraw: parseFloat(stats.total_withdraw || 0)
                     });
+                    
+                    console.log(`✅ Level ${level} processed in ${Date.now() - startTime}ms`);
                 }
             }
         }
 
+        const totalProcessingTime = Date.now() - startTime;
+        console.log(`🚀 Team summary completed in ${totalProcessingTime}ms for user ${user_id}`);
+
         res.status(200).json({
             success: true,
-            data: teamStats
+            data: teamStats,
+            performance: {
+                processing_time_ms: totalProcessingTime,
+                total_levels: teamStats.length,
+                timestamp: new Date().toISOString()
+            }
         });
     } catch (error) {
         console.error('Error in getUserTeamSummary:', error);
@@ -720,8 +837,9 @@ const getUserTeamSummary = async (req, res) => {
 
 const getUserTeamLevelStats = async (req, res) => {
     try {
+        const startTime = Date.now(); // Track total processing time
         const { user_id } = req.params;
-        const { start_date, end_date, period } = req.query;
+        const { start_date, end_date, period, include_user_details = false } = req.query;
         
         console.log(`📊 Getting team level stats for user ${user_id} with period:`, period, 'and dates:', { start_date, end_date });
         
@@ -755,86 +873,269 @@ const getUserTeamLevelStats = async (req, res) => {
             console.log(`📅 Period "${period}" resolved to:`, { finalStartDate, finalEndDate });
         }
 
-        // Get user's referral tree
-        const userTree = await User.sequelize.query(`
-            SELECT level_1, level_2, level_3, level_4, level_5, level_6
-            FROM referral_trees 
-            WHERE user_id = :userId
+        // ✅ FIXED: Build referral tree dynamically instead of using broken referral_trees table
+        console.log('🔧 Building referral tree dynamically from user relationships...');
+        
+        const allUserIds = [];
+        const levelMapping = {}; // This maintains which level each user belongs to
+        
+        // Get target user's referral code
+        const targetUser = await User.findByPk(user_id, {
+            attributes: ['referral_code']
+        });
+        
+        if (!targetUser || !targetUser.referral_code) {
+            console.log('⚠️ Target user has no referral code, no team members');
+            return res.status(200).json({
+                success: true,
+                data: [],
+                summary: {
+                    total_users: 0,
+                    total_levels: 0,
+                    date_range: { start_date: finalStartDate, end_date: finalEndDate },
+                    processing_time: new Date().toISOString()
+                },
+                performance: {
+                    processing_time_ms: Date.now() - startTime,
+                    query_time_ms: 0,
+                    total_levels: 0,
+                    timestamp: new Date().toISOString()
+                }
+            });
+        }
+        
+        // Build referral tree dynamically level by level
+        const processedUsers = new Set(); // Track processed users to avoid duplicates
+        const levelUsers = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
+        
+        // Level 1: Direct referrals (users who used this user's referral code)
+        const level1Users = await User.findAll({
+            where: { referral_code: targetUser.referral_code },
+            attributes: ['user_id']
+        });
+        
+        level1Users.forEach(user => {
+            if (!processedUsers.has(user.user_id)) {
+                levelUsers[1].push(user.user_id);
+                allUserIds.push(user.user_id);
+                levelMapping[user.user_id] = 1;
+                processedUsers.add(user.user_id);
+            }
+        });
+        
+        console.log(`✅ Level 1: Found ${level1Users.length} direct referrals`);
+        
+        // Build levels 2-6 dynamically
+        for (let currentLevel = 2; currentLevel <= 6; currentLevel++) {
+            const previousLevelUsers = levelUsers[currentLevel - 1] || [];
+            const currentLevelUserIds = [];
+            
+            for (const prevUserId of previousLevelUsers) {
+                // Get users referred by this previous level user
+                const nextLevelUsers = await User.findAll({
+                    where: { referral_code: prevUserId },
+                    attributes: ['user_id']
+                });
+                
+                nextLevelUsers.forEach(user => {
+                    if (!processedUsers.has(user.user_id)) {
+                        currentLevelUserIds.push(user.user_id);
+                        allUserIds.push(user.user_id);
+                        levelMapping[user.user_id] = currentLevel;
+                        processedUsers.add(user.user_id);
+                    }
+                });
+            }
+            
+            levelUsers[currentLevel] = currentLevelUserIds;
+            console.log(`✅ Level ${currentLevel}: Found ${currentLevelUserIds.length} users`);
+        }
+
+        if (allUserIds.length === 0) {
+            return res.status(200).json({ success: true, data: [] });
+        }
+
+        console.log(`📊 Processing ${allUserIds.length} users across all levels`);
+        const queryStartTime = Date.now();
+
+        // Build date filter for user registration (not transactions)
+        let dateFilter = '';
+        if (finalStartDate && finalEndDate) {
+            dateFilter = `AND u.created_at BETWEEN '${finalStartDate}' AND '${finalEndDate}'`;
+        } else if (finalStartDate) {
+            dateFilter = `AND u.created_at >= '${finalStartDate}'`;
+        } else if (finalEndDate) {
+            dateFilter = `AND u.created_at <= '${finalEndDate}'`;
+        }
+
+        // ✅ OPTIMIZED: Single query for all users with comprehensive stats from correct tables
+        console.log(`🔍 Applying date filter: ${dateFilter || 'No date filter'}`);
+        console.log(`📊 Querying financial stats for ${allUserIds.length} users...`);
+        
+        const allStats = await User.sequelize.query(`
+            SELECT 
+                u.user_id,
+                ${include_user_details === 'true' ? 'u.user_name, u.phone, u.email,' : ''}
+                -- Deposit stats from wallet_recharges
+                COALESCE((
+                    SELECT COUNT(*) 
+                    FROM wallet_recharges 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) as deposit_count,
+                COALESCE((
+                    SELECT SUM(amount) 
+                    FROM wallet_recharges 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) as total_deposit_amount,
+                COALESCE((
+                    SELECT MIN(created_at) 
+                    FROM wallet_recharges 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                        OR status = '' OR status IS NULL
+                    )
+                ), NULL) as first_deposit_date,
+                -- Withdrawal stats from wallet_withdrawals
+                COALESCE((
+                    SELECT COUNT(*) 
+                    FROM wallet_withdrawals 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'approved', 'success', 'paid', 'processed', 'settled', 'payout_success')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) as withdrawal_count,
+                COALESCE((
+                    SELECT SUM(amount) 
+                    FROM wallet_withdrawals 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'approved', 'success', 'paid', 'processed', 'settled', 'payout_success')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) as total_withdrawal_amount,
+                -- Combined transaction count
+                COALESCE((
+                    SELECT COUNT(*) 
+                    FROM wallet_recharges 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) + COALESCE((
+                    SELECT COUNT(*) 
+                    FROM wallet_withdrawals 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'approved', 'success', 'paid', 'processed', 'settled', 'payout_success')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) as total_transaction_count,
+                -- Net amount calculation
+                COALESCE((
+                    SELECT SUM(amount) 
+                    FROM wallet_recharges 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'success', 'paid', 'processed', 'settled')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) - COALESCE((
+                    SELECT SUM(amount) 
+                    FROM wallet_withdrawals 
+                    WHERE user_id = u.user_id AND (
+                        status IN ('completed', 'approved', 'success', 'paid', 'processed', 'settled', 'payout_success')
+                        OR status = '' OR status IS NULL
+                    )
+                ), 0) as net_amount
+            FROM users u
+            WHERE u.user_id IN (:userIds) ${dateFilter}
+            GROUP BY u.user_id${include_user_details === 'true' ? ', u.user_name, u.phone, u.email' : ''}
         `, {
-            replacements: { userId: user_id },
+            replacements: { userIds: allUserIds },
             type: User.sequelize.QueryTypes.SELECT
         });
 
-        if (!userTree || userTree.length === 0) {
-            return res.status(200).json({
-                success: true,
-                data: []
-            });
+        console.log(`✅ Financial aggregation query completed in ${Date.now() - queryStartTime}ms`);
+        
+        // ✅ OPTIMIZATION: Initialize level stats with level information
+        const levelStats = {};
+        for (let level = 1; level <= 6; level++) {
+            levelStats[level] = {
+                level: level,
+                registered: 0,
+                deposit_number: 0,
+                deposit_amount: 0,
+                first_deposit_number: 0,
+                withdrawal_number: 0,
+                withdrawal_amount: 0,
+                total_transaction_count: 0,
+                net_amount: 0,
+                users: include_user_details === 'true' ? [] : undefined
+            };
         }
 
-        const tree = userTree[0];
-        const teamLevelStats = [];
-
-        // Process each level (1-6)
-        for (let level = 1; level <= 6; level++) {
-            const levelField = `level_${level}`;
-            const levelData = tree[levelField];
-            
-            if (levelData && levelData.trim()) {
-                // Parse user IDs from the level data (comma-separated)
-                const userIds = levelData.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+        // ✅ OPTIMIZATION: Use levelMapping to categorize results by level
+        allStats.forEach(stat => {
+            const level = levelMapping[stat.user_id]; // Get the level for this user
+            if (level && levelStats[level]) {
+                levelStats[level].registered++;
+                levelStats[level].deposit_number += stat.deposit_count > 0 ? 1 : 0;
+                levelStats[level].deposit_amount += parseFloat(stat.total_deposit_amount || 0);
+                levelStats[level].first_deposit_number += stat.deposit_count === 1 ? 1 : 0;
+                levelStats[level].withdrawal_number += stat.withdrawal_count > 0 ? 1 : 0;
+                levelStats[level].withdrawal_amount += parseFloat(stat.total_withdrawal_amount || 0);
+                levelStats[level].total_transaction_count += parseInt(stat.total_transaction_count || 0);
+                levelStats[level].net_amount += parseFloat(stat.net_amount || 0);
                 
-                if (userIds.length > 0) {
-                    // Build date filter for transactions
-                    let dateFilter = '';
-                    if (finalStartDate && finalEndDate) {
-                        dateFilter = `AND created_at BETWEEN '${finalStartDate}' AND '${finalEndDate}'`;
-                    } else if (finalStartDate) {
-                        dateFilter = `AND created_at >= '${finalStartDate}'`;
-                    } else if (finalEndDate) {
-                        dateFilter = `AND created_at <= '${finalEndDate}'`;
-                    }
-
-                    // Get deposit statistics for this level
-                    const depositStats = await User.sequelize.query(`
-                        SELECT 
-                            user_id,
-                            COUNT(*) as deposit_count,
-                            SUM(amount) as total_deposit_amount,
-                            MIN(created_at) as first_deposit_date
-                        FROM transactions 
-                        WHERE user_id IN (:userIds) 
-                        AND type IN ('deposit', 'admin_credit') 
-                        AND status = 'completed'
-                        ${dateFilter}
-                        GROUP BY user_id
-                    `, {
-                        replacements: { userIds },
-                        type: User.sequelize.QueryTypes.SELECT
-                    });
-
-                    // Calculate level statistics
-                    const registered = userIds.length;
-                    const depositNumber = depositStats.length;
-                    const depositAmount = depositStats.reduce((sum, stat) => sum + parseFloat(stat.total_deposit_amount || 0), 0);
-                    
-                    // Count first-time depositors (users with only one deposit record)
-                    const firstDepositNumber = depositStats.filter(stat => parseInt(stat.deposit_count) === 1).length;
-
-                    teamLevelStats.push({
-                        level: level,
-                        registered: registered,
-                        deposit_number: depositNumber,
-                        deposit_amount: depositAmount,
-                        first_deposit_number: firstDepositNumber
+                // Optional: Store individual user details
+                if (include_user_details === 'true' && levelStats[level].users) {
+                    levelStats[level].users.push({
+                        user_id: stat.user_id,
+                        user_name: stat.user_name,
+                        phone: stat.phone,
+                        email: stat.email,
+                        deposit_count: stat.deposit_count,
+                        total_deposit_amount: stat.total_deposit_amount,
+                        withdrawal_count: stat.withdrawal_count,
+                        total_withdrawal_amount: stat.total_withdrawal_amount,
+                        net_amount: stat.net_amount,
+                        first_deposit_date: stat.first_deposit_date
                     });
                 }
             }
+        });
+
+        // Convert to array format, filtering out empty levels
+        const teamLevelStats = Object.values(levelStats).filter(level => level.registered > 0);
+
+        // Remove users array if not requested to keep response clean
+        if (include_user_details !== 'true') {
+            teamLevelStats.forEach(level => {
+                delete level.users;
+            });
         }
 
+        const totalProcessingTime = Date.now() - startTime;
+        console.log(`🚀 Team level stats completed in ${totalProcessingTime}ms for user ${user_id}`);
+        
         res.status(200).json({
             success: true,
-            data: teamLevelStats
+            data: teamLevelStats,
+            summary: {
+                total_users: allUserIds.length,
+                total_levels: Object.keys(levelStats).filter(level => levelStats[level].registered > 0).length,
+                date_range: { start_date: finalStartDate, end_date: finalEndDate },
+                processing_time: new Date().toISOString()
+            },
+            performance: {
+                processing_time_ms: totalProcessingTime,
+                query_time_ms: Date.now() - queryStartTime,
+                total_levels: teamLevelStats.length,
+                timestamp: new Date().toISOString()
+            }
         });
     } catch (error) {
         console.error('Error in getUserTeamLevelStats:', error);
@@ -1036,6 +1337,22 @@ const getUserDetails = async (req, res) => {
     }
 };
 
+const logoutController = async (req, res) => {
+    try {
+        if (!req.session) {
+            return res.status(400).json({ success: false, message: 'No active session found' });
+        }
+        const { getModels } = require('../../models');
+        const models = await getModels();
+        const sessionService = createSessionService(models);
+        await sessionService.invalidateSession(req.session.id, 'manual_logout');
+        res.json({ success: true, message: 'Logged out successfully' });
+    } catch (error) {
+        console.error('Logout error:', error);
+        res.status(500).json({ success: false, message: 'Logout failed' });
+    }
+};
+
 module.exports = {
     loginController,
     signupController: registerController,
@@ -1060,5 +1377,6 @@ module.exports = {
     getInHouseGamesStatsController,
     getGameBetHistoryController,
     getThirdPartyGamesStatsController,
-    getThirdPartyGameHistoryController
+    getThirdPartyGameHistoryController,
+    logoutController
 };

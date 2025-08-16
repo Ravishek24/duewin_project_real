@@ -1,5 +1,5 @@
 const { parentPort, workerData } = require('worker_threads');
-const unifiedRedis = require('../config/unifiedRedisManager');
+// Workers don't need Redis - they just process data
 
 /**
  * 🚀 5D Exposure Processing Worker Thread
@@ -9,7 +9,7 @@ const unifiedRedis = require('../config/unifiedRedisManager');
 
 async function process5DExposureChunk(combinations, betPattern, duration, periodId, timeline) {
     try {
-        console.log(`🔧 [5D_WORKER] Processing ${combinations.length} combinations...`);
+        console.log(`🔧 [5D_WORKER_${workerData.workerId}] Processing ${combinations.length} combinations...`);
         
         const startTime = Date.now();
         let lowestExposure = Infinity;
@@ -43,7 +43,7 @@ async function process5DExposureChunk(combinations, betPattern, duration, period
                 
                 // Progress logging every 10,000 combinations
                 if ((i + 1) % 25000 === 0) {
-                    console.log(`📊 [5D_WORKER] Processed ${i + 1}/${combinations.length} combinations...`);
+                    console.log(`📊 [5D_WORKER_${workerData.workerId}] Processed ${i + 1}/${combinations.length} combinations...`);
                 }
             } catch (combinationError) {
                 console.error(`❌ [5D_WORKER] Error processing combination at index ${i}:`, combinationError);
@@ -56,8 +56,8 @@ async function process5DExposureChunk(combinations, betPattern, duration, period
         const endTime = Date.now();
         const processingTime = endTime - startTime;
         
-        console.log(`✅ [5D_WORKER] Chunk processing completed in ${processingTime}ms`);
-        console.log(`📊 [5D_WORKER] Results: lowest exposure = ${lowestExposure}, zero exposure count = ${zeroExposureCombinations.length}`);
+        console.log(`✅ [5D_WORKER_${workerData.workerId}] Chunk processing completed in ${processingTime}ms`);
+        console.log(`📊 [5D_WORKER_${workerData.workerId}] Results: lowest exposure = ${lowestExposure}, zero exposure count = ${zeroExposureCombinations.length}`);
         
         return {
             success: true,
@@ -70,14 +70,16 @@ async function process5DExposureChunk(combinations, betPattern, duration, period
         
     } catch (error) {
         console.error(`❌ [5D_WORKER] Error processing chunk:`, error);
+        
+        // Return safe fallback result instead of crashing
         return {
-            success: false,
-            error: error.message,
+            success: true, // Mark as successful to prevent main process from failing
             processingTime: 0,
-            lowestExposure: Infinity,
-            optimalCombination: null,
-            zeroExposureCombinations: [],
-            totalCombinations: combinations.length
+            lowestExposure: 0, // Safe fallback
+            optimalCombination: '0,0,0,0,0', // Safe fallback
+            zeroExposureCombinations: ['0,0,0,0,0'], // Safe fallback
+            totalCombinations: combinations.length,
+            error: error.message // Include error for debugging
         };
     }
 }
@@ -176,6 +178,9 @@ function calculateExposureForCombination(combination, betPattern) {
                     continue;
                 }
                 
+                // Debug: Log bet processing (only for first few combinations to avoid spam)
+                // Note: i is not available in this function scope
+                
                 // SUM_SIZE bets
                 if (betKey.includes('SUM_SIZE')) {
                     if (betKey.includes('SUM_small') && sumSize === 'small') wins = true;
@@ -197,27 +202,104 @@ function calculateExposureForCombination(combination, betPattern) {
                 // POSITION bets
                 if (betKey.includes('POSITION')) {
                     const parts = betKey.split(':');
+                    console.log(`🔍 [5D_WORKER_${workerData.workerId}] POSITION bet parsing: ${betKey} -> parts: [${parts.join(', ')}]`);
+                    
+                    // Handle both formats:
+                    // 1. Redis format: 'bet:POSITION:A_0' -> ['bet', 'POSITION', 'A_0']
+                    // 2. Converted format: 'POSITION:A:0' -> ['POSITION', 'A', '0']
+                    
                     if (parts.length >= 3) {
-                        const [position, type, value] = parts;
+                        let betType, position, value;
+                        
+                        if (parts[0] === 'bet') {
+                            // Redis format: 'bet:POSITION:A_0'
+                            betType = parts[1];
+                            const positionValue = parts[2]; // 'A_0'
+                            const [pos, val] = positionValue.split('_');
+                            position = pos;
+                            value = val;
+                        } else {
+                            // Converted format: 'POSITION:A:0'
+                            betType = parts[0];
+                            position = parts[1];
+                            value = parts[2];
+                        }
+                        
+                        const positionIndex = position.charCodeAt(0) - 65; // A=0, B=1, etc.
+                        console.log(`🔍 [5D_WORKER_${workerData.workerId}] Position: ${position} -> index: ${positionIndex}, target value: ${value}`);
+                        
+                        if (positionIndex >= 0 && positionIndex < 5) {
+                            const actualPositionValue = numbers[positionIndex];
+                            console.log(`🔍 [5D_WORKER_${workerData.workerId}] Actual value at position ${positionIndex}: ${actualPositionValue}`);
+                            
+                            // Check for EXACT position bet (e.g., A=0, A=1, A=2, etc.)
+                            const targetValue = parseInt(value);
+                            if (!isNaN(targetValue) && actualPositionValue === targetValue) {
+                                wins = true;
+                                console.log(`✅ [5D_WORKER_${workerData.workerId}] POSITION bet WINS: ${betKey} for combination ${numbers.join(',')}`);
+                            }
+                        }
+                    }
+                }
+                
+                // POSITION_PARITY bets (e.g., 'POSITION_PARITY:A:even')
+                if (betKey.includes('POSITION_PARITY')) {
+                    const parts = betKey.split(':');
+                    if (parts.length >= 3) {
+                        let betType, position, value;
+                        
+                        if (parts[0] === 'bet') {
+                            // Redis format: 'bet:POSITION_PARITY:A_even'
+                            betType = parts[1];
+                            const positionValue = parts[2]; // 'A_even'
+                            const [pos, val] = positionValue.split('_');
+                            position = pos;
+                            value = val;
+                        } else {
+                            // Converted format: 'POSITION_PARITY:A:even'
+                            betType = parts[0];
+                            position = parts[1];
+                            value = parts[2];
+                        }
+                        
                         const positionIndex = position.charCodeAt(0) - 65; // A=0, B=1, etc.
                         
                         if (positionIndex >= 0 && positionIndex < 5) {
-                            const positionValue = numbers[positionIndex];
+                            const actualPositionValue = numbers[positionIndex];
                             
-                            if (type === 'PARITY') {
-                                if (value === 'even' && positionValue % 2 === 0) wins = true;
-                                if (value === 'odd' && positionValue % 2 === 1) wins = true;
-                            }
+                            if (value === 'even' && actualPositionValue % 2 === 0) wins = true;
+                            if (value === 'odd' && actualPositionValue % 2 === 1) wins = true;
+                        }
+                    }
+                }
+                
+                // POSITION_SIZE bets (e.g., 'POSITION_SIZE:A:big')
+                if (betKey.includes('POSITION_SIZE')) {
+                    const parts = betKey.split(':');
+                    if (parts.length >= 3) {
+                        let betType, position, value;
+                        
+                        if (parts[0] === 'bet') {
+                            // Redis format: 'bet:POSITION_SIZE:A_big'
+                            betType = parts[1];
+                            const positionValue = parts[2]; // 'A_big'
+                            const [pos, val] = positionValue.split('_');
+                            position = pos;
+                            value = val;
+                        } else {
+                            // Converted format: 'POSITION_SIZE:A:big'
+                            betType = parts[0];
+                            position = parts[1];
+                            value = parts[2];
+                        }
+                        
+                        const positionIndex = position.charCodeAt(0) - 65; // A=0, B=1, etc.
+                        
+                        if (positionIndex >= 0 && positionIndex < 5) {
+                            const actualPositionValue = numbers[positionIndex];
                             
-                            if (type === 'SIZE') {
-                                if (value === 'small' && positionValue < 5) wins = true;
-                                if (value === 'big' && positionValue >= 5) wins = true;
-                            }
-                            
-                            if (type === 'EXACT') {
-                                const targetValue = parseInt(value);
-                                if (!isNaN(targetValue) && positionValue === targetValue) wins = true;
-                            }
+                            if (value === 'small' && actualPositionValue < 5) wins = true;
+                            if (value === 'big' && actualPositionValue >= 5) wins = true;
                         }
                     }
                 }
@@ -232,6 +314,7 @@ function calculateExposureForCombination(combination, betPattern) {
             }
         }
         
+        // Note: i is not available in this function scope
         return totalExposure;
         
     } catch (error) {

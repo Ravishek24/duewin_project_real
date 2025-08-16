@@ -1,6 +1,7 @@
 // routes/playwin6Routes.js - PlayWin6 Provider Routes
+module.exports = (authMiddleware) => {
 const express = require('express');
-const { auth } = require('../middlewares/authMiddleware');
+const { auth } = authMiddleware;
 const rateLimiters = require('../middleware/rateLimiter');
 const playwin6Service = require('../services/playwin6Service');
 const playwin6Config = require('../config/playwin6Config');
@@ -478,4 +479,5 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
-module.exports = router; 
+return router;
+}; 

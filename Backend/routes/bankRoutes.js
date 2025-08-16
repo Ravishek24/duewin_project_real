@@ -1,6 +1,5 @@
 const express = require('express');
 const router = express.Router();
-const { auth } = require('../middlewares/authMiddleware');
 const rateLimiters = require('../middleware/rateLimiter');
 const validationRules = require('../middleware/inputValidator');
 const {
@@ -10,8 +9,7 @@ const {
     deleteBankAccountController
 } = require('../controllers/bankAccountController');
 
-// All bank routes require authentication
-router.use(auth);
+// NOTE: All bank routes are already protected by authMiddleware.auth at the router level in index.js
 
 // Add bank account
 router.post('/accounts',

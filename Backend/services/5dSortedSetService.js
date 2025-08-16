@@ -9,8 +9,8 @@ const { getAll5DCombinationsFromRedis, calculateOdds, getOptimal5DResultByExposu
 /**
  * Get Redis helper function to avoid circular dependency
  */
-function getRedisHelper() {
-    return unifiedRedis.getHelper();
+async function getRedisHelper() {
+    return await unifiedRedis.getHelper();
 }
 
 /**
@@ -54,7 +54,7 @@ async function update5DExposureSortedSet(gameType, duration, periodId, bet, time
         
         console.log(`🚀 [5D_SORTED_SET] Calculating exposure for ${allCombinations.length} combinations...`);
         
-        const redis = getRedisHelper();
+        const redis = await getRedisHelper();
         const pipeline = redis.pipeline();
         
         // Calculate exposure for each combination
@@ -163,7 +163,7 @@ async function getOptimal5DResultByExposureSortedSet(duration, periodId, timelin
         console.log('🚀 [5D_SORTED_SET_RESULT] Getting optimal result using Sorted Set...');
         
         const sortedSetKey = `exposure_sorted:5d:${duration}:${timeline}:${periodId}`;
-        const redis = getRedisHelper();
+        const redis = await getRedisHelper();
         
         // Check if Sorted Set exists
         const exists = await redis.exists(sortedSetKey);
@@ -193,7 +193,7 @@ async function getOptimal5DResultByExposureSortedSet(duration, periodId, timelin
                 C: comboData[2],
                 D: comboData[3],
                 E: comboData[4],
-                sum_value: comboData.reduce((sum, val) => sum + val, 0),
+                sum: comboData.reduce((sum, val) => sum + val, 0),
                 sum_size: comboData.reduce((sum, val) => sum + val, 0) < 22 ? 'small' : 'big',
                 sum_parity: comboData.reduce((sum, val) => sum + val, 0) % 2 === 0 ? 'even' : 'odd'
             };
@@ -221,7 +221,7 @@ async function getOptimal5DResultByExposureSortedSet(duration, periodId, timelin
                 C: comboData[2],
                 D: comboData[3],
                 E: comboData[4],
-                sum_value: comboData.reduce((sum, val) => sum + val, 0),
+                sum: comboData.reduce((sum, val) => sum + val, 0),
                 sum_size: comboData.reduce((sum, val) => sum + val, 0) < 22 ? 'small' : 'big',
                 sum_parity: comboData.reduce((sum, val) => sum + val, 0) % 2 === 0 ? 'even' : 'odd'
             };
@@ -253,7 +253,7 @@ async function initialize5DExposureSortedSet(gameType, duration, periodId, timel
         console.log('🚀 [5D_SORTED_SET_INIT] Initializing 5D exposure Sorted Set...');
         
         const sortedSetKey = `exposure_sorted:${gameType}:${duration}:${timeline}:${periodId}`;
-        const redis = getRedisHelper();
+        const redis = await getRedisHelper();
         
         // Check if already initialized
         const exists = await redis.exists(sortedSetKey);

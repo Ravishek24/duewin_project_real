@@ -77,6 +77,9 @@ const {
   createWithdrawalOrder: create101PayWithdrawalOrder
 } = require('../services/pay101Service');
 
+// 🎯 Import CreditService for wagering system
+const CreditService = require('../services/creditService');
+
 // Import PaymentGateway model
 const PaymentGateway = require('../models/PaymentGateway');
 const User = require('../models/User');
@@ -86,6 +89,7 @@ const WalletWithdrawal = require('../models/WalletWithdrawal');
 const WalletRecharge = require('../models/WalletRecharge');
 const { getPaymentQueue } = require('../queues/paymentQueue');
 const { getDepositQueue } = require('../queues/depositQueue');
+const Transaction = require('../models/Transaction'); // Added Transaction model import
 
 // Controller to handle payment creation (adding money to wallet) with gateway selection
 // Updated section for paymentController.js to include MxPay
@@ -929,8 +933,11 @@ const initiateDeposit = async (req, res) => {
                 paymentGateway: payment_method
             }, {
                 priority: 15,
-                removeOnComplete: 5,
-                removeOnFail: 10,
+                        // BullMQ v5: use keepJobs instead of removeOnComplete/removeOnFail
+        keepJobs: {
+          completed: 5,
+          failed: 10
+        },
                 attempts: 3,
                 backoff: { type: 'exponential', delay: 2000 }
             }).catch(console.error);
@@ -1344,12 +1351,61 @@ const pay101PayinCallbackController = async (req, res) => {
           updated_at: new Date()
         });
         
-        // Credit user wallet
+        // Credit user wallet with wagering system integration
         const user = await User.findByPk(recharge.user_id);
         if (user) {
-          const newBalance = parseFloat(user.wallet_balance) + parseFloat(recharge.amount);
-          await user.update({ wallet_balance: newBalance });
-          console.log('💰 Wallet credited. New balance:', newBalance);
+          const depositAmount = parseFloat(recharge.amount);
+          const newBalance = parseFloat(user.wallet_balance) + depositAmount;
+          const newActualDeposit = parseFloat(user.actual_deposit_amount || 0) + depositAmount;
+          
+          // Update user wallet and actual deposit amount
+          await user.update({ 
+            wallet_balance: newBalance,
+            actual_deposit_amount: newActualDeposit
+          });
+          console.log('💰 Wallet credited. New balance:', newBalance, 'New actual deposit:', newActualDeposit);
+          
+          // 🎯 Update wagering requirement for new deposit
+          await user.updateWageringRequirement();
+          
+          // ✅ Create transaction record for successful deposit
+          await Transaction.create({
+              user_id: recharge.user_id,
+              type: 'deposit',
+              amount: depositAmount,
+              status: 'completed',
+              payment_gateway_id: recharge.payment_gateway_id,
+              order_id: recharge.order_id,
+              transaction_id: orderNo,
+              description: '101PAY deposit successful',
+              reference_id: `101pay_deposit_${recharge.order_id}`,
+              metadata: {
+                gateway: '101PAY',
+                original_status: status,
+                processed_at: new Date().toISOString()
+              },
+              created_at: new Date(),
+              updated_at: new Date()
+          });
+          
+          // 🎯 Process first recharge bonus and referral if applicable
+          try {
+            const referralService = require('../services/referralService');
+            if (!user.has_received_first_bonus) {
+              const result = await referralService.processFirstRechargeBonus(user.user_id, depositAmount);
+              if (result.success) {
+                const newBonusAmount = parseFloat(user.bonus_amount || 0) + (result.bonusAmount || 0);
+                await user.update({ 
+                  has_received_first_bonus: true,
+                  bonus_amount: newBonusAmount
+                });
+              }
+            }
+            // Referral update
+            await referralService.updateReferralOnRecharge(user.user_id, depositAmount);
+          } catch (referralError) {
+            console.error('Failed to process referral for 101PAY deposit:', referralError.message);
+          }
         }
         
         console.log('✅ Success response sent');
@@ -1357,11 +1413,55 @@ const pay101PayinCallbackController = async (req, res) => {
       } else if (status === 'failure' || status === 'failed') {
         console.log('❌ Processing failed payment');
         await recharge.update({ status: 'failed', updated_at: new Date() });
+        
+        // ✅ Create transaction record for failed deposit
+        await Transaction.create({
+            user_id: recharge.user_id,
+            type: 'deposit_failed',
+            amount: parseFloat(recharge.amount),
+            status: 'failed',
+            payment_gateway_id: recharge.payment_gateway_id,
+            order_id: recharge.order_id,
+            transaction_id: orderNo || null,
+            description: '101PAY deposit failed',
+            reference_id: `101pay_deposit_failed_${recharge.order_id}`,
+            metadata: {
+              gateway: '101PAY',
+              original_status: status,
+              failure_reason: 'Payment failed',
+              processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+        
         return res.status(200).send('fail');
       } else {
         // Pending or unknown status
         console.log('⏳ Processing pending/unknown status:', status);
         await recharge.update({ status: 'pending', updated_at: new Date() });
+        
+        // ✅ Create transaction record for pending deposit
+        await Transaction.create({
+            user_id: recharge.user_id,
+            type: 'deposit_failed',
+            amount: parseFloat(recharge.amount),
+            status: 'pending',
+            payment_gateway_id: recharge.payment_gateway_id,
+            order_id: recharge.order_id,
+            transaction_id: orderNo || null,
+            description: '101PAY deposit pending',
+            reference_id: `101pay_deposit_pending_${recharge.order_id}`,
+            metadata: {
+              gateway: '101PAY',
+              original_status: status,
+              failure_reason: 'Payment pending',
+              processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+        
         return res.status(200).send('fail');
       }
     } else {
@@ -1394,9 +1494,52 @@ const pay101PayoutCallbackController = async (req, res) => {
           transaction_id: orderNo,
           updated_at: new Date()
         });
+        
+        // ✅ Create transaction record for successful withdrawal
+        await Transaction.create({
+            user_id: withdrawal.user_id,
+            type: 'withdrawal',
+            amount: parseFloat(withdrawal.amount),
+            status: 'completed',
+            payment_gateway_id: withdrawal.payment_gateway_id,
+            order_id: withdrawal.order_id,
+            transaction_id: orderNo,
+            description: '101PAY withdrawal successful',
+            reference_id: `101pay_withdrawal_${withdrawal.order_id}`,
+            metadata: {
+              gateway: '101PAY',
+              original_status: status,
+              processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+        
         return res.status(200).send('success');
       } else if (status === 'failure' || status === 'failed') {
         await withdrawal.update({ status: 'failed', updated_at: new Date() });
+        
+        // ✅ Create transaction record for failed withdrawal
+        await Transaction.create({
+            user_id: withdrawal.user_id,
+            type: 'withdrawal_failed',
+            amount: parseFloat(withdrawal.amount),
+            status: 'failed',
+            payment_gateway_id: withdrawal.payment_gateway_id,
+            order_id: withdrawal.order_id,
+            transaction_id: orderNo || null,
+            description: '101PAY withdrawal failed',
+            reference_id: `101pay_withdrawal_failed_${withdrawal.order_id}`,
+            metadata: {
+              gateway: '101PAY',
+              original_status: status,
+              failure_reason: 'Withdrawal failed',
+              processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+        
         return res.status(200).send('fail');
       } else {
         // Pending or unknown status
@@ -1439,16 +1582,27 @@ const pay101UTRCallbackController = async (req, res) => {
           updated_at: new Date()
         });
 
-        // Credit user wallet
+        // Credit user wallet with wagering system integration
         const user = await User.findByPk(deposit.user_id);
         if (user) {
-          const newBalance = parseFloat(user.wallet_balance) + parseFloat(deposit.amount);
-          await user.update({ wallet_balance: newBalance });
+          const depositAmount = parseFloat(deposit.amount);
+          const newBalance = parseFloat(user.wallet_balance) + depositAmount;
+          const newActualDeposit = parseFloat(user.actual_deposit_amount || 0) + depositAmount;
+          
+          // Update user wallet and actual deposit amount
+          await user.update({ 
+            wallet_balance: newBalance,
+            actual_deposit_amount: newActualDeposit
+          });
+          console.log('💰 UTR Wallet credited. New balance:', newBalance, 'New actual deposit:', newActualDeposit);
+          
+          // 🎯 Update wagering requirement for new deposit
+          await user.updateWageringRequirement();
           
           // Process attendance if enabled
           try {
             const { autoProcessRechargeForAttendance } = require('../services/autoAttendanceService');
-            await autoProcessRechargeForAttendance(deposit.user_id, deposit.amount);
+            await autoProcessRechargeForAttendance(deposit.user_id, depositAmount);
           } catch (attendanceError) {
             console.error('Failed to process attendance for UTR deposit:', attendanceError.message);
           }

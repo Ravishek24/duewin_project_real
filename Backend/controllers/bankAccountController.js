@@ -39,6 +39,18 @@ const addBankAccountController = async (req, res) => {
             is_primary = false
         } = req.body;
 
+        // Check if bank account number already exists (globally unique)
+        const existingAccount = await BankAccount.findOne({
+            where: { account_number: account_number }
+        });
+
+        if (existingAccount) {
+            return res.status(400).json({
+                success: false,
+                message: 'Bank account number already exists. Please use a different account number.'
+            });
+        }
+
         // If this is set as primary, unset any existing primary account
         if (is_primary) {
             await BankAccount.update(
@@ -98,6 +110,30 @@ const updateBankAccountController = async (req, res) => {
                 user_id: req.user.user_id
             }
         });
+
+        if (!bankAccount) {
+            return res.status(404).json({
+                success: false,
+                message: 'Bank account not found'
+            });
+        }
+
+        // If updating account number, check for duplicates
+        if (account_number && account_number !== bankAccount.account_number) {
+            const existingAccountNumber = await BankAccount.findOne({
+                where: { 
+                    account_number: account_number,
+                    id: { [Op.ne]: id } // Exclude current account
+                }
+            });
+            
+            if (existingAccountNumber) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Bank account number already exists. Please use a different account number.'
+                });
+            }
+        }
 
         if (!bankAccount) {
             return res.status(404).json({

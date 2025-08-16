@@ -287,19 +287,28 @@ const claimLevelReward = async (req, res) => {
             }
         );
 
-        // Log transaction
-        await sequelize.query(
-            `INSERT INTO transactions (user_id, amount, type, note, created_at)
-             VALUES (:userId, :amount, 'credit', 'VIP level up reward', NOW())`,
-            {
-                replacements: {
-                    userId: user.user_id,
-                    amount: currentLevel.bonus_amount
-                },
-                type: sequelize.QueryTypes.INSERT,
-                transaction: t
+        // Get current balance before update
+        const currentBalance = parseFloat(user.wallet_balance);
+        const rewardAmount = parseFloat(currentLevel.bonus_amount);
+        const newBalance = currentBalance + rewardAmount;
+
+        // Create transaction record
+        const Transaction = require('../../models/Transaction');
+        await Transaction.create({
+            user_id: user.user_id,
+            type: 'vip_reward',
+            amount: rewardAmount,
+            status: 'completed',
+            description: `VIP Level ${currentLevel.level} upgrade bonus`,
+            reference_id: `vip_levelup_${user.user_id}_${Date.now()}`,
+            previous_balance: currentBalance,
+            new_balance: newBalance,
+            metadata: {
+                vip_level: currentLevel.level,
+                reward_type: 'level_up',
+                processed_at: new Date().toISOString()
             }
-        );
+        }, { transaction: t });
 
         await t.commit();
         res.json({ message: 'Level up reward claimed successfully' });
@@ -377,19 +386,28 @@ const claimMonthlyReward = async (req, res) => {
             }
         );
 
-        // Log transaction
-        await sequelize.query(
-            `INSERT INTO transactions (user_id, amount, type, note, created_at)
-             VALUES (:userId, :amount, 'credit', 'Monthly VIP reward', NOW())`,
-            {
-                replacements: {
-                    userId: user.user_id,
-                    amount: currentLevel.monthly_reward
-                },
-                type: sequelize.QueryTypes.INSERT,
-                transaction: t
+        // Get current balance before update
+        const currentBalance = parseFloat(user.wallet_balance);
+        const rewardAmount = parseFloat(currentLevel.monthly_reward);
+        const newBalance = currentBalance + rewardAmount;
+
+        // Create transaction record
+        const Transaction = require('../../models/Transaction');
+        await Transaction.create({
+            user_id: user.user_id,
+            type: 'vip_reward',
+            amount: rewardAmount,
+            status: 'completed',
+            description: `VIP Level ${currentLevel.level} monthly reward`,
+            reference_id: `vip_monthly_${user.user_id}_${Date.now()}`,
+            previous_balance: currentBalance,
+            new_balance: newBalance,
+            metadata: {
+                vip_level: currentLevel.level,
+                reward_type: 'monthly',
+                processed_at: new Date().toISOString()
             }
-        );
+        }, { transaction: t });
 
         await t.commit();
         res.json({ message: 'Monthly reward claimed successfully' });

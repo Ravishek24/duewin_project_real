@@ -10,12 +10,14 @@ const moment = require('moment-timezone');
 // Try different import approaches for WalletRecharge
 let WalletRecharge;
 let User;
+let Transaction;
 
 try {
   // First try the models index
   const models = require('../models');
   WalletRecharge = models.WalletRecharge;
   User = models.User;
+  Transaction = models.Transaction;
   
   if (!WalletRecharge) {
     // If not in models index, try direct import
@@ -26,13 +28,19 @@ try {
     User = require('../models/User');
   }
   
+  if (!Transaction) {
+    Transaction = require('../models/Transaction');
+  }
+  
   console.log('✅ Models loaded successfully');
   console.log('WalletRecharge:', typeof WalletRecharge);
   console.log('User:', typeof User);
+  console.log('Transaction:', typeof Transaction);
 } catch (error) {
   console.error('❌ Error loading models:', error);
   WalletRecharge = null;
   User = null;
+  Transaction = null;
 }
 
 // OKPAY Configuration
@@ -299,6 +307,29 @@ const processOkPayCallback = async (callbackData) => {
       updated_at: new Date()
     });
 
+    // Create transaction record for both success and failure
+    if (Transaction && typeof Transaction.create === 'function') {
+        await Transaction.create({
+            user_id: order.user_id,
+            type: orderStatus === 'completed' ? 'deposit' : 'deposit_failed',
+            amount: parseFloat(order.amount),
+            status: orderStatus === 'completed' ? 'completed' : 'failed',
+            payment_gateway_id: 'OKPAY',
+            order_id: orderId,
+            transaction_id: transactionId || orderId,
+            description: orderStatus === 'completed' ? 'OKPAY deposit successful' : 'OKPAY deposit failed',
+            reference_id: orderStatus === 'completed' ? `okpay_deposit_${orderId}` : `okpay_deposit_failed_${orderId}`,
+            metadata: {
+                gateway: 'OKPAY',
+                original_status: status,
+                processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+        console.log(`✅ Transaction record created for OKPAY ${orderStatus === 'completed' ? 'deposit' : 'deposit_failed'}`);
+    }
+
     // If payment was successful, update wallet balance
     if (orderStatus === 'completed') {
       try {
@@ -314,6 +345,8 @@ const processOkPayCallback = async (callbackData) => {
               actual_deposit_amount: newActualDeposit
             });
             console.log(`✅ Updated wallet balance and actual deposit for user ${order.user_id}`);
+
+            // Transaction record already created above for both success and failure
 
             // --- Attendance update logic ---
             const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');

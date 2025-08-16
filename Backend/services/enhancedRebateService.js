@@ -233,6 +233,19 @@ class EnhancedRebateService {
                 // Create individual commission records for each team member who placed bets
                 for (const [referredUserId, betAmount] of Object.entries(allDailyBets)) {
                     if (betAmount > 0) {
+                        // Find which level this user belongs to
+                        let userLevel = 1; // Default to level 1
+                        
+                        for (let level = 1; level <= this.MAX_LEVELS; level++) {
+                            const levelField = `level_${level}`;
+                            const levelData = referralTree[levelField];
+                            
+                            if (levelData && levelData.includes(referredUserId.toString())) {
+                                userLevel = level;
+                                break;
+                            }
+                        }
+                        
                         // Calculate this user's contribution to total commission
                         const totalTeamBets = Object.values(allDailyBets).reduce((sum, amount) => sum + amount, 0);
                         const userCommissionShare = (betAmount / totalTeamBets) * totalCommission;
@@ -240,10 +253,12 @@ class EnhancedRebateService {
                         await models.ReferralCommission.create({
                             user_id: userId,
                             referred_user_id: parseInt(referredUserId),
-                            level: 1, // All team members are level 1 for rebate purposes
+                            level: userLevel, // Use actual referral level instead of hardcoded 1
                             amount: userCommissionShare,
                             type: 'rebate',
                             rebate_type: 'lottery',
+                            distribution_batch_id: `rebate-${processDate}-${Date.now()}`, // Add batch ID
+                            total_bet: betAmount, // Add the bet amount for this user on this date
                             status: 'paid',
                             created_at: new Date()
                         }, { transaction });

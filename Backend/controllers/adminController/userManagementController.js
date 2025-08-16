@@ -127,7 +127,7 @@ const getBlockedUsers = async (req, res) => {
 const updateUserBalance = async (req, res) => {
     try {
         const { user_id } = req.params;
-        const { amount, type } = req.body;
+        const { amount, type, reason = '' } = req.body;
         const adminId = req.user.user_id;
 
         const user = await User.findByPk(user_id);
@@ -147,10 +147,14 @@ const updateUserBalance = async (req, res) => {
             });
         }
 
+        // Get current balance before update
+        const currentBalance = parseFloat(user.wallet_balance);
+        const updateAmount = parseFloat(amount);
+
         // Update balance based on type (add/subtract)
         const newBalance = type === 'add' 
-            ? parseFloat(user.wallet_balance) + parseFloat(amount)
-            : parseFloat(user.wallet_balance) - parseFloat(amount);
+            ? currentBalance + updateAmount
+            : currentBalance - updateAmount;
 
         if (newBalance < 0) {
             return res.status(400).json({
@@ -159,19 +163,58 @@ const updateUserBalance = async (req, res) => {
             });
         }
 
-        await user.update({ wallet_balance: newBalance });
+        // Use database transaction for atomicity
+        const { sequelize } = require('../../config/db');
+        const t = await sequelize.transaction();
 
-        res.json({
-            success: true,
-            message: 'Balance updated successfully',
-            data: {
-                userId: user.user_id,
-                username: user.user_name,
-                newBalance,
-                updatedBy: adminId,
-                updatedAt: new Date()
-            }
-        });
+        try {
+            // Update user's wallet balance
+            await user.update({ 
+                wallet_balance: newBalance,
+                updated_at: new Date()
+            }, { transaction: t });
+
+            // Create transaction record
+            const Transaction = require('../../models/Transaction');
+            await Transaction.create({
+                user_id: user_id,
+                type: type === 'add' ? 'admin_credit' : 'admin_debit',
+                amount: updateAmount,
+                status: 'completed',
+                description: `${type === 'add' ? 'Admin credit' : 'Admin debit'}: ${reason || 'Balance adjustment by administrator'}`,
+                reference_id: `admin_${type}_${user_id}_${Date.now()}`,
+                created_by: adminId,
+                previous_balance: currentBalance,
+                new_balance: newBalance,
+                metadata: {
+                    admin_id: adminId,
+                    operation_type: type,
+                    reason: reason || 'Balance adjustment by administrator',
+                    admin_username: req.user.user_name || 'Unknown',
+                    processed_at: new Date().toISOString()
+                }
+            }, { transaction: t });
+
+            await t.commit();
+
+            res.json({
+                success: true,
+                message: 'Balance updated successfully',
+                data: {
+                    userId: user.user_id,
+                    username: user.user_name,
+                    previousBalance: currentBalance,
+                    newBalance: newBalance,
+                    changeAmount: updateAmount,
+                    operationType: type,
+                    updatedBy: adminId,
+                    updatedAt: new Date()
+                }
+            });
+        } catch (transactionError) {
+            await t.rollback();
+            throw transactionError;
+        }
     } catch (error) {
         console.error('Error updating user balance:', error);
         res.status(500).json({

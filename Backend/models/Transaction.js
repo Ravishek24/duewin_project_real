@@ -25,8 +25,21 @@ class Transaction extends Model {
                     'admin_debit',       // When admin deducts balance
                     'game_win',          // When user wins a game
                     'game_loss',         // When user loses a game
+                    'game_move_in',      // 🆕 When user enters a game room
+                    'game_move_out',     // 🆕 When user leaves a game room
                     'gift_code',         // When user redeems a gift code
                     'referral_bonus',    // When user gets referral bonus
+                    'registration_bonus', // 🆕 When user gets signup bonus
+                    'first_deposit_bonus', // 🆕 When user gets first deposit bonus
+                    'deposit_rejected',    // 🆕 When admin rejects a deposit
+                    'direct_bonus',        // 🆕 When user gets direct referral bonus
+                    'attendance_bonus',    // 🆕 When user gets attendance bonus
+                    'deposit_failed',      // 🆕 When deposit fails
+                    'withdrawal_failed',   // 🆕 When withdrawal fails
+                    'withdrawal_rejected', // 🆕 When admin rejects withdrawal
+                    'self_rebate',         // 🆕 When user gets self rebate from house games
+                    'referral_commission', // 🆕 When user gets referral commission from bets
+                    'activity_reward',     // 🆕 When user gets activity milestone reward
                     'rebate',           // When user gets rebate
                     'vip_reward',       // When user gets VIP reward
                     'transfer_in',      // When money is transferred in from 3rd party
@@ -190,7 +203,7 @@ class Transaction extends Model {
                 targetKey: 'user_id',
                 as: 'transactionuser'
             });
-            
+
             this.belongsTo(models.User, {
                 foreignKey: 'created_by',
                 targetKey: 'user_id',

@@ -1,7 +1,8 @@
 // routes/otpRoutes.js
+module.exports = (authMiddleware) => {
 const express = require('express');
 const router = express.Router();
-const { auth } = require('../middlewares/authMiddleware');
+const { auth } = authMiddleware;
 const { validateInput } = require('../middleware/inputValidation');
 const { body } = require('express-validator');
 const rateLimiters = require('../middleware/rateLimiter');
@@ -83,4 +84,5 @@ router.get('/status/:otp_session_id',
     checkOtpStatusController
 );
 
-module.exports = router;
+return router;
+};

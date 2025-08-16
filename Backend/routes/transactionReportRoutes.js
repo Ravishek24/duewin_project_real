@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { auth } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js (auth)
 const {
     getUserTransactionReport,
     getUserTransactionStats
 } = require('../controllers/transactionReportController');
+const rateLimiters = require('../middleware/rateLimiter');
 
 /**
  * Transaction Report Routes
@@ -13,10 +14,10 @@ const {
  * for the authenticated user.
  */
 
-// Get comprehensive transaction report for the authenticated user
-router.get('/my', auth, getUserTransactionReport);
+// Get comprehensive transaction report for the authenticated user - Rate limited
+router.get('/my', rateLimiters.transactionReports, getUserTransactionReport);
 
-// Get transaction statistics summary for the authenticated user
-router.get('/my/stats', auth, getUserTransactionStats);
+// Get transaction statistics summary for the authenticated user - Rate limited
+router.get('/my/stats', rateLimiters.transactionReports, getUserTransactionStats);
 
 module.exports = router; 

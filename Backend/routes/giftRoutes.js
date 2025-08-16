@@ -7,19 +7,20 @@ const {
   getAllGiftCodes, 
   getGiftCodeStats 
 } = require('../controllers/adminController/giftCodeController');
-const { auth, isAdmin } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const { giftCode } = require('../middleware/inputValidator');
+const rateLimiters = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
-// User routes (require authentication)
-router.post('/claim', auth, giftCode, claimGiftCode);
-router.get('/history', auth, getUserGiftCodeHistory);
+// User routes (require authentication) - Rate limited
+router.post('/claim', rateLimiters.giftCodes, giftCode, claimGiftCode);
+router.get('/history', rateLimiters.giftCodes, getUserGiftCodeHistory);
 
-// Admin routes (require admin authentication)
-router.post('/create', auth, isAdmin, createGiftCode);
-router.get('/status/:code', auth, isAdmin, getGiftCodeStatus);
-router.get('/all', auth, isAdmin, getAllGiftCodes);
-router.get('/stats', auth, isAdmin, getGiftCodeStats);
+// Admin routes (require admin authentication) - No rate limiting for now as requested
+router.post('/create', createGiftCode);
+router.get('/status/:code', getGiftCodeStatus);
+router.get('/all', getAllGiftCodes);
+router.get('/stats', getGiftCodeStats);
 
 module.exports = router; 

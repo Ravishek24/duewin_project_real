@@ -1,6 +1,6 @@
 // Backend/routes/gameRoutes.js - CORRECTED VERSION
 const express = require('express');
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const rateLimiters = require('../middleware/rateLimiter');
 const validationRules = require('../middleware/inputValidator');
 const gameLogicService = require('../services/gameLogicService');
@@ -14,7 +14,7 @@ const router = express.Router();
  */
 
 // Get last result for a specific game and duration
-router.get('/:gameType/:duration/last-result', auth, async (req, res) => {
+router.get('/:gameType/:duration/last-result', async (req, res) => {
     try {
     const { gameType, duration } = req.params;
     
@@ -221,8 +221,8 @@ router.get('/:gameType/:duration/history', async (req, res) => {
  * ======================
  */
 
-// Middleware for all routes below
-router.use(auth);
+// NOTE: Authentication is handled at router level in index.js
+// All routes below are already protected by authMiddleware.auth
 //router.use(requirePhoneVerification);
 
 // Get current active periods for all games

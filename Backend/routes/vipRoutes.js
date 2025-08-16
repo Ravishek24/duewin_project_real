@@ -1,29 +1,30 @@
 const express = require('express');
 const router = express.Router();
 const vipController = require('../controllers/vipController');
-const { auth } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const { sequelize } = require('../config/db');
 const VipLevel = require('../models/VipLevel');
 const User = require('../models/User');
 const VipReward = require('../models/VipReward');
 const { Op } = require('sequelize');
+const rateLimiters = require('../middleware/rateLimiter');
 
 // Helper function to wrap async middleware
 const asyncHandler = (fn) => (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch(next);
 };
 
-// Information and Status Endpoints
-router.get('/info', auth, vipController.getVIPInfo);
-router.get('/levels', vipController.getVIPLevels);
-router.get('/status', auth, vipController.getUserVIPStatus);
-router.get('/calculate', auth, vipController.calculateVIPLevel);
+// Information and Status Endpoints - Rate limited for authenticated routes
+router.get('/info', rateLimiters.vipSystem, vipController.getVIPInfo);
+router.get('/levels', vipController.getVIPLevels); // Public route - no rate limiting
+router.get('/status', rateLimiters.vipSystem, vipController.getUserVIPStatus);
+router.get('/calculate', rateLimiters.vipSystem, vipController.calculateVIPLevel);
 
-// Reward Claim Endpoints
-router.post('/claim-level-reward', auth, vipController.claimLevelReward);
-router.post('/claim-monthly-reward', auth, vipController.claimMonthlyReward);
+// Reward Claim Endpoints - Rate limited
+router.post('/claim-level-reward', rateLimiters.vipSystem, vipController.claimLevelReward);
+router.post('/claim-monthly-reward', rateLimiters.vipSystem, vipController.claimMonthlyReward);
 
-// Experience History Endpoint
-router.get('/experience-history', auth, vipController.getVIPExperienceHistory);
+// Experience History Endpoint - Rate limited
+router.get('/experience-history', rateLimiters.vipSystem, vipController.getVIPExperienceHistory);
 
 module.exports = router; 

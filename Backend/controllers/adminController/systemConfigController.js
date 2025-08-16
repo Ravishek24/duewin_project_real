@@ -30,7 +30,7 @@ const loginSystemConfig = async (req, res) => {
                 is_system_config: true
             },
             process.env.JWT_SECRET,
-            { expiresIn: '24h' }
+            { expiresIn: '7h' }
         );
 
         return res.status(200).json({

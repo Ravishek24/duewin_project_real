@@ -146,6 +146,31 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
         message: "Insufficient wallet balance"
       };
     }
+
+    // 🎯 Check wagering requirements
+    const actualDeposit = parseFloat(user.actual_deposit_amount || 0);
+    const externalCredits = parseFloat(user.total_external_credits || 0);
+    const totalBetAmount = parseFloat(user.total_bet_amount || 0);
+    
+    // Calculate wagering requirement
+    const wageringRequired = Math.max(actualDeposit, externalCredits);
+    
+    // Check if total bet amount meets wagering requirement
+    if (totalBetAmount < wageringRequired) {
+      const remainingWagering = wageringRequired - totalBetAmount;
+      await t.rollback();
+      return {
+        success: false,
+        message: "Withdrawal not allowed - wagering requirements not met",
+        details: {
+          wagering_required: wageringRequired,
+          total_bet_amount: totalBetAmount,
+          remaining_wagering: remainingWagering,
+          actual_deposit: actualDeposit,
+          external_credits: externalCredits
+        }
+      };
+    }
     
     // Get bank account details
     const bankAccount = await BankAccount.findOne({
@@ -176,7 +201,17 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
       withdrawal_type: withdrawalType,
       order_id: orderId, // Always set order_id
       transaction_id: orderId, // Set transaction_id to orderId initially
-      bank_account_id: bankAccountId
+      bank_account_id: bankAccountId,
+      // 🎯 WAGERING SYSTEM FIELDS
+      wagering_status: {
+        wagering_required: wageringRequired,
+        total_bet_amount: totalBetAmount,
+        is_wagering_met: true,
+        actual_deposit: actualDeposit,
+        external_credits: externalCredits,
+        checked_at: new Date().toISOString()
+      },
+      wagering_checked: true
     }, { transaction: t });
     
     // Create admin approval record
@@ -485,8 +520,12 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
         };
       }
       
+      // Get current balance before update
+      const currentBalance = parseFloat(user.wallet_balance);
+      const refundAmount = parseFloat(withdrawal.amount);
+      const newBalance = currentBalance + refundAmount;
+      
       // Update user wallet balance (refund)
-      const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawal.amount);
       await User.update(
         { wallet_balance: newBalance },
         { 
@@ -494,6 +533,26 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
           transaction: t 
         }
       );
+      
+      // Create transaction record for admin credit (refund)
+      await Transaction.create({
+        user_id: withdrawal.user_id,
+        type: 'admin_credit',
+        amount: refundAmount,
+        status: 'completed',
+        description: `Withdrawal rejected - amount refunded to wallet. Reason: ${notes}`,
+        reference_id: `withdrawal_refund_${withdrawal.id}_${Date.now()}`,
+        created_by: adminId,
+        previous_balance: currentBalance,
+        new_balance: newBalance,
+        metadata: {
+          admin_id: adminId,
+          operation_type: 'withdrawal_refund',
+          withdrawal_id: withdrawal.id,
+          reason: notes || 'Withdrawal rejected by admin',
+          processed_at: new Date().toISOString()
+        }
+      }, { transaction: t });
       
       // Update withdrawal status
       await withdrawal.update({
@@ -616,21 +675,39 @@ const processRechargeAdminAction = async (adminId, rechargeId, action, notes = '
         updated_at: new Date()
       }, { transaction: t });
       
-      // Create transaction record
+      // Create transaction record for deposit
       await Transaction.create({
         user_id: recharge.user_id,
         type: 'deposit',
-        amount: totalAmount,
+        amount: depositAmount,
         status: 'completed',
         description: `Deposit approved by admin - ${notes}`,
         reference_id: recharge.order_id,
         metadata: {
           recharge_id: recharge.id,
-          deposit_amount: depositAmount,
-          bonus_amount: bonusAmount,
           admin_approved: true
         }
       }, { transaction: t });
+
+      // Create separate transaction record for first deposit bonus if applicable
+      if (isEligibleForFirstBonus && bonusAmount > 0) {
+        await Transaction.create({
+          user_id: recharge.user_id,
+          type: 'first_deposit_bonus',
+          amount: bonusAmount,
+          status: 'completed',
+          description: `First deposit bonus for ₹${depositAmount} deposit`,
+          reference_id: `first_deposit_bonus_${recharge.user_id}_${Date.now()}`,
+          metadata: {
+            bonus_type: 'first_deposit',
+            deposit_amount: depositAmount,
+            bonus_tier: { amount: depositAmount, bonus: bonusAmount },
+            usage_restriction: 'house_games_only',
+            allowed_games: ['wingo', '5d', 'k3', 'trx_wix'],
+            admin_approved: true
+          }
+        }, { transaction: t });
+      }
       
       await t.commit();
       
@@ -657,14 +734,15 @@ const processRechargeAdminAction = async (adminId, rechargeId, action, notes = '
       await Transaction.create({
         user_id: recharge.user_id,
         type: 'deposit_rejected',
-        amount: 0,
+        amount: parseFloat(recharge.amount),
         status: 'failed',
         description: `Deposit rejected by admin - ${notes}`,
         reference_id: recharge.order_id,
         metadata: {
           recharge_id: recharge.id,
           admin_rejected: true,
-          rejection_reason: notes
+          rejection_reason: notes,
+          processed_at: new Date().toISOString()
         }
       }, { transaction: t });
       

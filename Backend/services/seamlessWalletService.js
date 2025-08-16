@@ -1139,7 +1139,7 @@ const validateGameSession = async (sessionId) => {
 
     // Check if session is too old (24 hours)
     const sessionAge = Date.now() - gameSession.created_at.getTime();
-    if (sessionAge > 24 * 60 * 60 * 1000) {
+            if (sessionAge > 5 * 60 * 60 * 1000) {
       // Close expired session
       await gameSession.update({
         is_active: false,

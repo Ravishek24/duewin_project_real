@@ -178,6 +178,32 @@ class User extends Model {
             },
             last_login_ip: {
                 type: DataTypes.STRING
+            },
+            // 🎯 WAGERING SYSTEM FIELDS
+            total_external_credits: {
+                type: DataTypes.DECIMAL(20, 8),
+                defaultValue: 0.00,
+                comment: 'Total external credits received (affects wagering)'
+            },
+            total_self_rebate_credits: {
+                type: DataTypes.DECIMAL(20, 8),
+                defaultValue: 0.00,
+                comment: 'Total self rebate credits (no wagering impact)'
+            },
+            current_wagering_requirement: {
+                type: DataTypes.DECIMAL(20, 8),
+                defaultValue: 0.00,
+                comment: 'Current wagering requirement for withdrawal'
+            },
+            last_external_credit_at: {
+                type: DataTypes.DATE,
+                allowNull: true,
+                comment: 'Timestamp of last external credit received'
+            },
+            wagering_progress: {
+                type: DataTypes.DECIMAL(20, 8),
+                defaultValue: 0.00,
+                comment: 'Current wagering progress since last external credit'
             }
         }, {
             sequelize,
@@ -253,13 +279,17 @@ class User extends Model {
             hooks: {
                 beforeCreate: async (user) => {
                     if (user.password) {
-                        const salt = await bcrypt.genSalt(10);
+                        // Optimize bcrypt rounds based on environment
+                        const saltRounds = process.env.NODE_ENV === 'development' ? 6 : 10;
+                        const salt = await bcrypt.genSalt(saltRounds);
                         user.password = await bcrypt.hash(user.password, salt);
                     }
                 },
                 beforeUpdate: async (user) => {
                     if (user.changed('password')) {
-                        const salt = await bcrypt.genSalt(10);
+                        // Optimize bcrypt rounds based on environment
+                        const saltRounds = process.env.NODE_ENV === 'development' ? 6 : 10;
+                        const salt = await bcrypt.genSalt(saltRounds);
                         user.password = await bcrypt.hash(user.password, salt);
                     }
                 }
@@ -301,6 +331,16 @@ class User extends Model {
                 as: 'userrebateleveluser'
             });
         }
+
+        // 🎯 WAGERING SYSTEM ASSOCIATIONS
+if (models.CreditTransaction) {
+    this.hasMany(models.CreditTransaction, {
+        foreignKey: 'user_id',
+        as: 'creditTransactions'
+    });
+}
+
+
 
         // 🚫 REMOVED: SPRIBE associations to prevent duplicates
         // These are now handled in models/index.js separately
@@ -382,6 +422,61 @@ class User extends Model {
         this.spribe_token = null;
         this.spribe_token_created_at = null;
         this.spribe_token_expires_at = null;
+    }
+
+    // 🎯 WAGERING SYSTEM METHODS
+    
+    /**
+     * Update wagering requirement based on external credits
+     */
+    static async updateWageringRequirement(userId) {
+        const user = await this.findByPk(userId);
+        if (!user) return null;
+
+        const actualDeposit = parseFloat(user.actual_deposit_amount || 0);
+        const externalCredits = parseFloat(user.total_external_credits || 0);
+        
+        const newWageringRequirement = Math.max(actualDeposit, externalCredits);
+        
+        await user.update({
+            current_wagering_requirement: newWageringRequirement
+        });
+        
+        return newWageringRequirement;
+    }
+
+    /**
+     * Check if user is eligible for withdrawal
+     */
+    async isEligibleForWithdrawal() {
+        const totalBetAmount = parseFloat(this.total_bet_amount || 0);
+        const wageringRequirement = parseFloat(this.current_wagering_requirement || 0);
+        
+        return totalBetAmount > wageringRequirement;
+    }
+
+    /**
+     * Get wagering progress percentage
+     */
+    async getWageringProgress() {
+        const totalBetAmount = parseFloat(this.total_bet_amount || 0);
+        const wageringRequirement = parseFloat(this.current_wagering_requirement || 0);
+        
+        if (wageringRequirement <= 0) return 100;
+        
+        const progress = (totalBetAmount / wageringRequirement) * 100;
+        return Math.min(progress, 100);
+    }
+
+    /**
+     * Get remaining wagering requirement
+     */
+    async getRemainingWagering() {
+        const totalBetAmount = parseFloat(this.total_bet_amount || 0);
+        const wageringRequirement = parseFloat(this.current_wagering_requirement || 0);
+        
+        const remaining = wageringRequirement - totalBetAmount;
+        return Math.max(remaining, 0);
     }
 }
 

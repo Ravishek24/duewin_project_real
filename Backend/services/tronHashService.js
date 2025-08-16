@@ -3,8 +3,8 @@ const axios = require('axios');
 const winston = require('winston');
 const path = require('path');
 const unifiedRedis = require('../config/unifiedRedisManager');
-function getRedisHelper() {
-  return unifiedRedis.getHelper();
+async function getRedisHelper() {
+  return await unifiedRedis.getHelper();
 }
 
 // Configure Winston logger
@@ -206,7 +206,11 @@ const updateHashCollection = async (hashes, duration = null) => {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
         
         // Get current collection
-        let collection = await getRedisHelper().get(collectionKey);
+        const redis = await getRedisHelper();
+        if (!redis) {
+            throw new Error('Redis helper not available');
+        }
+        let collection = await redis.get(collectionKey);
         collection = collection ? JSON.parse(collection) : {};
 
         // Initialize collection for all digits if not present
@@ -233,10 +237,10 @@ const updateHashCollection = async (hashes, duration = null) => {
         }
 
         // Store updated collection
-        await getRedisHelper().set(collectionKey, JSON.stringify(collection));
+        await redis.set(collectionKey, JSON.stringify(collection));
         
         // Set expiry time on the hash collection to prevent memory leaks (7 days)
-        await getRedisHelper().expire(collectionKey, 7 * 24 * 60 * 60);
+        await redis.expire(collectionKey, 7 * 24 * 60 * 60);
         
         // Log collection status
         const status = Object.keys(collection).map(digit => ({
@@ -268,7 +272,11 @@ const hasEnoughHashes = async (duration = null) => {
     try {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
         console.log(`DEBUG: hasEnoughHashes - getting key ${collectionKey}`);
-        const collection = await withTimeout(getRedisHelper().get(collectionKey), 3000); // 3 second timeout
+        const redis = await getRedisHelper();
+        if (!redis) {
+            return false;
+        }
+        const collection = await withTimeout(redis.get(collectionKey), 3000); // 3 second timeout
         console.log(`DEBUG: hasEnoughHashes - got value for ${collectionKey}:`, collection ? 'exists' : 'null');
         if (!collection) return false;
 
@@ -302,7 +310,11 @@ const hasEnoughHashes = async (duration = null) => {
 const getHashForResult = async (result, duration = null) => {
     try {
         const collectionKey = duration ? getDurationHashKey(duration) : HASH_COLLECTION_KEY;
-        const collection = await getRedisHelper().get(collectionKey);
+        const redis = await getRedisHelper();
+        if (!redis) {
+            throw new Error('Redis helper not available');
+        }
+        const collection = await redis.get(collectionKey);
         if (!collection) {
             throw new Error(`No hash collection available for duration ${duration}`);
         }
@@ -314,7 +326,7 @@ const getHashForResult = async (result, duration = null) => {
 
         // Get and remove the first hash for this result
         const hash = parsed[result].shift();
-        await getRedisHelper().set(collectionKey, JSON.stringify(parsed));
+        await redis.set(collectionKey, JSON.stringify(parsed));
 
         return {
             hash,
@@ -332,7 +344,12 @@ const getHashForResult = async (result, duration = null) => {
 const startHashCollection = async () => {
     try {
         try {
-            await getRedisHelper().ping();
+            const redis = await getRedisHelper();
+            if (!redis) {
+                console.error('❌ Redis helper not available');
+                return;
+            }
+            await redis.ping();
         } catch (err) {
             console.error('❌ Redis is not reachable:', err);
             return;

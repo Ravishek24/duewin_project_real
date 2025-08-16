@@ -2,6 +2,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { pay101Config } = require('../config/paymentConfig');
+const Transaction = require('../models/Transaction');
 
 function generateSignature({ method, url, accessKey, timestamp, nonce, accessSecret }) {
     const baseString = `${method}&${url}&${accessKey}&${timestamp}&${nonce}`;

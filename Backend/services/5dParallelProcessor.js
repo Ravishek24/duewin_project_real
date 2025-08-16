@@ -112,7 +112,7 @@ class FiveDParallelProcessor {
                 await unifiedRedis.initialize();
             }
             
-            const redis = unifiedRedis.getHelper();
+            const redis = await unifiedRedis.getHelper();
             
             // Get combinations from Redis (using the correct key pattern from preload function)
             const combinationsKey = '5d_combinations_cache';
@@ -166,6 +166,7 @@ class FiveDParallelProcessor {
             console.log(`📊 [5D_PARALLEL] Sample combinations:`, combinations.slice(0, 3));
             
             // Get bet patterns from Redis
+            // CRITICAL FIX: Use the same key format as bet placement (fiveD, not 5d)
             const exposureKey = `exposure:fiveD:${duration}:${timeline}:${periodId}`;
             console.log(`🔍 [5D_PARALLEL] Looking for bet patterns in Redis key: ${exposureKey}`);
             const betPattern = await redis.hgetall(exposureKey);
@@ -383,7 +384,7 @@ class FiveDParallelProcessor {
                 C: numbers[2],
                 D: numbers[3],
                 E: numbers[4],
-                sum,
+                sum: sum,
                 sum_size: sumSize,
                 sum_parity: sumParity,
                 exposure: globalLowestExposure,

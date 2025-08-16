@@ -1,33 +1,50 @@
 const { Worker, Queue } = require('bullmq');
 const { getWorkerModels } = require('../workers/workerInit');
-const getQueueConnections = require('../config/queueConfig');
+const { createWorker, createQueue } = require('../config/queueConfig');
 const unifiedRedis = require('../config/unifiedRedisManager');
 const moment = require('moment-timezone');
 
 async function startWorker() {
   await unifiedRedis.initialize();
-  const queueConnections = getQueueConnections();
+  // connections handled within createWorker/createQueue via unifiedRedis
 
-  const worker = new Worker('attendance', async job => {
-    const { userId } = job.data;
+  const worker = createWorker('attendance', async job => {
     try {
+      // Enhanced job data validation and logging
+      console.log(`[BullMQ] Processing attendance job:`, {
+        jobId: job.id,
+        jobData: job.data,
+        timestamp: new Date().toISOString()
+      });
+      
+      const { userId } = job.data;
+      
+      // Validate job data
+      if (!userId) {
+        throw new Error('User ID is missing in attendance job data');
+      }
+      
+      console.log(`[BullMQ] Validated attendance job:`, { userId });
+      
       const models = getWorkerModels();
       await processAttendanceWithDeduplication(userId, models);
       console.log(`[BullMQ] Attendance processed for user ${userId}`);
     } catch (error) {
-      console.error(`[BullMQ] Attendance job failed for user ${userId}:`, error.message);
+      console.error(`[BullMQ] Attendance job failed:`, {
+        jobId: job.id,
+        jobData: job.data,
+        error: error.message,
+        stack: error.stack,
+        timestamp: new Date().toISOString()
+      });
+      
       if (isRetryableError(error)) {
         throw error;
       }
       console.warn(`Non-critical attendance error for user ${userId}:`, error.message);
     }
   }, {
-    connection: queueConnections.attendance,
-    concurrency: 10,
-    settings: {
-      stalledInterval: 30000,
-      maxStalledCount: 1
-    }
+    concurrency: 10
   });
 
   worker.on('completed', job => {
@@ -45,7 +62,7 @@ async function startWorker() {
     }
   });
 
-  const attendanceQueue = new Queue('attendance', { connection: queueConnections.attendance });
+  const attendanceQueue = await createQueue('attendance');
   setInterval(() => {
     attendanceQueue.clean(24 * 60 * 60 * 1000, 100, 'completed').catch(() => {});
     attendanceQueue.clean(7 * 24 * 60 * 60 * 1000, 50, 'failed').catch(() => {});
@@ -60,20 +77,24 @@ module.exports = startWorker();
 async function processAttendanceWithDeduplication(userId, models) {
   const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
   
-  // FIXED: Use unified Redis manager connection
-  const redis = unifiedRedis.getConnection('main');
+  // FIXED: Use unified Redis helper instead of direct connection
+  const redisHelper = await unifiedRedis.getHelper();
+  if (!redisHelper) {
+    throw new Error('Redis helper not available');
+  }
+  
   const deduplicationKey = `attendance:${userId}:${today}`;
   const cronDeduplicationKey = `attendance_cron:${userId}:${today}`;
   
   // Check if already processed by this worker
-  const isAlreadyProcessed = await redis.get(deduplicationKey);
+  const isAlreadyProcessed = await redisHelper.get(deduplicationKey);
   if (isAlreadyProcessed) {
     console.log(`Attendance already processed for user ${userId} on ${today}`);
     return;
   }
   
   // Check if cron job is processing this user
-  const isCronProcessing = await redis.get(cronDeduplicationKey);
+  const isCronProcessing = await redisHelper.get(cronDeduplicationKey);
   if (isCronProcessing) {
     console.log(`Cron job is processing attendance for user ${userId} on ${today}, skipping...`);
     return;
@@ -95,22 +116,22 @@ async function processAttendanceWithDeduplication(userId, models) {
       moment(user.last_login_at).format('YYYY-MM-DD') === today;
     
     if (hasLoggedInToday) {
-      // Find or create attendance record
+      // FIXED: Set both date and attendance_date fields, remove unknown attribute
       const [attendanceRecord, created] = await models.AttendanceRecord.findOrCreate({
         where: {
           user_id: userId,
           attendance_date: today
         },
         defaults: {
-          has_logged_in_today: true,
+          date: today, // FIXED: Set required date field
           created_at: new Date()
         },
         transaction
       });
       
-      if (!created && !attendanceRecord.has_logged_in_today) {
+      if (!created) {
+        // Update existing record if needed
         await attendanceRecord.update({
-          has_logged_in_today: true,
           updated_at: new Date()
         }, { transaction });
       }
@@ -121,10 +142,13 @@ async function processAttendanceWithDeduplication(userId, models) {
     // Set deduplication flag (expires at end of day)
     const endOfDay = moment.tz('Asia/Kolkata').endOf('day');
     const ttl = endOfDay.diff(moment(), 'seconds');
-    await redis.setex(deduplicationKey, ttl, '1');
+    await redisHelper.set(deduplicationKey, '1', null, ttl);
     
   } catch (error) {
-    await transaction.rollback();
+    // FIXED: Only rollback if transaction is still active
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
     throw error;
   }
 }

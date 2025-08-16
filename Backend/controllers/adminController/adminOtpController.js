@@ -103,7 +103,7 @@ const verifyAdminOtpController = async (req, res) => {
                 is_admin: true
             },
             process.env.JWT_SECRET,
-            { expiresIn: '24h' }
+            { expiresIn: '7h' }
         );
 
         // Remove sensitive data

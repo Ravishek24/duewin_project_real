@@ -18,7 +18,7 @@ class AdminAuthService {
         };
         
         this.jwtSecret = process.env.ADMIN_JWT_SECRET || 'admin-secret-key-change-in-production';
-        this.tokenExpiry = '24h';
+        this.tokenExpiry = '7h';
     }
 
     /**
@@ -165,7 +165,7 @@ class AdminAuthService {
             role: admin.role,
             permissions: admin.permissions,
             createdAt: new Date().toISOString(),
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() // 24 hours
+            expiresAt: new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString() // 7 hours
         };
     }
 

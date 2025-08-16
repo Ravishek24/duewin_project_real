@@ -53,6 +53,11 @@ class RateLimiterService {
         return this.checkRateLimit(messageKey, 'message', socket);
     }
 
+    async checkWebSocketOperationLimit(socket) {
+        const operationKey = `websocket:operations:${socket.user.id}`;
+        return this.checkRateLimit(operationKey, 'user', socket); // Uses user limit: 10 per minute
+    }
+
     async checkConnectionLimit(socket) {
         const userConnectionsKey = `connections:user:${socket.user.id}`;
         const ipConnectionsKey = `connections:ip:${socket.handshake.address}`;

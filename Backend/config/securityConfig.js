@@ -135,9 +135,9 @@ const securityConfig = {
             burst: 10
         },
         user: {
-            points: 50,
+            points: 10, // WebSocket operations: 10 per minute
             duration: 60, // per minute
-            burst: 5
+            burst: 2
         },
         message: {
             points: 5,
@@ -145,7 +145,7 @@ const securityConfig = {
             burst: 2
         },
         connection: {
-            maxPerUser: 3,
+            maxPerUser: 20, // WebSocket connections: 20 per user per hour
             maxPerIP: 5
         },
         // Enhanced rate limiting for suspicious activities

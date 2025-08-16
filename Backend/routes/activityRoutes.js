@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const Joi = require('joi');
-const { auth } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const { validateRequest } = require('../middleware/validation');
 const selfRebateService = require('../services/selfRebateService');
 const activityRewardsService = require('../services/activityRewardsService');
+const rateLimiters = require('../middleware/rateLimiter');
 
 // Validation schemas
 const historyQuerySchema = Joi.object({
@@ -13,8 +14,8 @@ const historyQuerySchema = Joi.object({
     days: Joi.number().integer().min(1).max(90).default(30)
 });
 
-// GET /api/self-rebate/history
-router.get('/self-rebate/history', auth, validateRequest(historyQuerySchema, 'query'), async (req, res) => {
+// GET /api/self-rebate/history - Rate limited
+router.get('/self-rebate/history', rateLimiters.activityRewards, validateRequest(historyQuerySchema, 'query'), async (req, res) => {
     try {
         const { page, limit } = req.query;
         const result = await selfRebateService.getSelfRebateHistory(req.user.user_id, page, limit);
@@ -34,7 +35,7 @@ router.get('/self-rebate/history', auth, validateRequest(historyQuerySchema, 'qu
 });
 
 // GET /api/self-rebate/stats
-router.get('/self-rebate/stats', auth, validateRequest(historyQuerySchema, 'query'), async (req, res) => {
+router.get('/self-rebate/stats', validateRequest(historyQuerySchema, 'query'), async (req, res) => {
     try {
         const { days } = req.query;
         const result = await selfRebateService.getSelfRebateStats(req.user.user_id, days);
@@ -54,7 +55,7 @@ router.get('/self-rebate/stats', auth, validateRequest(historyQuerySchema, 'quer
 });
 
 // GET /api/activity/status
-router.get('/status', auth, async (req, res) => {
+router.get('/status', async (req, res) => {
     try {
         const result = await activityRewardsService.getTodayActivityStatus(req.user.user_id);
         
@@ -73,7 +74,7 @@ router.get('/status', auth, async (req, res) => {
 });
 
 // GET /api/activity/history
-router.get('/history', auth, validateRequest(historyQuerySchema, 'query'), async (req, res) => {
+router.get('/history', validateRequest(historyQuerySchema, 'query'), async (req, res) => {
     try {
         const { days } = req.query;
         const result = await activityRewardsService.getActivityRewardHistory(req.user.user_id, days);
@@ -93,7 +94,7 @@ router.get('/history', auth, validateRequest(historyQuerySchema, 'query'), async
 });
 
 // POST /api/activity/claim
-router.post('/claim', auth, async (req, res) => {
+router.post('/claim', async (req, res) => {
     try {
         const { milestoneType, milestoneKey } = req.body;
         

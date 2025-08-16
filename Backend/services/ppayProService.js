@@ -7,6 +7,7 @@ const { WalletRecharge } = require('../models');
 const { WalletWithdrawal } = require('../models');
 const User = require('../models/User');
 const AttendanceRecord = require('../models/AttendanceRecord');
+const Transaction = require('../models/Transaction');
 const moment = require('moment-timezone');
 
 // Utility: Write deposit order logs to a file
@@ -242,6 +243,30 @@ async function processPpayProDepositCallback(callbackData) {
             orderStatus = 'pending';
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
+
+        // Create transaction record for both success and failure
+        if (Transaction && typeof Transaction.create === 'function') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: orderStatus === 'completed' ? 'deposit' : 'deposit_failed',
+                amount: parseFloat(order.amount),
+                status: orderStatus === 'completed' ? 'completed' : 'failed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                description: orderStatus === 'completed' ? 'PPAYPRO deposit successful' : 'PPAYPRO deposit failed',
+                reference_id: orderStatus === 'completed' ? `ppaypro_deposit_${order.order_id}` : `ppaypro_deposit_failed_${order.order_id}`,
+                metadata: {
+                    gateway: 'PPAYPRO',
+                    original_status: state,
+                    processed_at: new Date().toISOString()
+                },
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+            console.log(`✅ Transaction record created for PPAYPRO ${orderStatus === 'completed' ? 'deposit' : 'deposit_failed'}`);
+        }
+
         // 5. If completed, update user wallet
         if (orderStatus === 'completed') {
             const user = await User.findByPk(order.user_id);
@@ -252,6 +277,9 @@ async function processPpayProDepositCallback(callbackData) {
                   wallet_balance: newBalance,
                   actual_deposit_amount: newActualDeposit
                 });
+                
+                // Transaction record already created above for both success and failure
+                
                 // First recharge bonus logic
                 const referralService = require('./referralService');
                 if (!user.has_received_first_bonus) {
@@ -434,6 +462,34 @@ async function processPpayProWithdrawalCallback(callbackData) {
             orderStatus = 'pending';
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
+        
+        // ✅ Create transaction record for withdrawal
+        if (orderStatus === 'completed') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: 'withdrawal',
+                amount: parseFloat(order.amount),
+                status: 'completed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+        } else if (orderStatus === 'failed') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: 'withdrawal',
+                amount: parseFloat(order.amount),
+                status: 'failed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+        }
+        
         return { success: true, message: 'success' }; // Must return 'success' for PPayPro
     } catch (error) {
         return { success: false, message: error.message };

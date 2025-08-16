@@ -74,6 +74,18 @@ const getServices = () => {
 };
 
 /**
+ * 🎯 Import CreditService for wagering system integration
+ */
+const getCreditService = () => {
+    try {
+        return require('../services/creditService');
+    } catch (error) {
+        console.error('❌ Error importing CreditService:', error);
+        throw error;
+    }
+};
+
+/**
  * Auto-record attendance for all users (runs once daily at 12:30 AM IST)
  */
 const autoRecordDailyAttendance = async () => {
@@ -84,73 +96,79 @@ const autoRecordDailyAttendance = async () => {
         console.log('🕐 Starting daily attendance auto-record at 12:30 AM IST...');
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         const unifiedRedis = require('../config/unifiedRedisManager');
-        const redis = unifiedRedis.getHelper();
-        const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
-        if (!acquired) {
-            console.log('⚠️ Daily attendance cron already running on another instance, skipping...');
+        const redis = await unifiedRedis.getHelper();
+        if (!redis) {
+            console.error('❌ Redis not available for attendance cron');
             return;
         }
-        console.log('🔒 Acquired attendance lock, proceeding with daily attendance recording');
-        const today = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
-        // Get all active users
-        const users = await dbModels.User.findAll({ attributes: ['user_id', 'user_name'] });
-        // Get all user_ids who already have attendance for today
-        const existingRecords = await dbModels.AttendanceRecord.findAll({
-            where: { attendance_date: today },
-            attributes: ['user_id']
-        });
-        const existingUserIds = new Set(existingRecords.map(r => r.user_id));
-        // Prepare new attendance records
-        const newRecords = [];
-        for (const user of users) {
-            if (!existingUserIds.has(user.user_id)) {
-                // Get yesterday's attendance for streak calculation
-                const yesterday = moment.tz('Asia/Kolkata').subtract(1, 'day').format('YYYY-MM-DD');
-                const yesterdayAttendance = await dbModels.AttendanceRecord.findOne({
-                    where: { user_id: user.user_id, attendance_date: yesterday }
-                });
-                let streak = 1;
-                if (yesterdayAttendance && yesterdayAttendance.has_recharged) {
-                    streak = (yesterdayAttendance.streak_count || 0) + 1;
-                }
-                newRecords.push({
-                    user_id: user.user_id,
-                    date: today, // keep for legacy, but ensure attendance_date is set
-                    attendance_date: today,
-                    streak_count: streak,
-                    has_recharged: false,
-                    recharge_amount: 0,
-                    additional_bonus: 0,
-                    bonus_amount: 0,
-                    bonus_claimed: false,
-                    claim_eligible: false,
-                    created_at: new Date(),
-                    updated_at: new Date()
-                });
-            }
+
+        // Check if cron is already running
+        const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
+        if (!acquired) {
+            console.log('⚠️ Attendance cron already running, skipping...');
+            return;
         }
-        // Insert in batches
+
+        console.log('🔒 Acquired attendance lock, processing daily attendance');
+
+        // Get today's date in IST
+        const todayIST = moment.tz('Asia/Kolkata').format('YYYY-MM-DD');
+        console.log(`📅 Processing attendance for date: ${todayIST}`);
+
+        // Get all users who haven't recorded attendance today
+        const usersWithoutAttendance = await dbModels.User.findAll({
+            where: {
+                user_id: {
+                    [Op.notIn]: dbModels.sequelize.literal(`(
+                        SELECT DISTINCT user_id 
+                        FROM attendance_records 
+                        WHERE DATE(attendance_date) = '${todayIST}'
+                    )`)
+                },
+                status: 'active'
+            },
+            attributes: ['user_id', 'user_name', 'created_at'],
+            limit: BATCH_SIZE
+        });
+
+        console.log(`📊 Found ${usersWithoutAttendance.length} users without attendance today`);
+
+        if (usersWithoutAttendance.length === 0) {
+            console.log('✅ All users have already recorded attendance today');
+            return;
+        }
+
+        // Process attendance in batches
         let successCount = 0;
         let errorCount = 0;
-        for (let i = 0; i < newRecords.length; i += BATCH_SIZE) {
+
+        for (let i = 0; i < usersWithoutAttendance.length; i += BATCH_SIZE) {
+            const batch = usersWithoutAttendance.slice(i, i + BATCH_SIZE);
+            
             try {
-                await dbModels.AttendanceRecord.bulkCreate(newRecords.slice(i, i + BATCH_SIZE));
-                successCount += Math.min(BATCH_SIZE, newRecords.length - i);
-            } catch (err) {
-                errorCount += Math.min(BATCH_SIZE, newRecords.length - i);
-                console.error('❌ Error in batch attendance insert:', err.message);
+                // Create attendance records for this batch
+                const attendanceRecords = batch.map(user => ({
+                    user_id: user.user_id,
+                    attendance_date: todayIST,
+                    created_at: new Date(),
+                    updated_at: new Date()
+                }));
+
+                await dbModels.AttendanceRecord.bulkCreate(attendanceRecords);
+                successCount += batch.length;
+
+                console.log(`✅ Processed batch ${Math.floor(i / BATCH_SIZE) + 1}: ${batch.length} users`);
+
+            } catch (batchError) {
+                console.error(`❌ Error processing batch ${Math.floor(i / BATCH_SIZE) + 1}:`, batchError);
+                errorCount += batch.length;
             }
         }
-        const skipCount = users.length - newRecords.length;
-        console.log(`✅ Daily attendance recording completed: ${successCount} success, ${skipCount} skipped, ${errorCount} errors`);
-        logger.info('Daily attendance auto-record completed', {
-            date: today,
-            totalUsers: users.length,
-            successful: successCount,
-            skipped: skipCount,
-            errors: errorCount,
-            timestamp: moment.tz('Asia/Kolkata').toISOString()
-        });
+
+        console.log(`🎯 Attendance processing completed:`);
+        console.log(`   ✅ Success: ${successCount} users`);
+        console.log(`   ❌ Errors: ${errorCount} users`);
+
     } catch (error) {
         console.error('❌ Error in daily attendance cron:', error);
         logger.error('Error in daily attendance cron:', {
@@ -159,9 +177,10 @@ const autoRecordDailyAttendance = async () => {
             timestamp: moment.tz('Asia/Kolkata').toISOString()
         });
     } finally {
+        // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-            const redis = unifiedRedis.getHelper();
+            const redis = await unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -194,7 +213,7 @@ const processAttendanceBonuses = async () => {
         console.log('💰 Starting attendance bonus processing at 12:30 AM IST...');
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         const unifiedRedis = require('../config/unifiedRedisManager');
-        const redis = unifiedRedis.getHelper();
+        const redis = await unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         if (!acquired) {
             console.log('⚠️ Attendance bonus cron already running, skipping...');
@@ -290,7 +309,24 @@ const processAttendanceBonuses = async () => {
             where: { user_id: userId }
           });
         }
-        // 7. Batch create transactions
+
+        // 🎯 7. Create credit transactions for wagering tracking
+        const CreditService = getCreditService();
+        for (const userId in userBonusIncrements) {
+          try {
+            await CreditService.addCredit(
+              userId,
+              userBonusIncrements[userId],
+              'activity_reward',
+              'external',
+              `attendance_bonus_${userId}_${Date.now()}`,
+              `Daily attendance bonus - Total: ${userBonusIncrements[userId]}`
+            );
+          } catch (creditError) {
+            console.error(`⚠️ Error creating credit transaction for user ${userId}:`, creditError.message);
+          }
+        }
+        // 8. Batch create transactions
         for (let i = 0; i < transactionCreates.length; i += BATCH_SIZE) {
           await dbModels.Transaction.bulkCreate(transactionCreates.slice(i, i + BATCH_SIZE));
         }
@@ -314,7 +350,7 @@ const processAttendanceBonuses = async () => {
     } finally {
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-            const redis = unifiedRedis.getHelper();
+            const redis = await unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -340,7 +376,7 @@ const processDailyRebates = async () => {
         await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-        const redis = unifiedRedis.getHelper();
+        const redis = await unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -394,7 +430,7 @@ const processDailyRebates = async () => {
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-            const redis = unifiedRedis.getHelper();
+            const redis = await unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -530,7 +566,7 @@ const processRebateCommissionType = async (gameType) => {
                 if (level1Commission > 0) {
                     // Add deduplication key to prevent conflicts
                     const unifiedRedis = require('../config/unifiedRedisManager');
-                    const redis = unifiedRedis.getHelper();
+                    const redis = await unifiedRedis.getHelper();
                     const deduplicationKey = `rebate_commission:${referrer.user_id}:${batchId}:${userId}`;
                     const isAlreadyProcessed = await redis.get(deduplicationKey);
                     
@@ -548,6 +584,7 @@ const processRebateCommissionType = async (gameType) => {
                         type: 'rebate',
                         rebate_type: gameType,
                         distribution_batch_id: batchId,
+                        total_bet: betAmount, // Add the bet amount for this user on this date
                         status: 'paid',
                         created_at: new Date()
                     }, { transaction: t });
@@ -558,6 +595,17 @@ const processRebateCommissionType = async (gameType) => {
                         where: { user_id: referrer.user_id },
                         transaction: t
                     });
+
+                    // 🎯 Create credit transaction for wagering tracking
+                    const CreditService = getCreditService();
+                    await CreditService.addCredit(
+                        referrer.user_id,
+                        level1Commission,
+                        'referral_reward',
+                        'external',
+                        `rebate_${batchId}_${userId}`,
+                        `${gameType} rebate commission from ${user.user_name || userId}`
+                    );
 
                     // Create transaction record
                     await dbModels.Transaction.create({
@@ -616,7 +664,7 @@ const processVipLevelUpRewards = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-        const redis = unifiedRedis.getHelper();
+        const redis = await unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -647,7 +695,7 @@ const processVipLevelUpRewards = async () => {
 
         for (const reward of pendingRewards) {
             const userId = reward.user_id;
-            const rewardAmount = parseFloat(reward.reward_amount);
+            const rewardAmount = parseFloat(reward.amount); // 🆕 Fixed: use 'amount' not 'reward_amount'
             
             // Add deduplication key to prevent conflicts
             const deduplicationKey = `vip_levelup:${userId}:${reward.id}`;
@@ -661,12 +709,31 @@ const processVipLevelUpRewards = async () => {
             const t = await db.transaction();
             
             try {
+                // Get user's current balance before update
+                const user = await dbModels.User.findByPk(userId, {
+                    attributes: ['wallet_balance'],
+                    transaction: t
+                });
+                const currentBalance = parseFloat(user.wallet_balance);
+                const newBalance = currentBalance + rewardAmount;
+
                 // Use atomic operation to prevent deadlocks
                 await dbModels.User.increment('wallet_balance', {
                     by: rewardAmount,
                     where: { user_id: userId },
                     transaction: t
                 });
+
+                // 🎯 Create credit transaction for wagering tracking
+                const CreditService = getCreditService();
+                await CreditService.addCredit(
+                    userId,
+                    rewardAmount,
+                    'vip_reward',
+                    'external',
+                    `vip_levelup_${reward.id}_${Date.now()}`,
+                    `VIP Level ${reward.level} upgrade bonus`
+                );
 
                 // Mark reward as completed
                 await reward.update({
@@ -682,9 +749,12 @@ const processVipLevelUpRewards = async () => {
                     status: 'completed',
                     description: `VIP Level ${reward.level} upgrade bonus`,
                     reference_id: `vip_levelup_${reward.id}_${Date.now()}`,
+                    previous_balance: currentBalance,
+                    new_balance: newBalance,
                     metadata: {
                         vip_level: reward.level,
-                        reward_type: 'level_up'
+                        reward_type: 'level_up',
+                        processed_at: new Date().toISOString()
                     }
                 }, { transaction: t });
 
@@ -728,7 +798,7 @@ const processVipLevelUpRewards = async () => {
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-            const redis = unifiedRedis.getHelper();
+            const redis = await unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);
@@ -754,7 +824,7 @@ const processMonthlyVipRewards = async () => {
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
         const unifiedRedis = require('../config/unifiedRedisManager');
-        const redis = unifiedRedis.getHelper();
+        const redis = await unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
         if (!acquired) {
@@ -826,12 +896,20 @@ const processMonthlyVipRewards = async () => {
 
                 const monthlyReward = parseFloat(vipLevel.monthly_reward);
 
+                // Get user's current balance before update
+                const user = await dbModels.User.findByPk(userId, {
+                    attributes: ['wallet_balance'],
+                    transaction: t
+                });
+                const currentBalance = parseFloat(user.wallet_balance);
+                const newBalance = currentBalance + monthlyReward;
+
                 // Create VIP reward record
                 await dbModels.VipReward.create({
                     user_id: userId,
                     level: user.vip_level,
                     reward_type: 'monthly',
-                    reward_amount: monthlyReward,
+                    amount: monthlyReward, // 🆕 Fixed: use 'amount' not 'reward_amount'
                     status: 'completed'
                 }, { transaction: t });
 
@@ -842,6 +920,17 @@ const processMonthlyVipRewards = async () => {
                     transaction: t
                 });
 
+                // 🎯 Create credit transaction for wagering tracking
+                const CreditService = getCreditService();
+                await CreditService.addCredit(
+                    userId,
+                    monthlyReward,
+                    'vip_reward',
+                    'external',
+                    `vip_monthly_${userId}_${currentMonth}`,
+                    `VIP Level ${user.vip_level} monthly reward - ${currentMonth}`
+                );
+
                 // Create transaction record
                 await dbModels.Transaction.create({
                     user_id: userId,
@@ -850,10 +939,13 @@ const processMonthlyVipRewards = async () => {
                     status: 'completed',
                     description: `VIP Level ${user.vip_level} monthly reward - ${currentMonth}`,
                     reference_id: `vip_monthly_${userId}_${currentMonth}`,
+                    previous_balance: currentBalance,
+                    new_balance: newBalance,
                     metadata: {
                         vip_level: user.vip_level,
                         reward_type: 'monthly',
-                        month: currentMonth
+                        month: currentMonth,
+                        processed_at: new Date().toISOString()
                     }
                 }, { transaction: t });
 
@@ -898,7 +990,7 @@ const processMonthlyVipRewards = async () => {
         // Release lock
         try {
             const unifiedRedis = require('../config/unifiedRedisManager');
-            const redis = unifiedRedis.getHelper();
+            const redis = await unifiedRedis.getHelper();
             const currentValue = await redis.get(lockKey);
             if (currentValue === lockValue) {
                 await redis.del(lockKey);

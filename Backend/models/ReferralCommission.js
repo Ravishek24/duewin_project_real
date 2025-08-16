@@ -50,6 +50,12 @@ class ReferralCommission extends Model {
                 allowNull: true,
                 comment: 'Batch ID for commission distribution'
             },
+            total_bet: {
+                type: DataTypes.DECIMAL(15, 2),
+                allowNull: true,
+                defaultValue: 0.00,
+                comment: 'Total bet amount by referred user on the commission date'
+            },
             status: {
                 type: DataTypes.STRING,
                 allowNull: false,

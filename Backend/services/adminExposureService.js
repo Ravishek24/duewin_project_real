@@ -14,8 +14,28 @@ const unifiedRedis = require('../config/unifiedRedisManager');
 let unifiedRedisHelper = null;
 
 // Initialize unifiedRedisHelper if not already
-if (!unifiedRedisHelper) {
-    unifiedRedisHelper = unifiedRedis.getHelper();
+async function initializeRedisHelper() {
+    if (!unifiedRedisHelper) {
+        try {
+            // 🚀 ENHANCED: Ensure Redis manager is initialized first
+            if (!unifiedRedis.isInitialized) {
+                console.log('🔄 [ADMIN_EXPOSURE] Redis manager not initialized, initializing...');
+                await unifiedRedis.initialize();
+            }
+            
+            unifiedRedisHelper = await unifiedRedis.getHelper();
+            console.log('✅ [ADMIN_EXPOSURE] Redis helper initialized successfully');
+        } catch (error) {
+            console.error('❌ [ADMIN_EXPOSURE] Failed to initialize Redis helper:', error.message);
+            unifiedRedisHelper = null;
+            
+            // 🚀 ENHANCED: Reset helper to allow retry on next call
+            setTimeout(() => {
+                unifiedRedisHelper = null;
+            }, 5000);
+        }
+    }
+    return unifiedRedisHelper;
 }
 
 /**
@@ -70,7 +90,15 @@ class AdminExposureService {
             }
 
             const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
-            const exposureData = await unifiedRedisHelper.hgetall(exposureKey);
+            const helper = await initializeRedisHelper();
+            if (!helper) {
+                console.error('❌ [ADMIN_EXPOSURE] Redis helper not available');
+                return {
+                    success: false,
+                    error: 'Redis helper not available'
+                };
+            }
+            const exposureData = await helper.hgetall(exposureKey);
 
             // Convert cents to rupees and format
             const formattedExposure = {};
@@ -165,17 +193,54 @@ class AdminExposureService {
 
     /**
      * Get current period for duration (fetch from Redis scheduler)
+     * 🚀 ENHANCED: Added retry logic and better error handling
      */
     async getCurrentPeriod(duration) {
-        try {
-            const periodKey = `game_scheduler:wingo:${duration}:current`;
-            const period = await unifiedRedisHelper.get(periodKey);
-            if (!period) return null;
-            return period.periodId;
-        } catch (error) {
-            console.error('❌ [ADMIN_EXPOSURE] Error getting current period from Redis:', error);
-            return null;
+        const maxRetries = 3;
+        let lastError;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const helper = await initializeRedisHelper();
+                if (!helper) {
+                    console.error(`❌ [ADMIN_EXPOSURE] Redis helper not available (attempt ${attempt}/${maxRetries})`);
+                    if (attempt < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                        continue;
+                    }
+                    return null;
+                }
+                
+                const periodKey = `game_scheduler:wingo:${duration}:current`;
+                const period = await helper.get(periodKey);
+                if (!period) return null;
+                return period.periodId;
+            } catch (error) {
+                lastError = error;
+                console.error(`❌ [ADMIN_EXPOSURE] Error getting current period from Redis (attempt ${attempt}/${maxRetries}):`, error.message);
+                
+                // 🚀 ENHANCED: Handle specific Redis connection errors
+                if (error.message.includes('Connection is closed') || 
+                    error.code === 'EPIPE' || 
+                    error.message.includes('write EPIPE')) {
+                    
+                    console.log(`🔄 [ADMIN_EXPOSURE] Redis connection error, will retry...`);
+                    
+                    // Reset helper to force reconnection
+                    if (attempt < maxRetries) {
+                        unifiedRedisHelper = null;
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                        continue;
+                    }
+                }
+                
+                if (attempt === maxRetries) {
+                    console.error('❌ [ADMIN_EXPOSURE] All retry attempts failed for getCurrentPeriod');
+                }
+            }
         }
+        
+        return null;
     }
 
     /**
@@ -183,8 +248,19 @@ class AdminExposureService {
      */
     async getPeriodInfo(duration, periodId) {
         try {
+            const helper = await initializeRedisHelper();
+            if (!helper) {
+                console.error('❌ [ADMIN_EXPOSURE] Redis helper not available');
+                return {
+                    startTime: new Date().toISOString(),
+                    endTime: new Date(Date.now() + duration * 1000).toISOString(),
+                    timeRemaining: duration,
+                    duration: duration
+                };
+            }
+            
             const periodKey = `game_scheduler:wingo:${duration}:current`;
-            const period = await unifiedRedisHelper.get(periodKey);
+            const period = await helper.get(periodKey);
             if (!period) return null;
 
             // Use the endTime from Redis to calculate timeRemaining
@@ -213,43 +289,89 @@ class AdminExposureService {
      * Get bet distribution for period
      */
     async getBetDistribution(duration, periodId) {
-        try {
-            const betKey = `bets:wingo:${duration}:default:${periodId}`;
-            const betsData = await unifiedRedisHelper.hgetall(betKey);
-            
-            const distribution = {
-                totalBets: 0,
-                uniqueUsers: new Set(),
-                betTypes: {}
-            };
+        const maxRetries = 3;
+        let lastError;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const helper = await initializeRedisHelper();
+                if (!helper) {
+                    console.error(`❌ [ADMIN_EXPOSURE] Redis helper not available (attempt ${attempt}/${maxRetries})`);
+                    if (attempt < maxRetries) {
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                        continue;
+                    }
+                    return {
+                        totalBets: 0,
+                        uniqueUsers: 0,
+                        betTypes: {}
+                    };
+                }
+                
+                const betKey = `bets:wingo:${duration}:default:${periodId}`;
+                const betsData = await helper.hgetall(betKey);
+                
+                const distribution = {
+                    totalBets: 0,
+                    uniqueUsers: new Set(),
+                    betTypes: {}
+                };
 
-            for (const [betId, betJson] of Object.entries(betsData)) {
-                try {
-                    const bet = JSON.parse(betJson);
-                    distribution.totalBets++;
-                    distribution.uniqueUsers.add(bet.userId);
+                for (const [betId, betJson] of Object.entries(betsData)) {
+                    try {
+                        // Handle both JSON strings and objects
+                        let bet;
+                        if (typeof betJson === 'string') {
+                            bet = JSON.parse(betJson);
+                        } else {
+                            bet = betJson; // Already an object
+                        }
+                        
+                        distribution.totalBets++;
+                        distribution.uniqueUsers.add(bet.userId);
+                        
+                        const betType = bet.betType || 'unknown';
+                        distribution.betTypes[betType] = (distribution.betTypes[betType] || 0) + 1;
+                    } catch (parseError) {
+                        console.error('❌ [ADMIN_EXPOSURE] Error parsing bet:', parseError);
+                    }
+                }
+
+                return {
+                    totalBets: distribution.totalBets,
+                    uniqueUsers: distribution.uniqueUsers.size,
+                    betTypes: distribution.betTypes
+                };
+            } catch (error) {
+                lastError = error;
+                console.error(`❌ [ADMIN_EXPOSURE] Error getting bet distribution (attempt ${attempt}/${maxRetries}):`, error.message);
+                
+                // 🚀 ENHANCED: Handle specific Redis connection errors
+                if (error.message.includes('Connection is closed') || 
+                    error.code === 'EPIPE' || 
+                    error.message.includes('write EPIPE')) {
                     
-                    const betType = bet.betType || 'unknown';
-                    distribution.betTypes[betType] = (distribution.betTypes[betType] || 0) + 1;
-                } catch (parseError) {
-                    console.error('❌ [ADMIN_EXPOSURE] Error parsing bet:', parseError);
+                    console.log(`🔄 [ADMIN_EXPOSURE] Redis connection error, will retry...`);
+                    
+                    // Reset helper to force reconnection
+                    if (attempt < maxRetries) {
+                        unifiedRedisHelper = null;
+                        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+                        continue;
+                    }
+                }
+                
+                if (attempt === maxRetries) {
+                    console.error('❌ [ADMIN_EXPOSURE] All retry attempts failed for getBetDistribution');
                 }
             }
-
-            return {
-                totalBets: distribution.totalBets,
-                uniqueUsers: distribution.uniqueUsers.size,
-                betTypes: distribution.betTypes
-            };
-
-        } catch (error) {
-            console.error('❌ [ADMIN_EXPOSURE] Error getting bet distribution:', error);
-            return {
-                totalBets: 0,
-                uniqueUsers: 0,
-                betTypes: {}
-            };
         }
+        
+        return {
+            totalBets: 0,
+            uniqueUsers: 0,
+            betTypes: {}
+        };
     }
 
     /**
@@ -258,16 +380,56 @@ class AdminExposureService {
     async getUserDetailsForNumber(duration, periodId, number) {
         try {
             const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
-            const usersJson = await unifiedRedisHelper.hget(exposureKey, `users:number:${number}`);
-            const statsJson = await unifiedRedisHelper.hget(exposureKey, `stats:number:${number}`);
+            const helper = await initializeRedisHelper();
+            if (!helper) {
+                console.error('❌ [ADMIN_EXPOSURE] Redis helper not available');
+                return { success: false, error: 'Redis helper not available' };
+            }
             
-            const users = usersJson ? JSON.parse(usersJson) : [];
-            const statistics = statsJson ? JSON.parse(statsJson) : {
-                totalUsers: 0,
-                totalBetAmount: 0,
-                uniqueUsers: 0,
-                betTypes: {}
-            };
+            const usersJson = await helper.hget(exposureKey, `users:number:${number}`);
+            const statsJson = await helper.hget(exposureKey, `stats:number:${number}`);
+            
+            // Handle both JSON strings and objects
+            let users, statistics;
+            if (usersJson) {
+                if (typeof usersJson === 'string') {
+                    try {
+                        users = JSON.parse(usersJson);
+                    } catch (parseError) {
+                        console.warn('⚠️ [ADMIN_EXPOSURE] Failed to parse users JSON, using empty array:', parseError.message);
+                        users = [];
+                    }
+                } else {
+                    users = usersJson; // Already an object
+                }
+            } else {
+                users = [];
+            }
+            
+            if (statsJson) {
+                if (typeof statsJson === 'string') {
+                    try {
+                        statistics = JSON.parse(statsJson);
+                    } catch (parseError) {
+                        console.warn('⚠️ [ADMIN_EXPOSURE] Failed to parse stats JSON, using defaults:', parseError.message);
+                        statistics = {
+                            totalUsers: 0,
+                            totalBetAmount: 0,
+                            uniqueUsers: 0,
+                            betTypes: {}
+                        };
+                    }
+                } else {
+                    statistics = statsJson; // Already an object
+                }
+            } else {
+                statistics = {
+                    totalUsers: 0,
+                    totalBetAmount: 0,
+                    uniqueUsers: 0,
+                    betTypes: {}
+                };
+            }
             
             return {
                 success: true,
@@ -288,13 +450,30 @@ class AdminExposureService {
     async getAllNumbersUserCounts(duration, periodId) {
         try {
             const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
-            const periodStatsJson = await unifiedRedisHelper.hget(exposureKey, 'period:stats');
+            const helper = await initializeRedisHelper();
+            if (!helper) {
+                console.error('❌ [ADMIN_EXPOSURE] Redis helper not available');
+                return { success: false, error: 'Redis helper not available' };
+            }
+            
+            const periodStatsJson = await helper.hget(exposureKey, 'period:stats');
             
             if (!periodStatsJson) {
                 return { success: true, numberDistribution: {} };
             }
             
-            const periodStats = JSON.parse(periodStatsJson);
+            // Handle both JSON strings and objects (Redis sometimes stores objects directly)
+            let periodStats;
+            if (typeof periodStatsJson === 'string') {
+                try {
+                    periodStats = JSON.parse(periodStatsJson);
+                } catch (parseError) {
+                    console.warn('⚠️ [ADMIN_EXPOSURE] Failed to parse period stats JSON, treating as object:', parseError.message);
+                    periodStats = periodStatsJson; // Use as-is if it's already an object
+                }
+            } else {
+                periodStats = periodStatsJson; // Already an object
+            }
             
             return {
                 success: true,
@@ -321,7 +500,15 @@ class AdminExposureService {
             }
 
             const exposureKey = `exposure:wingo:${duration}:default:${periodId}`;
-            const exposureData = await unifiedRedisHelper.hgetall(exposureKey);
+            const helper = await initializeRedisHelper();
+            if (!helper) {
+                console.error('❌ [ADMIN_EXPOSURE] Redis helper not available');
+                return {
+                    success: false,
+                    error: 'Redis helper not available'
+                };
+            }
+            const exposureData = await helper.hgetall(exposureKey);
 
             // Convert cents to rupees and format
             const formattedExposure = {};
@@ -380,7 +567,7 @@ class AdminExposureService {
             const userDetails = {};
             for (let num = 0; num <= 9; num++) {
                 try {
-                    const usersJson = await unifiedRedisHelper.hget(exposureKey, `users:number:${num}`);
+                    const usersJson = await helper.hget(exposureKey, `users:number:${num}`);
                     if (usersJson && typeof usersJson === 'string') {
                         userDetails[num] = JSON.parse(usersJson);
                     } else if (Array.isArray(usersJson)) {
@@ -398,7 +585,7 @@ class AdminExposureService {
             const statistics = {};
             for (let num = 0; num <= 9; num++) {
                 try {
-                    const statsJson = await unifiedRedisHelper.hget(exposureKey, `stats:number:${num}`);
+                    const statsJson = await helper.hget(exposureKey, `stats:number:${num}`);
                     if (statsJson && typeof statsJson === 'string') {
                         statistics[`number:${num}`] = JSON.parse(statsJson);
                     } else if (statsJson && typeof statsJson === 'object') {
@@ -425,7 +612,7 @@ class AdminExposureService {
             // Get period summary
             let periodStats;
             try {
-                const periodStatsJson = await unifiedRedisHelper.hget(exposureKey, 'period:stats');
+                const periodStatsJson = await helper.hget(exposureKey, 'period:stats');
                 if (periodStatsJson && typeof periodStatsJson === 'string') {
                     periodStats = JSON.parse(periodStatsJson);
                 } else if (periodStatsJson && typeof periodStatsJson === 'object') {
@@ -481,10 +668,26 @@ class AdminExposureService {
     }
 
     /**
+     * Initialize Redis for monitoring
+     */
+    async initializeRedisForMonitoring() {
+        try {
+            console.log('🔄 [ADMIN_EXPOSURE] Initializing Redis for monitoring...');
+            await initializeRedisHelper();
+            console.log('✅ [ADMIN_EXPOSURE] Redis initialized for monitoring');
+        } catch (error) {
+            console.error('❌ [ADMIN_EXPOSURE] Failed to initialize Redis for monitoring:', error.message);
+        }
+    }
+
+    /**
      * Start real-time exposure monitoring
      */
-    startExposureMonitoring(io) {
+    async startExposureMonitoring(io) {
         console.log('🔐 [ADMIN_EXPOSURE] Starting real-time exposure monitoring...');
+
+        // Initialize Redis first
+        await this.initializeRedisForMonitoring();
 
         // Create admin namespace
         const adminNamespace = io.of('/admin');

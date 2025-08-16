@@ -6,6 +6,7 @@ const { generateWePaySignature, verifyWePaySignature } = require('../utils/wePay
 const User = require('../models/User');
 const WalletRecharge = require('../models/WalletRecharge');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
+const Transaction = require('../models/Transaction');
 const BankAccount = require('../models/BankAccount');
 const WithdrawalAdmin = require('../models/WithdrawalAdmin');
 const referralService = require('./referralService');
@@ -187,6 +188,26 @@ const processWePayCollectionCallback = async (callbackData) => {
         transaction: t
       });
       
+      // ✅ Create transaction record for successful deposit
+      await Transaction.create({
+        user_id: rechargeRecord.user_id,
+        type: 'deposit',
+        amount: addAmount,
+        status: 'completed',
+        payment_gateway_id: 'WEPAY',
+        order_id: callbackData.mchOrderNo,
+        transaction_id: callbackData.orderNo,
+        description: 'WEPAY deposit successful',
+        reference_id: `wepay_deposit_${callbackData.mchOrderNo}`,
+        metadata: {
+          gateway: 'WEPAY',
+          original_status: callbackData.tradeResult,
+          processed_at: new Date().toISOString()
+        },
+        created_at: new Date(),
+        updated_at: new Date()
+      }, { transaction: t });
+      
       // Process first recharge bonus if applicable
       if (rechargeRecord.payment_status === false) {
         await referralService.processFirstRechargeBonus(rechargeRecord.user_id, addAmount);
@@ -207,6 +228,27 @@ const processWePayCollectionCallback = async (callbackData) => {
         where: { order_id: callbackData.mchOrderNo },
         transaction: t
       });
+
+      // ✅ Create transaction record for failed deposit
+      await Transaction.create({
+        user_id: rechargeRecord.user_id,
+        type: 'deposit_failed',
+        amount: parseFloat(rechargeRecord.amount),
+        status: 'failed',
+        payment_gateway_id: 'WEPAY',
+        order_id: callbackData.mchOrderNo,
+        transaction_id: callbackData.orderNo || null,
+        description: 'WEPAY deposit failed',
+        reference_id: `wepay_deposit_failed_${callbackData.mchOrderNo}`,
+        metadata: {
+          gateway: 'WEPAY',
+          original_status: callbackData.tradeResult,
+          failure_reason: `Payment failed with status: ${callbackData.tradeResult}`,
+          processed_at: new Date().toISOString()
+        },
+        created_at: new Date(),
+        updated_at: new Date()
+      }, { transaction: t });
       
       await t.commit();
       
@@ -400,6 +442,20 @@ const processWePayTransferCallback = async (callbackData) => {
         where: { order_id: callbackData.merTransferId },
         transaction: t
       });
+      
+      // ✅ Create transaction record for successful withdrawal
+      await Transaction.create({
+        user_id: withdrawalRecord.user_id,
+        type: 'withdrawal',
+        amount: parseFloat(withdrawalRecord.withdrawal_amount),
+        status: 'completed',
+        payment_gateway_id: 'WEPAY',
+        order_id: callbackData.merTransferId,
+        transaction_id: callbackData.tradeNo || callbackData.merTransferId,
+        created_at: new Date(),
+        updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       return {
         success: true,
@@ -435,6 +491,20 @@ const processWePayTransferCallback = async (callbackData) => {
         where: { order_id: callbackData.merTransferId },
         transaction: t
       });
+      
+      // ✅ Create transaction record for failed withdrawal (refund)
+      await Transaction.create({
+        user_id: withdrawalRecord.user_id,
+        type: 'withdrawal',
+        amount: parseFloat(withdrawalRecord.withdrawal_amount),
+        status: 'failed',
+        payment_gateway_id: 'WEPAY',
+        order_id: callbackData.merTransferId,
+        transaction_id: callbackData.tradeNo || callbackData.merTransferId,
+        created_at: new Date(),
+        updated_at: new Date()
+      }, { transaction: t });
+      
       await t.commit();
       return {
         success: true,

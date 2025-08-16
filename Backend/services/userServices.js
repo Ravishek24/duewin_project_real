@@ -9,6 +9,7 @@ const config = require('../config/config');
 const { generateTokens, verifyAccessToken } = require('./tokenService');
 const UserSession = require('../models/UserSession');
 const crypto = require('crypto');
+const { getClientIp, sanitizeIp } = require('../utils/ipAddressUtils');
 
 // Function to generate a unique referral code
 const generateReferralCode = async () => {
@@ -415,7 +416,7 @@ const updateUserProfile = async (userId, userData) => {
             
             // Generate verification token
             const verificationToken = crypto.randomBytes(32).toString('hex');
-            const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+            const tokenExpiry = new Date(Date.now() + 5 * 60 * 60 * 1000); // 5 hours
 
             // Update user with new email and verification token
             await User.update(
@@ -699,7 +700,7 @@ const resetPassword = async (token, newPassword, otp_session_id, phone, otp_code
             formattedPhone = '+91' + formattedPhone;
         }
         // Verify OTP
-        const otpVerificationResult = await require('../services/otpService').checkOtpSession(otp_session_id, formattedPhone, otp_code);
+        const otpVerificationResult = await require('../services/otpService').verifyOtpCode(otp_session_id, formattedPhone, otp_code);
         if (!otpVerificationResult.success || !otpVerificationResult.verified) {
             return { success: false, message: 'OTP verification failed: ' + (otpVerificationResult.message || 'Invalid OTP') };
         }

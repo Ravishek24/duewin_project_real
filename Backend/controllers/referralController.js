@@ -5,7 +5,7 @@ const { Op } = require('sequelize');
 let referralService;
 try {
     referralService = require('../services/referralService');
-    console.log('✅ ReferralService imported successfully');
+    console.log('✅ ReferralService imported successfully from services');
     console.log('🔧 Available functions:', Object.keys(referralService));
 } catch (error) {
     console.error('❌ Failed to import referralService:', error);
@@ -140,7 +140,7 @@ const getTeamReferralsController = async (req, res) => {
             });
         }
 
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, page = 1, limit = 5 } = req.query;
         console.log('📅 Date parameters:', { start_date, end_date });
         
         let dateFilter = null;
@@ -160,8 +160,9 @@ const getTeamReferralsController = async (req, res) => {
         
         console.log('🔍 Date filter created:', dateFilter);
         console.log('📞 Calling referralService.getTeamReferrals...');
+        console.log('📄 Pagination params:', { page: parseInt(page), limit: parseInt(limit) });
         
-        const result = await referralService.getTeamReferrals(userId, dateFilter);
+        const result = await referralService.getTeamReferrals(userId, dateFilter, parseInt(page), parseInt(limit));
         console.log('📋 Service result received:', result);
         
         if (result.success) {
@@ -190,6 +191,73 @@ const getTeamReferralsController = async (req, res) => {
                 hasReferralService: !!referralService,
                 hasGetTeamReferrals: !!(referralService && referralService.getTeamReferrals)
             }
+        });
+    }
+};
+
+/**
+ * Get team referrals for any user (Admin function)
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getTeamReferralsForAdminController = async (req, res) => {
+    try {
+        console.log('👑 [ADMIN] getTeamReferralsForAdminController started');
+        
+        // Admin check is now handled at route level
+        console.log('👑 [ADMIN] User authenticated as admin:', req.user.user_id);
+
+        const { target_user_id, start_date, end_date, page = 1, limit = 5 } = req.query;
+        
+        if (!target_user_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'target_user_id is required'
+            });
+        }
+
+        console.log('🎯 Admin query params:', { target_user_id, start_date, end_date, page, limit });
+        
+        let dateFilter = null;
+        if (start_date && end_date) {
+            dateFilter = {
+                [Op.between]: [new Date(start_date), new Date(end_date)]
+            };
+        } else if (start_date) {
+            dateFilter = {
+                [Op.gte]: new Date(start_date)
+            };
+        } else if (end_date) {
+            dateFilter = {
+                [Op.lte]: new Date(end_date)
+            };
+        }
+        
+        console.log('🔍 Date filter created:', dateFilter);
+        console.log('📞 Calling referralService.getTeamReferralsForAdmin...');
+        
+        const result = await referralService.getTeamReferralsForAdmin(
+            parseInt(target_user_id), 
+            dateFilter,
+            parseInt(page), 
+            parseInt(limit)
+        );
+        
+        console.log('📋 Service result received:', result);
+        
+        if (result.success) {
+            console.log('✅ Returning success response');
+            return res.status(200).json(result);
+        } else {
+            console.log('❌ Service returned error:', result.message);
+            return res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('💥 [ADMIN] Error in getTeamReferralsForAdminController:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error fetching team referrals for admin',
+            error: error.message
         });
     }
 };
@@ -328,7 +396,26 @@ const getCommissionEarningsController = async (req, res) => {
         console.log('🆔 User ID:', req.user?.user_id);
         
         const userId = req.user.user_id;
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, page = 1, limit = 20 } = req.query;
+        
+        // Parse pagination parameters
+        const pageNum = parseInt(page) || 1;
+        const limitNum = parseInt(limit) || 20;
+        
+        // Validate pagination parameters
+        if (pageNum < 1) {
+            return res.status(400).json({
+                success: false,
+                message: 'Page number must be greater than 0'
+            });
+        }
+        
+        if (limitNum < 1 || limitNum > 100) {
+            return res.status(400).json({
+                success: false,
+                message: 'Limit must be between 1 and 100'
+            });
+        }
         
         let dateFilter = null;
         if (start_date && end_date) {
@@ -346,7 +433,8 @@ const getCommissionEarningsController = async (req, res) => {
         }
         
         console.log('📞 Calling referralService.getCommissionEarnings...');
-        const result = await referralService.getCommissionEarnings(userId, dateFilter);
+        console.log(`📄 Pagination: Page ${pageNum}, Limit ${limitNum}`);
+        const result = await referralService.getCommissionEarnings(userId, dateFilter, pageNum, limitNum);
         console.log('📋 Service result received:', result);
         
         if (result.success) {
@@ -576,5 +664,6 @@ module.exports = {
     getReferralTreeDetailsController,
     recordAttendanceController,
     getDirectReferralAnalyticsController,
-    getTeamReferralAnalyticsController
+    getTeamReferralAnalyticsController,
+    getTeamReferralsForAdminController
 };

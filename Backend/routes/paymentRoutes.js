@@ -38,7 +38,7 @@ console.log('ppayProDepositCallbackController:', typeof ppayProDepositCallbackCo
 console.log('ppayProWithdrawalCallbackController:', typeof ppayProWithdrawalCallbackController);
 console.log('solPayDepositCallbackController:', typeof solPayDepositCallbackController);
 console.log('solPayWithdrawalCallbackController:', typeof solPayWithdrawalCallbackController);
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const rateLimiters = require('../middleware/rateLimiter');
 const validationRules = require('../middleware/inputValidator');
 const { paymentCallbackWhitelist } = require('../middleware/paymentCallbackWhitelist');
@@ -47,13 +47,13 @@ console.log('paymentCallbackWhitelist:', typeof paymentCallbackWhitelist);
 const router = express.Router();
 
 // Protected routes (require authentication & phone verification)
-router.post('/payin', auth, payInController);
+router.post('/payin', payInController);
 
 // New two-step withdrawal with OTP verification
-router.post('/withdrawal/initiate', auth, requirePhoneVerification, initiateWithdrawalController);
+router.post('/withdrawal/initiate', initiateWithdrawalController);
 
 // Payment status
-router.get('/status/:order_id', auth, getPaymentStatusController);
+router.get('/status/:order_id', getPaymentStatusController);
 
 // Callback routes for WePayGlobal (public, accessed by payment gateway)
 // Apply IP whitelisting to protect callbacks
@@ -85,15 +85,15 @@ router.post('/solpay/payout-callback', paymentCallbackWhitelist, solPayWithdrawa
 
 // Get available deposit gateways (for frontend to show options)
 router.get('/available-gateways',
-    auth,
+
     rateLimiters.general,
     getAvailableDepositGatewaysController
 );
 
 // Deposit routes
 router.post('/deposit',
-    auth,
-    requirePhoneVerification,
+
+
     rateLimiters.payment,
     validationRules.payment,
     initiateDeposit
@@ -101,8 +101,8 @@ router.post('/deposit',
 
 // UTR Deposit routes
 router.post('/utr-deposit',
-    auth,
-    requirePhoneVerification,
+
+
     rateLimiters.payment,
     validationRules.payment,
     initiateUTRDeposit
@@ -110,8 +110,8 @@ router.post('/utr-deposit',
 
 // Withdrawal routes
 router.post('/withdrawal',
-    auth,
-    requirePhoneVerification,
+
+
     rateLimiters.withdrawal,
     validationRules.withdrawal,
     initiateWithdrawalController
@@ -119,13 +119,13 @@ router.post('/withdrawal',
 
 // History routes
 router.get('/deposit-history',
-    auth,
+
     rateLimiters.general,
     getDepositHistory
 );
 
 router.get('/withdrawal-history',
-    auth,
+
     rateLimiters.general,
     getWithdrawalHistory
 );

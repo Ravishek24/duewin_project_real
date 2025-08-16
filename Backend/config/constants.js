@@ -1,7 +1,7 @@
 // Authentication Constants
 const AUTH = {
     JWT_SECRET: process.env.JWT_SECRET || 'your-secret-key',
-    JWT_EXPIRES_IN: '24h',
+    JWT_EXPIRES_IN: '5h',
     REFRESH_TOKEN_EXPIRES_IN: '7d',
     PASSWORD_SALT_ROUNDS: 10
 };

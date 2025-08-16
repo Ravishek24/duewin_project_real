@@ -22,7 +22,9 @@ class BankAccount extends Model {
             },
             account_number: {
                 type: DataTypes.STRING,
-                allowNull: false
+                allowNull: false,
+                unique: true,
+                comment: 'Bank account number - must be unique across all users'
             },
             account_holder: {
                 type: DataTypes.STRING,

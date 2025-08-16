@@ -16,7 +16,7 @@ const {
   getFilteredGamesController,
   healthCheckController
 } = require('../controllers/seamlessController');
-const { auth } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const { validateSeamlessRequest } = require('../middlewares/seamlessMiddleware');
 const thirdPartyWalletService = require('../services/thirdPartyWalletService');
 const seamlessWalletService = require('../services/seamlessWalletService');
@@ -27,7 +27,7 @@ const SeamlessGameSession = require('../models/SeamlessGameSession');
 const router = express.Router();
 
 // Protected routes (require authentication)
-router.get('/games', auth, async (req, res) => {
+router.get('/games', async (req, res) => {
   try {
     const filters = {
       provider: req.query.provider,
@@ -53,17 +53,17 @@ router.get('/games', auth, async (req, res) => {
     });
   }
 });
-router.get('/launch/:gameId', auth, launchGameController);
+router.get('/launch/:gameId', launchGameController);
 
 // New routes for server-side game embedding to help bypass Cloudflare restrictions
-router.get('/iframe/:gameId', auth, serveGameInIframeController);
-router.get('/redirect/:gameId', auth, redirectToGameController);
+router.get('/iframe/:gameId', serveGameInIframeController);
+router.get('/redirect/:gameId', redirectToGameController);
 
 router.get('/health', healthCheckController);
 
 
 // Debug routes - direct access to the game URL without middleware or frontend formatting
-router.get('/debug-game/:gameId', auth, async (req, res) => {
+router.get('/debug-game/:gameId', async (req, res) => {
   try {
     const { gameId } = req.params;
     const userId = req.user.user_id;
@@ -151,11 +151,11 @@ router.get('/debug-game/:gameId', auth, async (req, res) => {
 });
 
 // Test page to help debug and demonstrate seamless integration
-router.get('/test', auth, testPageController);
+router.get('/test', testPageController);
 
 // Route to transfer funds to third-party wallet
 // FIXED: Ensure this route handler is properly async
-router.post('/transfer-to-third-party', auth, async (req, res) => {
+router.post('/transfer-to-third-party', async (req, res) => {
   try {
     const userId = req.user.user_id;
     const result = await thirdPartyWalletService.transferToThirdPartyWallet(userId);
@@ -182,7 +182,7 @@ router.post('/transfer-to-third-party', auth, async (req, res) => {
 });
 
 // NEW: Manual transfer endpoint for game preparation
-router.post('/prepare-for-game', auth, async (req, res) => {
+router.post('/prepare-for-game', async (req, res) => {
   try {
     const userId = req.user.user_id;
     const { gameId } = req.body;
@@ -231,8 +231,8 @@ router.post('/prepare-for-game', auth, async (req, res) => {
 });
 
 // Admin-only routes
-router.post('/freerounds/add', auth, addFreeRoundsController);
-router.post('/freerounds/remove', auth, removeFreeRoundsController);
+router.post('/freerounds/add', addFreeRoundsController);
+router.post('/freerounds/remove', removeFreeRoundsController);
 
 // New unified callback route for game providers
 router.get('/callback', validateSeamlessRequest, unifiedCallbackController);

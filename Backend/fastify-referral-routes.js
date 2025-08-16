@@ -11,7 +11,8 @@ const {
     getReferralTreeDetailsController,
     recordAttendanceController,
     getDirectReferralAnalyticsController,
-    getTeamReferralAnalyticsController
+    getTeamReferralAnalyticsController,
+    getTeamReferralsForAdminController
 } = require('./controllers/referralController');
 
 const referralService = require('./services/referralService');
@@ -264,6 +265,42 @@ async function referralRoutes(fastify, options) {
         }
     });
 
+    // Admin team referrals
+    fastify.get('/admin/team', {
+        preHandler: authenticate,
+        schema: {
+            querystring: {
+                type: 'object',
+                properties: {
+                    target_user_id: { type: 'string' },
+                    start_date: { type: 'string', format: 'date' },
+                    end_date: { type: 'string', format: 'date' },
+                    page: { type: 'integer', minimum: 1, default: 1 },
+                    limit: { type: 'integer', minimum: 1, maximum: 50, default: 5 }
+                },
+                required: ['target_user_id']
+            },
+            response: {
+                200: referralSchemas.successResponseSchema,
+                400: referralSchemas.errorResponseSchema,
+                401: referralSchemas.errorResponseSchema,
+                403: referralSchemas.errorResponseSchema,
+                500: referralSchemas.errorResponseSchema
+            }
+        }
+    }, async (request, reply) => {
+        try {
+            const result = await getTeamReferralsForAdminController(request, reply);
+            return result;
+        } catch (error) {
+            fastify.log.error('Error in admin team referrals:', error);
+            return reply.code(500).send({
+                success: false,
+                message: 'Server error'
+            });
+        }
+    });
+
     // Attendance bonus endpoints
     fastify.post('/attendance', {
         preHandler: authenticate,
@@ -465,6 +502,110 @@ async function referralRoutes(fastify, options) {
             return reply.code(500).send({
                 success: false,
                 message: 'Server error claiming invitation bonus',
+                debug: { error: error.message }
+            });
+        }
+    });
+
+    // 🆕 NEW: Get invitation reward history
+    fastify.get('/invitation/history', {
+        preHandler: authenticate,
+        schema: {
+            querystring: {
+                type: 'object',
+                properties: {
+                    page: { type: 'number', minimum: 1, default: 1 },
+                    limit: { type: 'number', minimum: 1, maximum: 100, default: 10 }
+                }
+            },
+            response: {
+                200: referralSchemas.successResponseSchema,
+                400: referralSchemas.errorResponseSchema,
+                401: referralSchemas.errorResponseSchema,
+                500: referralSchemas.errorResponseSchema
+            }
+        }
+    }, async (request, reply) => {
+        try {
+            fastify.log.info('🎁 DEBUG: Invitation reward history route hit');
+            const userId = request.user.user_id;
+            const page = parseInt(request.query.page) || 1;
+            const limit = parseInt(request.query.limit) || 10;
+            
+            fastify.log.info('🆔 User ID:', userId, 'Page:', page, 'Limit:', limit);
+            
+            if (!referralService || !referralService.getInvitationRewardHistory) {
+                return reply.code(500).send({
+                    success: false,
+                    message: 'Invitation history service not available'
+                });
+            }
+            
+            const result = await referralService.getInvitationRewardHistory(userId, page, limit);
+            fastify.log.info('📋 Invitation history result:', result);
+            
+            if (result.success) {
+                return reply.code(200).send(result);
+            } else {
+                return reply.code(400).send(result);
+            }
+        } catch (error) {
+            fastify.log.error('💥 Error in invitation history route:', error);
+            return reply.code(500).send({
+                success: false,
+                message: 'Server error getting invitation reward history',
+                debug: { error: error.message }
+            });
+        }
+    });
+
+    // 🆕 NEW: Get valid referral history
+    fastify.get('/valid/history', {
+        preHandler: authenticate,
+        schema: {
+            querystring: {
+                type: 'object',
+                properties: {
+                    page: { type: 'number', minimum: 1, default: 1 },
+                    limit: { type: 'number', minimum: 1, maximum: 100, default: 10 }
+                }
+            },
+            response: {
+                200: referralSchemas.successResponseSchema,
+                400: referralSchemas.errorResponseSchema,
+                401: referralSchemas.errorResponseSchema,
+                500: referralSchemas.errorResponseSchema
+            }
+        }
+    }, async (request, reply) => {
+        try {
+            fastify.log.info('👥 DEBUG: Valid referral history route hit');
+            const userId = request.user.user_id;
+            const page = parseInt(request.query.page) || 1;
+            const limit = parseInt(request.query.limit) || 10;
+            
+            fastify.log.info('🆔 User ID:', userId, 'Page:', page, 'Limit:', limit);
+            
+            if (!referralService || !referralService.getValidReferralHistory) {
+                return reply.code(500).send({
+                    success: false,
+                    message: 'Valid referral history service not available'
+                });
+            }
+            
+            const result = await referralService.getValidReferralHistory(userId, page, limit);
+            fastify.log.info('📋 Valid referral history result:', result);
+            
+            if (result.success) {
+                return reply.code(200).send(result);
+            } else {
+                return reply.code(400).send(result);
+            }
+        } catch (error) {
+            fastify.log.error('💥 Error in valid referral history route:', error);
+            return reply.code(500).send({
+                success: false,
+                message: 'Server error getting valid referral history',
                 debug: { error: error.message }
             });
         }

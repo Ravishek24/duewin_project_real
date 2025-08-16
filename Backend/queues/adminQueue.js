@@ -1,13 +1,13 @@
 const { Queue } = require('bullmq');
-const getQueueConnections = require('../config/queueConfig');
+const unifiedRedis = require('../config/unifiedRedisManager');
 
 // Lazy queue creation - only create when needed
 let adminQueue = null;
 
 function getAdminQueue() {
   if (!adminQueue) {
-    const queueConnections = getQueueConnections();
-    adminQueue = new Queue('admin', { connection: queueConnections.admin });
+    const connection = unifiedRedis.getConnectionSync('main');
+    adminQueue = new Queue('admin', { connection });
   }
   return adminQueue;
 }

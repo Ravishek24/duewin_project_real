@@ -4,6 +4,7 @@ const ghPayConfig = require('../config/ghPayConfig');
 const { WalletRecharge } = require('../models');
 const { WalletWithdrawal } = require('../models');
 const User = require('../models/User');
+const Transaction = require('../models/Transaction');
 
 // Utility: Generate GH Pay signature
 function generateGhPaySignature(params, secretKey = ghPayConfig.key) {
@@ -165,7 +166,63 @@ async function processGhPayCallback(callbackData) {
             orderStatus = 'pending';
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
-        // 5. If deposit and completed, update user wallet
+
+        // Create transaction record for both success and failure
+        if (Transaction && typeof Transaction.create === 'function') {
+            const transactionType = isDeposit ? 
+                (orderStatus === 'completed' ? 'deposit' : 'deposit_failed') :
+                (orderStatus === 'completed' ? 'withdrawal' : 'withdrawal_failed');
+            
+            await Transaction.create({
+                user_id: order.user_id,
+                type: transactionType,
+                amount: parseFloat(order.amount),
+                status: orderStatus === 'completed' ? 'completed' : 'failed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: orderId,
+                transaction_id: callbackData.transactionNo || orderId,
+                description: `GHPAY ${isDeposit ? 'deposit' : 'withdrawal'} ${orderStatus === 'completed' ? 'successful' : 'failed'}`,
+                reference_id: `ghpay_${isDeposit ? 'deposit' : 'withdrawal'}_${orderStatus === 'completed' ? 'success' : 'failed'}_${orderId}`,
+                metadata: {
+                    gateway: 'GHPAY',
+                    transaction_type: isDeposit ? 'deposit' : 'withdrawal',
+                    original_status: status,
+                    processed_at: new Date().toISOString()
+                },
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+            console.log(`✅ Transaction record created for GHPAY ${transactionType}`);
+        }
+        
+        // ✅ Create transaction record
+        if (orderStatus === 'completed') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: isDeposit ? 'deposit' : 'withdrawal',
+                amount: parseFloat(order.amount),
+                status: 'completed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+        } else if (orderStatus === 'failed') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: isDeposit ? 'deposit' : 'withdrawal',
+                amount: parseFloat(order.amount),
+                status: 'failed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+        }
+        
+        // If deposit completed, update user wallet
         if (isDeposit && orderStatus === 'completed') {
             const user = await User.findByPk(order.user_id);
             if (user) {

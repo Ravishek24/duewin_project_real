@@ -1,6 +1,6 @@
 // Backend/routes/internalGameRoutes.js - SIMPLIFIED VERSION - REPLACE ENTIRE FILE
 const express = require('express');
-const { auth, requirePhoneVerification } = require('../middlewares/authMiddleware');
+// NOTE: Auth middleware is applied at router level in index.js
 const rateLimiters = require('../middleware/rateLimiter');
 const gameLogicService = require('../services/gameLogicService');
 
@@ -12,15 +12,16 @@ const router = express.Router();
  */
 
 // Middleware for admin routes
-router.use(auth);
+// NOTE: Authentication is handled at router level in index.js
 
 /**
  * Admin-only routes for game management
  */
 
-// Get bet distribution for a period (admin only)
+// Get bet distribution for a period (admin only) - Using existing game rate limiter
 router.get('/admin/:gameType/:duration/:periodId/distribution', 
-    requirePhoneVerification,
+    
+    rateLimiters.internalGameStats,
     async (req, res) => {
         try {
             // Check if user is admin
@@ -53,9 +54,10 @@ router.get('/admin/:gameType/:duration/:periodId/distribution',
     }
 );
 
-// Get optimization analysis for a period (admin only)
+// Get optimization analysis for a period (admin only) - Using existing game rate limiter
 router.get('/admin/:gameType/:duration/:periodId/analysis', 
-    requirePhoneVerification,
+    
+    rateLimiters.internalGameStats,
     async (req, res) => {
         try {
             // Check if user is admin
@@ -100,7 +102,7 @@ router.get('/admin/:gameType/:duration/:periodId/analysis',
 
 // Override result for a period (admin only)
 router.post('/admin/:gameType/:duration/:periodId/override', 
-    requirePhoneVerification,
+    
     async (req, res) => {
         try {
             // Check if user is admin
@@ -146,7 +148,7 @@ router.post('/admin/:gameType/:duration/:periodId/override',
 
 // Get optimization performance metrics (admin only)
 router.get('/admin/:gameType/:duration/:periodId/performance', 
-    requirePhoneVerification,
+    
     async (req, res) => {
         try {
             // Check if user is admin
@@ -181,7 +183,7 @@ router.get('/admin/:gameType/:duration/:periodId/performance',
 
 // Get system health check (admin only)
 router.get('/admin/system/health', 
-    requirePhoneVerification,
+    
     async (req, res) => {
         try {
             // Check if user is admin

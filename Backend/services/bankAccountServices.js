@@ -1,6 +1,7 @@
 const BankAccount = require('../models/BankAccount');
 const User = require('../models/User');
 const { sequelize } = require('../config/db');
+const { Op } = require('sequelize');
 const otpService = require('./otpService');
 
 // Service to get user's bank accounts
@@ -42,6 +43,18 @@ const initBankAccountAddition = async (userId, accountData) => {
             return {
                 success: false,
                 message: 'User not found.'
+            };
+        }
+        
+        // Check if bank account number already exists (globally unique)
+        const existingAccount = await BankAccount.findOne({
+            where: { account_number: account_number }
+        });
+        
+        if (existingAccount) {
+            return {
+                success: false,
+                message: 'Bank account number already exists. Please use a different account number.'
             };
         }
         
@@ -107,7 +120,7 @@ const completeBankAccountAddition = async (userId, otpSessionId, phone, otp_code
             };
         }
         // Check OTP verification status (with phone and code)
-        const otpVerificationResult = await otpService.checkOtpSession(otpSessionId, phone, otp_code);
+        const otpVerificationResult = await otpService.verifyOtpCode(otpSessionId, phone, otp_code);
         if (!otpVerificationResult.success) {
             await t.rollback();
             return {
@@ -126,6 +139,21 @@ const completeBankAccountAddition = async (userId, otpSessionId, phone, otp_code
         }
         // Extract account data from OTP session (stored in udf1)
         const accountData = JSON.parse(otpVerificationResult.userData?.udf1 || '{}');
+        
+        // Check if bank account number already exists (globally unique)
+        const existingAccountNumber = await BankAccount.findOne({
+            where: { account_number: accountData.account_number },
+            transaction: t
+        });
+        
+        if (existingAccountNumber) {
+            await t.rollback();
+            return {
+                success: false,
+                message: 'Bank account number already exists. Please use a different account number.'
+            };
+        }
+        
         // Check if this is the first account (should be primary)
         const existingAccounts = await BankAccount.count({
             where: { user_id: userId },
@@ -201,8 +229,28 @@ const updateBankAccount = async (userId, accountId, accountData) => {
             bank_name, 
             ifsc_code, 
             branch_name,
-            is_primary 
+            is_primary,
+            account_number
         } = accountData;
+
+        // If updating account number, check for duplicates
+        if (account_number && account_number !== bankAccount.account_number) {
+            const existingAccountNumber = await BankAccount.findOne({
+                where: { 
+                    account_number: account_number,
+                    bank_account_id: { [Op.ne]: accountId } // Exclude current account
+                },
+                transaction: t
+            });
+            
+            if (existingAccountNumber) {
+                await t.rollback();
+                return {
+                    success: false,
+                    message: 'Bank account number already exists. Please use a different account number.'
+                };
+            }
+        }
 
         // If this account should be primary, unset primary from all other accounts
         if (is_primary) {

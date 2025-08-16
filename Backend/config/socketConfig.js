@@ -154,7 +154,10 @@ const setIo = (socketIoInstance) => {
  */
 const getIo = () => {
     if (!io) {
-        console.warn('⚠️ Socket.IO instance not initialized');
+        // Suppress noisy warning on scheduler or non-WS processes
+        if (process.env.SERVICE_ROLE !== 'scheduler') {
+            console.warn('⚠️ Socket.IO instance not initialized');
+        }
         return null;
     }
     return io;

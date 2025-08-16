@@ -6,9 +6,10 @@ const spribeService = require('../services/spribeService');
 const { validateSpribeSignature } = require('../utils/spribeSignatureUtils');
 const { getModels } = require('../models');
 const spribeConfig = require('../config/spribeConfig');
+const rateLimiters = require('../middleware/rateLimiter');
 
 // 🔥 FIXED: Authentication endpoint according to Spribe spec
-router.post('/auth', async (req, res) => {
+router.post('/auth', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('🔐 ===== SPRIBE AUTH ENDPOINT =====');
     console.log('📦 Incoming request:', {
@@ -130,7 +131,7 @@ router.post('/auth', async (req, res) => {
 });
 
 // 🔥 FIXED: Player info endpoint
-router.post('/info', async (req, res) => {
+router.post('/info', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('ℹ️ ===== SPRIBE INFO ENDPOINT =====');
     console.log('📦 Incoming request:', {
@@ -196,7 +197,7 @@ router.post('/info', async (req, res) => {
 });
 
 // 🔥 ADDED: GET route for withdraw endpoint (for callback URL testing)
-router.get('/withdraw', async (req, res) => {
+router.get('/withdraw', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('💸 ===== SPRIBE WITHDRAW GET ENDPOINT (TEST) =====');
     console.log('📦 Incoming GET request:', {
@@ -223,7 +224,7 @@ router.get('/withdraw', async (req, res) => {
 });
 
 // 🔥 FIXED: Withdraw endpoint (bet) - POST method
-router.post('/withdraw', async (req, res) => {
+router.post('/withdraw', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('💸 ===== SPRIBE WITHDRAW ENDPOINT =====');
     console.log('📦 Incoming request:', {
@@ -264,7 +265,7 @@ router.post('/withdraw', async (req, res) => {
 });
 
 // 🔥 ADDED: GET route for deposit endpoint (for callback URL testing)
-router.get('/deposit', async (req, res) => {
+router.get('/deposit', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('💰 ===== SPRIBE DEPOSIT GET ENDPOINT (TEST) =====');
     console.log('📦 Incoming GET request:', {
@@ -291,7 +292,7 @@ router.get('/deposit', async (req, res) => {
 });
 
 // 🔥 FIXED: Deposit endpoint (win) - POST method
-router.post('/deposit', async (req, res) => {
+router.post('/deposit', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('💰 ===== SPRIBE DEPOSIT ENDPOINT =====');
     console.log('📦 Incoming request:', {
@@ -332,7 +333,7 @@ router.post('/deposit', async (req, res) => {
 });
 
 // 🔥 ADDED: GET route for rollback endpoint (for callback URL testing)
-router.get('/rollback', async (req, res) => {
+router.get('/rollback', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('🔄 ===== SPRIBE ROLLBACK GET ENDPOINT (TEST) =====');
     console.log('📦 Incoming GET request:', {
@@ -359,7 +360,7 @@ router.get('/rollback', async (req, res) => {
 });
 
 // 🔥 FIXED: Rollback endpoint - POST method
-router.post('/rollback', async (req, res) => {
+router.post('/rollback', rateLimiters.spribeGame, async (req, res) => {
   try {
     console.log('🔄 ===== SPRIBE ROLLBACK ENDPOINT =====');
     console.log('📦 Incoming request:', {
@@ -400,7 +401,7 @@ router.post('/rollback', async (req, res) => {
 });
 
 // 🔥 ADDED: Game launch endpoint
-router.get('/launch/:gameId', async (req, res) => {
+router.get('/launch/:gameId', rateLimiters.spribeGame, async (req, res) => {
   try {
     const { gameId } = req.params;
     const { userId } = req.query;
@@ -434,7 +435,7 @@ router.get('/launch/:gameId', async (req, res) => {
 });
 
 // 🔥 ADDED: Get games list
-router.get('/games', async (req, res) => {
+router.get('/games', rateLimiters.spribeGame, async (req, res) => {
   try {
     const result = await spribeService.listGames();
     return res.json(result);

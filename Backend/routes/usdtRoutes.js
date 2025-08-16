@@ -5,23 +5,22 @@ const {
     updateUsdtAccount, 
     deleteUsdtAccount 
 } = require('../controllers/usdtAccountController');
-const { auth } = require('../middlewares/authMiddleware');
+const rateLimiters = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
-// All USDT account routes require authentication
-router.use(auth);
+// NOTE: All USDT account routes are already protected by authMiddleware.auth at the router level in index.js
 
-// Get all USDT accounts for the authenticated user
-router.get('/', getUsdtAccounts);
+// Get all USDT accounts for the authenticated user - Rate limited
+router.get('/', rateLimiters.usdtOperations, getUsdtAccounts);
 
-// Add a new USDT account
-router.post('/', addUsdtAccount);
+// Add a new USDT account - Rate limited
+router.post('/', rateLimiters.usdtOperations, addUsdtAccount);
 
-// Update a USDT account
-router.put('/:id', updateUsdtAccount);
+// Update a USDT account - Rate limited
+router.put('/:id', rateLimiters.usdtOperations, updateUsdtAccount);
 
-// Delete a USDT account
-router.delete('/:id', deleteUsdtAccount);
+// Delete a USDT account - Rate limited
+router.delete('/:id', rateLimiters.usdtOperations, deleteUsdtAccount);
 
 module.exports = router;

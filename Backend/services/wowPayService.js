@@ -2,7 +2,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const wowPayConfig = require('../config/wowPayConfig');
 // Import models with error handling
-let WalletRecharge, WalletWithdrawal, User;
+let WalletRecharge, WalletWithdrawal, User, Transaction;
 const AttendanceRecord = require('../models/AttendanceRecord');
 const moment = require('moment-timezone');
 
@@ -16,6 +16,7 @@ const initializeModels = async () => {
         WalletRecharge = models.WalletRecharge;
         WalletWithdrawal = models.WalletWithdrawal; 
         User = models.User;
+        Transaction = models.Transaction;
         
         if (WalletRecharge) {
             console.log('✅ WalletRecharge model loaded successfully');
@@ -25,6 +26,9 @@ const initializeModels = async () => {
         }
         if (User) {
             console.log('✅ User model loaded successfully');
+        }
+        if (Transaction) {
+            console.log('✅ Transaction model loaded successfully');
         }
         
         return true;
@@ -37,6 +41,7 @@ const initializeModels = async () => {
             WalletRecharge = models.WalletRecharge || models.models?.WalletRecharge;
             WalletWithdrawal = models.WalletWithdrawal || models.models?.WalletWithdrawal;
             User = models.User || models.models?.User;
+            Transaction = models.Transaction || models.models?.Transaction;
             
             if (WalletRecharge) {
                 console.log('✅ WalletRecharge model loaded via sync import');
@@ -240,6 +245,22 @@ async function processWowPayDepositCallback(callbackData) {
                               wallet_balance: newBalance,
                               actual_deposit_amount: newActualDeposit
                             });
+                            
+                            // ✅ Create transaction record for deposit
+                            if (Transaction && typeof Transaction.create === 'function') {
+                                await Transaction.create({
+                                    user_id: order.user_id,
+                                    type: 'deposit',
+                                    amount: parseFloat(order.amount),
+                                    status: 'completed',
+                                    payment_gateway_id: 'WOWPAY',
+                                    order_id: orderId,
+                                    transaction_id: callbackData.order_sn || orderId,
+                                    created_at: new Date(),
+                                    updated_at: new Date()
+                                });
+                            }
+                            
                             // First recharge bonus logic
                             const referralService = require('./referralService');
                             if (!user.has_received_first_bonus) {
@@ -428,6 +449,53 @@ async function processWowPayWithdrawalCallback(callbackData) {
             orderStatus = 'pending';
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
+
+        // Create transaction record for both success and failure
+        if (Transaction && typeof Transaction.create === 'function') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: orderStatus === 'completed' ? 'deposit' : 'deposit_failed',
+                amount: parseFloat(order.amount),
+                status: orderStatus === 'completed' ? 'completed' : 'failed',
+                payment_gateway_id: 'WOWPAY',
+                order_id: orderId,
+                transaction_id: callbackData.order_sn || orderId,
+                description: orderStatus === 'completed' ? 'WOWPAY deposit successful' : 'WOWPAY deposit failed',
+                reference_id: orderStatus === 'completed' ? `wowpay_deposit_${orderId}` : `wowpay_deposit_failed_${orderId}`,
+                metadata: {
+                    gateway: 'WOWPAY',
+                    original_status: status,
+                    processed_at: new Date().toISOString()
+                },
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+            console.log(`✅ Transaction record created for WOWPAY ${orderStatus === 'completed' ? 'deposit' : 'deposit_failed'}`);
+        }
+        
+        // ✅ Create transaction record for withdrawal (both success and failure)
+        if (Transaction && typeof Transaction.create === 'function') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: orderStatus === 'completed' ? 'withdrawal' : 'withdrawal_failed',
+                amount: parseFloat(order.withdrawal_amount),
+                status: orderStatus === 'completed' ? 'completed' : 'failed',
+                payment_gateway_id: 'WOWPAY',
+                order_id: orderId,
+                transaction_id: callbackData.order_sn || orderId,
+                description: orderStatus === 'completed' ? 'WOWPAY withdrawal successful' : 'WOWPAY withdrawal failed',
+                reference_id: orderStatus === 'completed' ? `wowpay_withdrawal_${orderId}` : `wowpay_withdrawal_failed_${orderId}`,
+                metadata: {
+                    gateway: 'WOWPAY',
+                    original_status: status,
+                    processed_at: new Date().toISOString()
+                },
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+            console.log(`✅ Transaction record created for WOWPAY ${orderStatus === 'completed' ? 'withdrawal' : 'withdrawal_failed'}`);
+        }
+        
         return { success: true, message: 'success' }; // Must return 'success' for WOWPAY
     } catch (error) {
         return { success: false, message: error.message };

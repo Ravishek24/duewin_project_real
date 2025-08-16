@@ -5,6 +5,7 @@ const { WalletRecharge } = require('../models');
 const { WalletWithdrawal } = require('../models');
 const User = require('../models/User');
 const AttendanceRecord = require('../models/AttendanceRecord');
+const Transaction = require('../models/Transaction');
 const moment = require('moment-timezone');
 
 // Utility: Generate SOLPAY RSA signature
@@ -168,6 +169,29 @@ async function processSolPayDepositCallback(callbackData) {
             orderStatus = 'pending';
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
+
+        // Create transaction record for both success and failure
+        if (Transaction && typeof Transaction.create === 'function') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: orderStatus === 'completed' ? 'deposit' : 'deposit_failed',
+                amount: parseFloat(order.amount),
+                status: orderStatus === 'completed' ? 'completed' : 'failed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                description: orderStatus === 'completed' ? 'SOLPAY deposit successful' : 'SOLPAY deposit failed',
+                reference_id: orderStatus === 'completed' ? `solpay_deposit_${order.order_id}` : `solpay_deposit_failed_${order.order_id}`,
+                metadata: {
+                    gateway: 'SOLPAY',
+                    original_status: status,
+                    processed_at: new Date().toISOString()
+                },
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+            console.log(`✅ Transaction record created for SOLPAY ${orderStatus === 'completed' ? 'deposit' : 'deposit_failed'}`);
+        }
         // 5. If completed, update user wallet
         if (orderStatus === 'completed') {
             const user = await User.findByPk(order.user_id);
@@ -178,6 +202,20 @@ async function processSolPayDepositCallback(callbackData) {
                   wallet_balance: newBalance,
                   actual_deposit_amount: newActualDeposit
                 });
+                
+                // ✅ Create transaction record for deposit
+                await Transaction.create({
+                    user_id: order.user_id,
+                    type: 'deposit',
+                    amount: parseFloat(order.amount),
+                    status: 'completed',
+                    payment_gateway_id: order.payment_gateway_id,
+                    order_id: order.order_id,
+                    transaction_id: order.transaction_id,
+                    created_at: new Date(),
+                    updated_at: new Date()
+                });
+                
                 // First recharge bonus logic
                 const referralService = require('./referralService');
                 if (!user.has_received_first_bonus) {
@@ -338,6 +376,34 @@ async function processSolPayWithdrawalCallback(callbackData) {
             orderStatus = 'pending';
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
+        
+        // ✅ Create transaction record for withdrawal
+        if (orderStatus === 'completed') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: 'withdrawal',
+                amount: parseFloat(order.amount),
+                status: 'completed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+        } else if (orderStatus === 'failed') {
+            await Transaction.create({
+                user_id: order.user_id,
+                type: 'withdrawal',
+                amount: parseFloat(order.amount),
+                status: 'failed',
+                payment_gateway_id: order.payment_gateway_id,
+                order_id: order.order_id,
+                transaction_id: order.transaction_id,
+                created_at: new Date(),
+                updated_at: new Date()
+            });
+        }
+        
         // 5. Return 'SUCCESS' for SOLPAY
         return { success: true, message: 'SUCCESS' };
     } catch (error) {
