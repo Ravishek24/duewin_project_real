@@ -1164,20 +1164,62 @@ const storePeriodInRedisForWebSocket = async (gameType, duration, periodInfo) =>
                             sum: existingResult.total_sum
                         });
                         
-                        // Process winning bets using existing result
-                        const result = await gameLogicService.processGameResultsWithPreCalc(
-                            gameType, 
-                            duration, 
-                            periodId,
-                            'default'
-                        );
-                        
-                        console.log(`✅ [SCHEDULER_5D] Bet settlement completed for period ${periodId}:`, {
-                            success: result.success,
-                            winnersCount: result.winners?.length || 0
+                        // CRITICAL FIX: Check if bets have already been processed by parallel system
+                        const processedBets = await models.BetRecord5D.findAll({
+                            where: {
+                                bet_number: periodId,
+                                status: ['won', 'lost'] // Already processed bets
+                            },
+                            limit: 1 // Just check if any exist
                         });
                         
-                        return result;
+                        if (processedBets.length > 0) {
+                            console.log(`🚫 [SCHEDULER_5D] Bets already processed by parallel system for period ${periodId}`);
+                            console.log(`🚫 [SCHEDULER_5D] Skipping reprocessing to prevent 4-5 second override issue`);
+                            console.log(`🚫 [SCHEDULER_5D] Found ${processedBets.length} already processed bets - ABORTING REPROCESSING`);
+                            
+                            // Just return success without reprocessing to prevent override
+                            return {
+                                success: true,
+                                result: {
+                                    A: existingResult.result_a,
+                                    B: existingResult.result_b,
+                                    C: existingResult.result_c,
+                                    D: existingResult.result_d,
+                                    E: existingResult.result_e,
+                                    sum: existingResult.total_sum
+                                },
+                                gameResult: {
+                                    A: existingResult.result_a,
+                                    B: existingResult.result_b,
+                                    C: existingResult.result_c,
+                                    D: existingResult.result_d,
+                                    E: existingResult.result_e,
+                                    sum: existingResult.total_sum
+                                },
+                                winners: [], // Don't reprocess - already done by parallel system
+                                timeline: 'default',
+                                source: '5d_scheduler_skipped_reprocessing_to_prevent_override'
+                            };
+                        } else {
+                            console.log(`⚠️ [SCHEDULER_5D] No processed bets found, parallel system may have failed`);
+                            console.log(`🔄 [SCHEDULER_5D] Proceeding with bet processing as fallback`);
+                            
+                            // FALLBACK: Process bets using existing system but prevent infinite loop
+                            const result = await gameLogicService.processGameResultsWithPreCalc(
+                                gameType, 
+                                duration, 
+                                periodId,
+                                'default'
+                            );
+                            
+                            console.log(`✅ [SCHEDULER_5D] Fallback bet settlement completed for period ${periodId}:`, {
+                                success: result.success,
+                                winnersCount: result.winners?.length || 0
+                            });
+                            
+                            return result;
+                        }
                     } else {
                         console.log(`⚠️ [SCHEDULER_5D] No existing result found for period ${periodId}, skipping`);
                         return {

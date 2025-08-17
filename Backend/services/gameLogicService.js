@@ -10844,29 +10844,70 @@ async function processGameResultsWithPreCalc(gameType, duration, periodId, timel
         });
         
         if (existingResult) {
-            console.log('🔄 [5D_PROCESS] Found existing result, processing bets...');
-            const result = {
-                A: existingResult.result_a,
-                B: existingResult.result_b,
-                C: existingResult.result_c,
-                D: existingResult.result_d,
-                E: existingResult.result_e,
-                sum: existingResult.total_sum
-            };
+            console.log('🔄 [5D_PROCESS] Found existing result, checking if bets already processed...');
             
-            const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, transaction);
+            // CRITICAL FIX: Check if bets have already been processed by parallel system
+            const processedBets = await models.BetRecord5D.findAll({
+                where: {
+                    bet_number: periodId,
+                    status: ['won', 'lost'] // Already processed bets
+                },
+                limit: 1 // Just check if any exist
+            });
             
-            // REMOVED: Duplicate broadcasting - scheduler handles this via Redis Pub/Sub
-            // await broadcastGameResult(gameType, duration, periodId, result, timeline);
-            
-            return {
-                success: true,
-                result: result,
-                gameResult: result,
-                winners: winners,
-                timeline: timeline,
-                source: 'existing_result_processed'
-            };
+            if (processedBets.length > 0) {
+                console.log('🚫 [5D_PROCESS] Bets already processed by parallel system, skipping reprocessing');
+                console.log('🚫 [5D_PROCESS] Preventing double processing and override issue');
+                
+                return {
+                    success: true,
+                    result: {
+                        A: existingResult.result_a,
+                        B: existingResult.result_b,
+                        C: existingResult.result_c,
+                        D: existingResult.result_d,
+                        E: existingResult.result_e,
+                        sum: existingResult.total_sum
+                    },
+                    gameResult: {
+                        A: existingResult.result_a,
+                        B: existingResult.result_b,
+                        C: existingResult.result_c,
+                        D: existingResult.result_d,
+                        E: existingResult.result_e,
+                        sum: existingResult.total_sum
+                    },
+                    winners: [], // Don't reprocess - already done by parallel system
+                    timeline: timeline,
+                    source: 'existing_result_skipped_reprocessing'
+                };
+            } else {
+                console.log('🔄 [5D_PROCESS] No processed bets found, proceeding with bet processing...');
+                const result = {
+                    A: existingResult.result_a,
+                    B: existingResult.result_b,
+                    C: existingResult.result_c,
+                    D: existingResult.result_d,
+                    E: existingResult.result_e,
+                    sum: existingResult.total_sum,
+                    sum_size: existingResult.total_sum >= 22 ? 'big' : 'small',
+                    sum_parity: existingResult.total_sum % 2 === 0 ? 'even' : 'odd'
+                };
+                
+                const winners = await processWinningBetsWithTimeline(gameType, duration, periodId, timeline, result, transaction);
+                
+                // REMOVED: Duplicate broadcasting - scheduler handles this via Redis Pub/Sub
+                // await broadcastGameResult(gameType, duration, periodId, result, timeline);
+                
+                return {
+                    success: true,
+                    result: result,
+                    gameResult: result,
+                    winners: winners,
+                    timeline: timeline,
+                    source: 'existing_result_processed'
+                };
+            }
         }
     }
 
