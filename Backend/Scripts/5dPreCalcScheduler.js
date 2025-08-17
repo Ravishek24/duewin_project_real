@@ -630,14 +630,69 @@ const verifyBetFreezeStatus = async (gameType, duration, periodId) => {
 };
 
 /**
- * Get current bet patterns from Redis
+ * 🚀 PIPELINE OPTIMIZATION: Get current bet patterns from Redis using pipeline
  */
 const getCurrentBetPatterns = async (gameType, duration, periodId, timeline) => {
     try {
+        const startTime = Date.now();
+        
+        // 🚀 Use Redis pipeline for multiple operations
         const exposureKey = `exposure:${gameType}:${duration}:${timeline}:${periodId}`;
-        console.log(`🔍 [5D_PRECALC_PATTERNS] Looking for bets in Redis key: ${exposureKey}`);
-        const betExposures = await schedulerHelper.hgetall(exposureKey);
-        console.log(`🔍 [5D_PRECALC_PATTERNS] Raw bet exposures from Redis:`, betExposures);
+        const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const periodKey = `game_scheduler:${gameType}:${duration}:current`;
+        
+        console.log(`🚀 [5D_PRECALC_PIPELINE] Using Redis pipeline for bet pattern retrieval...`);
+        console.log(`🔍 [5D_PRECALC_PIPELINE] Keys: ${exposureKey}, ${betHashKey}, ${periodKey}`);
+        
+        // 🚀 PIPELINE OPTIMIZATION: Use pipeline if available, fallback to sequential
+        let betExposures = {};
+        let pipelineTime = 0;
+        
+        if (schedulerHelper.pipeline && typeof schedulerHelper.pipeline === 'function') {
+            console.log(`🚀 [5D_PRECALC_PIPELINE] Using Redis pipeline for batch operations...`);
+            
+            try {
+                // Create pipeline for batch operations
+                const pipeline = schedulerHelper.pipeline();
+                pipeline.hgetall(exposureKey);
+                pipeline.hgetall(betHashKey);
+                pipeline.get(periodKey);
+                
+                // Execute all operations at once
+                const pipelineResults = await pipeline.exec();
+                
+                // Extract results (pipeline returns [[err, result], [err, result], ...])
+                const [exposureResult, betHashResult, periodResult] = pipelineResults.map(([err, result]) => {
+                    if (err) {
+                        console.error(`❌ [5D_PRECALC_PIPELINE] Pipeline operation failed:`, err);
+                        return {};
+                    }
+                    return result || {};
+                });
+                
+                betExposures = exposureResult || {};
+                pipelineTime = Date.now() - startTime;
+                
+                console.log(`✅ [5D_PRECALC_PIPELINE] Pipeline completed in ${pipelineTime}ms`);
+                console.log(`📊 [5D_PRECALC_PIPELINE] Retrieved ${Object.keys(betExposures).length} bet exposure entries`);
+                
+            } catch (pipelineError) {
+                console.error(`❌ [5D_PRECALC_PIPELINE] Pipeline failed, falling back to sequential:`, pipelineError.message);
+                // Fallback to sequential operations
+                betExposures = await schedulerHelper.hgetall(exposureKey) || {};
+                pipelineTime = Date.now() - startTime;
+                console.log(`⚠️ [5D_PRECALC_FALLBACK] Sequential fallback completed in ${pipelineTime}ms`);
+            }
+        } else {
+            console.log(`⚠️ [5D_PRECALC_FALLBACK] Pipeline not supported, using sequential operations...`);
+            
+            // Sequential operations fallback
+            betExposures = await schedulerHelper.hgetall(exposureKey) || {};
+            pipelineTime = Date.now() - startTime;
+            
+            console.log(`✅ [5D_PRECALC_FALLBACK] Sequential operations completed in ${pipelineTime}ms`);
+            console.log(`📊 [5D_PRECALC_FALLBACK] Retrieved ${Object.keys(betExposures).length} bet exposure entries`);
+        }
         
         // Convert to bet patterns format
         const betPatterns = {};
@@ -882,6 +937,22 @@ async function initialize() {
         periodService = require('../services/periodService');
         gameLogicService = require('../services/gameLogicService');
         console.log('✅ [5D_PRECALC_INIT] Services initialized');
+        
+        // 🚀 PRE-WARM OPTIMIZATION: Initialize parallel processing system
+        try {
+            console.log('🚀 [5D_PRECALC_INIT] Pre-warming parallel processing system...');
+            const { preWarm5DParallelSystem } = require('../services/5dParallelProcessor');
+            const preWarmSuccess = await preWarm5DParallelSystem();
+            
+            if (preWarmSuccess) {
+                console.log('✅ [5D_PRECALC_INIT] Parallel processing system pre-warmed successfully');
+            } else {
+                console.log('⚠️ [5D_PRECALC_INIT] Parallel processing system pre-warm failed, will initialize on demand');
+            }
+        } catch (preWarmError) {
+            console.error('❌ [5D_PRECALC_INIT] Error pre-warming parallel system:', preWarmError.message);
+            console.log('⚠️ [5D_PRECALC_INIT] Continuing with on-demand initialization');
+        }
         
         // Setup Redis communication
         await setup5DPreCalcCommunication();

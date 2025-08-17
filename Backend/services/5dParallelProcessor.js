@@ -13,6 +13,12 @@ class FiveDParallelProcessor {
         this.workerPath = path.join(__dirname, '../workers/5dExposureWorker.js');
         this.maxWorkers = 2; // 2 workers for 50,000 combinations each
         this.timeoutMs = 30000; // 30 second timeout
+        
+        // 🚀 PRE-WARM OPTIMIZATION: Keep combinations in memory
+        this.combinationsCache = null;
+        this.cacheInitialized = false;
+        this.workerPool = null;
+        this.poolInitialized = false;
     }
 
     /**
@@ -103,10 +109,88 @@ class FiveDParallelProcessor {
     }
 
     /**
-     * Get combinations and bet patterns from Redis
+     * 🚀 PRE-WARM OPTIMIZATION: Initialize combinations cache at startup
+     */
+    async initializeCombinationsCache() {
+        if (this.cacheInitialized) {
+            return;
+        }
+
+        try {
+            console.log(`🚀 [5D_PREWARM] Initializing combinations cache...`);
+            const startTime = Date.now();
+            
+            // Initialize UnifiedRedisManager if not already initialized
+            if (!unifiedRedis.isInitialized) {
+                await unifiedRedis.initialize();
+            }
+            
+            const redis = await unifiedRedis.getHelper();
+            const combinationsKey = '5d_combinations_cache';
+            
+            // Get combinations from Redis once and store in memory
+            const combinationsData = await redis.hgetall(combinationsKey);
+            
+            if (!combinationsData || Object.keys(combinationsData).length === 0) {
+                console.log(`⚠️ [5D_PREWARM] No combinations found, initializing...`);
+                
+                const { preload5DCombinationsToRedis } = require('./gameLogicService');
+                await preload5DCombinationsToRedis();
+                
+                const retryData = await redis.hgetall(combinationsKey);
+                if (!retryData || Object.keys(retryData).length === 0) {
+                    throw new Error('Failed to initialize combinations in Redis');
+                }
+                
+                this.combinationsCache = this.processCombinationsData(retryData);
+            } else {
+                this.combinationsCache = this.processCombinationsData(combinationsData);
+            }
+            
+            this.cacheInitialized = true;
+            const loadTime = Date.now() - startTime;
+            
+            console.log(`✅ [5D_PREWARM] Combinations cache initialized: ${this.combinationsCache.length} combinations in ${loadTime}ms`);
+            console.log(`📊 [5D_PREWARM] Sample combinations:`, this.combinationsCache.slice(0, 3));
+            
+        } catch (error) {
+            console.error(`❌ [5D_PREWARM] Error initializing combinations cache:`, error);
+            throw error;
+        }
+    }
+
+    /**
+     * Process combinations data from Redis format to array
+     */
+    processCombinationsData(combinationsData) {
+        return Object.keys(combinationsData).map(key => {
+            const combo = combinationsData[key];
+            if (typeof combo === 'string') {
+                return combo;
+            } else {
+                // If it's a JSON object, extract the combination string
+                const parsed = JSON.parse(combo);
+                if (parsed.dice_a !== undefined && parsed.dice_b !== undefined) {
+                    return `${parsed.dice_a},${parsed.dice_b},${parsed.dice_c},${parsed.dice_d},${parsed.dice_e}`;
+                } else {
+                    return combo.toString();
+                }
+            }
+        });
+    }
+
+    /**
+     * 🚀 REDIS PIPELINE OPTIMIZATION: Get combinations and bet patterns efficiently
      */
     async getProcessingData(duration, periodId, timeline) {
         try {
+            const startTime = Date.now();
+            
+            // 🚀 Use cached combinations (no Redis call needed)
+            if (!this.cacheInitialized) {
+                await this.initializeCombinationsCache();
+            }
+            
             // Initialize UnifiedRedisManager if not already initialized
             if (!unifiedRedis.isInitialized) {
                 await unifiedRedis.initialize();
@@ -114,74 +198,77 @@ class FiveDParallelProcessor {
             
             const redis = await unifiedRedis.getHelper();
             
-            // Get combinations from Redis (using the correct key pattern from preload function)
-            const combinationsKey = '5d_combinations_cache';
-            console.log(`🔍 [5D_PARALLEL] Looking for combinations in Redis key: ${combinationsKey}`);
-            const combinationsData = await redis.hgetall(combinationsKey);
-            
-            console.log(`📊 [5D_PARALLEL] Found ${Object.keys(combinationsData || {}).length} combinations in Redis`);
-            
-            if (!combinationsData || Object.keys(combinationsData).length === 0) {
-                console.log(`⚠️ [5D_PARALLEL] No combinations found, trying to initialize...`);
-                
-                // Try to initialize combinations if not found
-                try {
-                    const { preload5DCombinationsToRedis } = require('./gameLogicService');
-                    await preload5DCombinationsToRedis();
-                    
-                    // Try again after initialization
-                    const retryData = await redis.hgetall(combinationsKey);
-                    if (!retryData || Object.keys(retryData).length === 0) {
-                        throw new Error('Failed to initialize combinations in Redis');
-                    }
-                    
-                    console.log(`✅ [5D_PARALLEL] Successfully initialized ${Object.keys(retryData).length} combinations`);
-                    combinationsData = retryData;
-                    
-                } catch (initError) {
-                    console.error(`❌ [5D_PARALLEL] Failed to initialize combinations:`, initError.message);
-                    throw new Error('No combinations available for processing');
-                }
-            }
-            
-            // Convert to array of combinations
-            const combinations = Object.keys(combinationsData).map(key => {
-                const combo = combinationsData[key];
-                if (typeof combo === 'string') {
-                    return combo;
-                } else {
-                    // If it's a JSON object, extract the combination string
-                    const parsed = JSON.parse(combo);
-                    if (parsed.dice_a !== undefined && parsed.dice_b !== undefined) {
-                        // It's a full result object, extract the combination string
-                        return `${parsed.dice_a},${parsed.dice_b},${parsed.dice_c},${parsed.dice_d},${parsed.dice_e}`;
-                    } else {
-                        // It's some other format, try to convert to string
-                        return combo.toString();
-                    }
-                }
-            });
-            
-            console.log(`📊 [5D_PARALLEL] Converted ${combinations.length} combinations for processing`);
-            console.log(`📊 [5D_PARALLEL] Sample combinations:`, combinations.slice(0, 3));
-            
-            // Get bet patterns from Redis
-            // CRITICAL FIX: Use the same key format as bet placement (fiveD, not 5d)
+            // 🚀 PIPELINE OPTIMIZATION: Get all bet-related data in one batch
             const exposureKey = `exposure:fiveD:${duration}:${timeline}:${periodId}`;
-            console.log(`🔍 [5D_PARALLEL] Looking for bet patterns in Redis key: ${exposureKey}`);
-            const betPattern = await redis.hgetall(exposureKey);
+            const betHashKey = `bets:fiveD:${duration}:${timeline}:${periodId}`;
+            const periodKey = `game_scheduler:fiveD:${duration}:current`;
             
-            console.log(`📊 [5D_PARALLEL] Found ${Object.keys(betPattern || {}).length} bet patterns`);
+            console.log(`🚀 [5D_PIPELINE] Using Redis pipeline for multiple operations...`);
+            
+            // 🚀 PIPELINE OPTIMIZATION: Use pipeline if available, fallback to sequential
+            let betPattern = {};
+            let dataTime = 0;
+            
+            if (redis.pipeline && typeof redis.pipeline === 'function') {
+                console.log(`🚀 [5D_PIPELINE] Using Redis pipeline for batch operations...`);
+                
+                try {
+                    // Create pipeline for multiple Redis operations
+                    const pipeline = redis.pipeline();
+                    pipeline.hgetall(exposureKey);
+                    pipeline.hgetall(betHashKey);
+                    pipeline.get(periodKey);
+                    
+                    // Execute all operations at once
+                    const pipelineResults = await pipeline.exec();
+                    
+                    // Extract results (pipeline returns [[err, result], [err, result], ...])
+                    const [exposureResult, betHashResult, periodResult] = pipelineResults.map(([err, result]) => {
+                        if (err) {
+                            console.error(`❌ [5D_PIPELINE] Pipeline operation failed:`, err);
+                            return {};
+                        }
+                        return result || {};
+                    });
+                    
+                    betPattern = exposureResult || {};
+                    dataTime = Date.now() - startTime;
+                    
+                    console.log(`✅ [5D_PIPELINE] Pipeline completed in ${dataTime}ms`);
+                    console.log(`📊 [5D_PIPELINE] Found ${Object.keys(betPattern).length} bet patterns`);
+                    console.log(`📊 [5D_PIPELINE] Using ${this.combinationsCache.length} cached combinations`);
+                    
+                } catch (pipelineError) {
+                    console.error(`❌ [5D_PIPELINE] Pipeline failed, falling back to sequential:`, pipelineError.message);
+                    // Fallback to sequential operations
+                    betPattern = await redis.hgetall(exposureKey) || {};
+                    dataTime = Date.now() - startTime;
+                    console.log(`⚠️ [5D_PIPELINE_FALLBACK] Sequential fallback completed in ${dataTime}ms`);
+                }
+            } else {
+                console.log(`⚠️ [5D_PIPELINE_FALLBACK] Pipeline not supported, using sequential operations...`);
+                
+                // Sequential operations fallback
+                betPattern = await redis.hgetall(exposureKey) || {};
+                dataTime = Date.now() - startTime;
+                
+                console.log(`✅ [5D_PIPELINE_FALLBACK] Sequential operations completed in ${dataTime}ms`);
+                console.log(`📊 [5D_PIPELINE_FALLBACK] Found ${Object.keys(betPattern).length} bet patterns`);
+                console.log(`📊 [5D_PIPELINE_FALLBACK] Using ${this.combinationsCache.length} cached combinations`);
+            }
             
             if (!betPattern || Object.keys(betPattern).length === 0) {
-                console.log(`⚠️ [5D_PARALLEL] No bet patterns found, using empty pattern`);
-                return { combinations, betPattern: {} };
+                console.log(`⚠️ [5D_PIPELINE] No bet patterns found, using empty pattern`);
+                return { combinations: this.combinationsCache, betPattern: {} };
             }
             
-            return { combinations, betPattern };
+            return { 
+                combinations: this.combinationsCache, // Use pre-loaded cache
+                betPattern: betPattern 
+            };
             
         } catch (error) {
-            console.error(`❌ [5D_PARALLEL] Error getting processing data:`, error);
+            console.error(`❌ [5D_PIPELINE] Error getting processing data:`, error);
             throw error;
         }
     }
@@ -430,9 +517,32 @@ class FiveDParallelProcessor {
 // Create singleton instance
 const fiveDParallelProcessor = new FiveDParallelProcessor();
 
+/**
+ * 🚀 GLOBAL PRE-WARM FUNCTION: Initialize the parallel processing system at startup
+ */
+const preWarm5DParallelSystem = async () => {
+    try {
+        console.log(`🚀 [5D_GLOBAL_PREWARM] Starting 5D parallel processing system pre-warm...`);
+        const startTime = Date.now();
+        
+        // Initialize combinations cache
+        await fiveDParallelProcessor.initializeCombinationsCache();
+        
+        const totalTime = Date.now() - startTime;
+        console.log(`✅ [5D_GLOBAL_PREWARM] 5D parallel processing system pre-warmed successfully in ${totalTime}ms`);
+        console.log(`🚀 [5D_GLOBAL_PREWARM] System ready for instant result generation!`);
+        
+        return true;
+    } catch (error) {
+        console.error(`❌ [5D_GLOBAL_PREWARM] Error pre-warming 5D parallel system:`, error);
+        return false;
+    }
+};
+
 module.exports = {
     FiveDParallelProcessor,
     fiveDParallelProcessor,
+    preWarm5DParallelSystem,
     getOptimal5DResultParallel: (duration, periodId, timeline) => 
         fiveDParallelProcessor.getOptimal5DResultParallel(duration, periodId, timeline)
 }; 
