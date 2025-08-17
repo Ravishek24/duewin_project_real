@@ -79,7 +79,7 @@ const createRedisSubscriber = async () => {
             commandTimeout: 5000,
             lazyConnect: false,
             enableOfflineQueue: true,
-            maxRetriesPerRequest: 3,
+            maxRetriesPerRequest: null, // BullMQ v5 requirement
             family: 4
         };
 

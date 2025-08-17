@@ -82,14 +82,13 @@ class UnifiedRedisManager {
 
             // 🚀 ENHANCED: Better reconnection settings
             enableOfflineQueue: true,
-            maxRetriesPerRequest: 3,
+            maxRetriesPerRequest: null, // BullMQ v5 requirement
             retryDelayOnFailover: 100,
             enableReadyCheck: true,
             maxLoadingTimeout: 60000,
 
             // 🚀 NEW: Automatic reconnection settings
             retryDelayOnClusterDown: 300,
-            maxRetriesPerRequest: 3,
             enableAutoPipelining: false,
 
             retryStrategy: (times) => {
