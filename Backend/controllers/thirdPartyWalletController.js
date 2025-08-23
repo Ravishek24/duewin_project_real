@@ -18,7 +18,7 @@ const getWalletBalance = async (req, res) => {
       return res.status(200).json({
         success: true,
         balance: 0,
-        currency: 'EUR',
+        currency: 'INR',
         message: 'No third-party wallet found'
       });
     }
@@ -149,7 +149,7 @@ const checkThirdPartyFunds = async (req, res) => {
       return res.status(200).json({
         hasFunds: false,
         balance: 0,
-        currency: 'EUR',
+        currency: 'INR',
         walletExists: false
       });
     }

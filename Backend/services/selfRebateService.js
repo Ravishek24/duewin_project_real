@@ -139,23 +139,73 @@ const processSelfRebateInternal = async (userId, betAmount, gameType, gameId = n
                     return null;
                 }
 
-                // Get rebate rate from VIP level (stored as percentage, e.g., 0.05 for 5%)
+                // Get rebate rate from VIP level (stored as decimal, e.g., 0.0005 for 0.05%)
                 // If user's VIP level is 0, use level 1's rebate rate, otherwise use their current level's rate
                 const effectiveVipLevel = user.vip_level === 0 ? 1 : user.vip_level;
+                
+                console.log(`🔍 VIP Level Lookup: user.vip_level=${user.vip_level}, effectiveVipLevel=${effectiveVipLevel}`);
+                
                 const vipLevel = await VipLevel.findOne({
                     where: { level: effectiveVipLevel },
                     attributes: ['rebate_rate'],
                     transaction: t
                 });
 
+                console.log(`🔍 VipLevel query result:`, vipLevel ? {
+                    level: effectiveVipLevel,
+                    rebate_rate: vipLevel.rebate_rate,
+                    rebate_rate_type: typeof vipLevel.rebate_rate,
+                    rebate_rate_raw: vipLevel.rebate_rate
+                } : 'No VIP level found');
+
+                // Double-check: Let's also verify what's in the database directly
+                try {
+                    const directCheck = await t.sequelize.query(
+                        'SELECT level, rebate_rate FROM vip_levels WHERE level = ?',
+                        {
+                            replacements: [effectiveVipLevel],
+                            type: t.sequelize.QueryTypes.SELECT,
+                            transaction: t
+                        }
+                    );
+                    console.log(`🔍 Direct DB check for level ${effectiveVipLevel}:`, directCheck);
+                } catch (dbError) {
+                    console.log(`🔍 Direct DB check failed:`, dbError.message);
+                }
+
                 const rebateRate = vipLevel ? vipLevel.rebate_rate : 0;
-                console.log(`User VIP level: ${user.vip_level}, effective level: ${effectiveVipLevel}, rebate rate: ${rebateRate}`);
+                console.log(`🔍 Final rebate rate: ${rebateRate} (${(rebateRate * 100).toFixed(3)}%)`);
 
-                // Always treat rebate_rate as a decimal (e.g., 0.005 means 0.5%)
-                const effectiveRate = parseFloat(rebateRate); // Use decimal directly
+                // VIP level rebate_rate is stored as decimal (e.g., 0.0005 = 0.05%)
+                const effectiveRate = parseFloat(rebateRate);
+                
+                console.log(`🔍 Rate processing: rebateRate=${rebateRate}, effectiveRate=${effectiveRate}, betAmount=${betAmount}`);
+                
+                // Validate the rebate rate is within expected range
+                if (effectiveRate > 0.01) {
+                    console.warn(`⚠️ WARNING: Rebate rate ${effectiveRate} (${(effectiveRate * 100).toFixed(3)}%) seems unusually high for VIP level ${effectiveVipLevel}`);
+                }
+                
                 const rebateAmount = parseFloat(betAmount) * effectiveRate;
-                console.log(`Calculated rebate amount: ${rebateAmount}`);
+                console.log(`🔍 Calculation: ${betAmount} × ${effectiveRate} = ${rebateAmount}`);
+                
+                // Sanity check: Verify the rebate calculation is correct for this user's VIP level
+                const expectedRebateForCurrentLevel = parseFloat(betAmount) * effectiveRate;
+                console.log(`🔍 Sanity check - Expected for VIP Level ${effectiveVipLevel}: ${betAmount} × ${effectiveRate} = ${expectedRebateForCurrentLevel}`);
+                
+                // Only warn if the calculation doesn't match (indicating a real calculation error)
+                if (Math.abs(rebateAmount - expectedRebateForCurrentLevel) > 0.001) {
+                    console.warn(`⚠️ WARNING: Rebate calculation error! Expected ${expectedRebateForCurrentLevel} but got ${rebateAmount} for VIP level ${effectiveVipLevel}`);
+                }
+                
+                // Additional validation: ensure rebate amount is reasonable
+                const expectedMaxRate = 0.01; // 1% maximum expected rate
+                if (rebateAmount > (betAmount * expectedMaxRate)) {
+                    console.warn(`⚠️ WARNING: Rebate amount ${rebateAmount} seems unusually high for bet amount ${betAmount}`);
+                }
 
+                console.log(`💰 Final rebate amount: ${rebateAmount} (will be credited to user ${userId})`);
+                
                 if (rebateAmount <= 0) {
                     console.log('Rebate amount is 0 or negative, skipping');
                     if (!transaction) await t.rollback();
@@ -173,10 +223,12 @@ const processSelfRebateInternal = async (userId, betAmount, gameType, gameId = n
                 });
 
                 // Create rebate record first
+                console.log(`📝 Creating SelfRebate record: user_id=${userId}, bet_amount=${betAmount}, rebate_rate=${rebateRate}, rebate_amount=${rebateAmount}, vip_level=${user.vip_level}`);
+                
                 const rebate = await SelfRebate.create({
                     user_id: userId,
                     bet_amount: betAmount,
-                    rebate_rate: rebateRate, // Store as decimal (e.g., 0.05 for 5%)
+                    rebate_rate: rebateRate, // Store as decimal (e.g., 0.0005 for 0.05%)
                     rebate_amount: rebateAmount,
                     game_type: gameType.toLowerCase(),
                     game_id: gameId,
@@ -184,9 +236,12 @@ const processSelfRebateInternal = async (userId, betAmount, gameType, gameId = n
                     bet_reference_id: betReferenceId,
                     status: 'credited'
                 }, { transaction: t });
+                
+                console.log(`✅ SelfRebate record created with ID: ${rebate.id}, stored rebate_rate: ${rebate.rebate_rate}`);
 
                 // Create transaction record
-                await Transaction.create({
+                console.log(`📝 Creating Transaction record: type='self_rebate', amount=${rebateAmount}, user_id=${userId}`);
+                const transactionRecord = await Transaction.create({
                     user_id: userId,
                     type: 'self_rebate',
                     amount: rebateAmount,
@@ -205,6 +260,7 @@ const processSelfRebateInternal = async (userId, betAmount, gameType, gameId = n
                         bet_reference_id: betReferenceId
                     }
                 }, { transaction: t });
+                console.log(`✅ Transaction record created with ID: ${transactionRecord.id}, type: ${transactionRecord.type}`);
 
                 // 🎯 Create credit transaction for wagering tracking - pass the transaction
                 await CreditService.addCreditWithTransaction(

@@ -34,7 +34,7 @@ const createWallet = async (userId) => {
     const wallet = await ThirdPartyWallet.create({
       user_id: userId,
       balance: 0.00,
-      currency: 'USD', // Changed from EUR to USD
+      currency: 'INR',
       is_active: true,
       last_updated: new Date()
     }, { transaction: t });
@@ -87,7 +87,7 @@ const getOrCreateWallet = async (userId, existingTransaction = null) => {
       wallet = await ThirdPartyWallet.create({
         user_id: userId,
         balance: 0.00,
-        currency: 'USD', // Changed from EUR to USD
+        currency: 'INR',
         is_active: true,
         last_updated: new Date()
       }, { transaction: t });
@@ -348,10 +348,10 @@ const transferToMainWallet = async (userId) => {
 /**
  * FIXED: Get balance from third-party wallet with better error handling
  * @param {number} userId - User ID
- * @param {string} currency - Currency code (USD or EUR)
+ * @param {string} currency - Currency code (INR by default)
  * @returns {Promise<Object>} Balance info
  */
-const getBalance = async (userId, currency = 'USD') => {
+const getBalance = async (userId, currency = 'INR') => {
   try {
     console.log(`Getting balance for user ${userId} in ${currency}`);
     
@@ -372,43 +372,14 @@ const getBalance = async (userId, currency = 'USD') => {
     const balance = parseFloat(wallet.balance);
     console.log(`Third-party wallet balance for user ${userId}: ${balance} ${wallet.currency}`);
     
-    // If requested currency matches wallet currency, return as is
-    if (wallet.currency === currency) {
-      return {
-        success: true,
-        balance: balance,
-        currency: currency
-      };
+    // Always return balance in stored wallet currency
+    if (wallet.currency !== currency) {
+      console.log(`Requested currency ${currency} differs from wallet currency ${wallet.currency}. Returning stored currency.`);
     }
-    
-    // Convert between EUR and USD
-    const conversionRate = 1.0; // 1 EUR = 1.08 USD
-    
-    if (wallet.currency === 'EUR' && currency === 'USD') {
-      const usdBalance = balance * conversionRate;
-      console.log(`Converted balance from EUR to USD: ${balance} EUR = ${usdBalance} USD`);
-      return {
-        success: true,
-        balance: usdBalance,
-        currency: 'USD'
-      };
-    }
-    
-    if (wallet.currency === 'USD' && currency === 'EUR') {
-      const eurBalance = balance / conversionRate;
-      console.log(`Converted balance from USD to EUR: ${balance} USD = ${eurBalance} EUR`);
-      return {
-        success: true,
-        balance: eurBalance,
-        currency: 'EUR'
-      };
-    }
-    
-    // If currencies don't match and can't be converted, return error
     return {
-      success: false,
-      message: `Cannot convert from ${wallet.currency} to ${currency}`,
-      balance: 0
+      success: true,
+      balance: balance,
+      currency: wallet.currency
     };
   } catch (error) {
     console.error('Error getting third-party wallet balance:', error);
@@ -537,14 +508,122 @@ const walletExists = async (userId) => {
     return {
       exists: !!wallet,
       balance: wallet ? parseFloat(wallet.balance) : 0,
-      currency: wallet ? wallet.currency : 'USD'
+      currency: wallet ? wallet.currency : 'INR'
     };
   } catch (error) {
     console.error('Error checking wallet existence:', error);
     return {
       exists: false,
       balance: 0,
-      currency: 'USD'
+      currency: 'INR'
+    };
+  }
+};
+
+/**
+ * AUTO-TRANSFER: Transfer all funds from main wallet to third-party wallet
+ * @param {number} userId - User ID
+ * @param {number} amount - Amount to transfer (usually full main wallet balance)
+ * @returns {Promise<Object>} Transfer result
+ */
+const transferFromMainWallet = async (userId, amount) => {
+  const t = await sequelize.transaction();
+  
+  try {
+    console.log(`🔄 === AUTO-TRANSFER FROM MAIN WALLET ===`);
+    console.log(`🔄 User ID: ${userId}`);
+    console.log(`🔄 Amount: ₹${amount}`);
+    
+    // Get user's main wallet balance
+    const user = await User.findByPk(userId, { transaction: t });
+    if (!user) {
+      await t.rollback();
+      return {
+        success: false,
+        message: 'User not found'
+      };
+    }
+    
+         const mainWalletBalance = parseFloat(user.wallet_balance || 0);
+     console.log(`💰 Main wallet balance: ₹${mainWalletBalance}`);
+     console.log(`🔍 Amount type: ${typeof amount}, value: ${amount}`);
+     console.log(`🔍 Main wallet balance type: ${typeof mainWalletBalance}, value: ${mainWalletBalance}`);
+     
+     // Validate amount
+     if (isNaN(amount) || isNaN(mainWalletBalance)) {
+       await t.rollback();
+       return {
+         success: false,
+         message: `Invalid balance values. Amount: ${amount}, Main Balance: ${mainWalletBalance}`,
+         availableBalance: mainWalletBalance
+       };
+     }
+     
+     if (amount <= 0 || amount > mainWalletBalance) {
+       await t.rollback();
+       return {
+         success: false,
+         message: `Invalid amount. Available: ₹${mainWalletBalance}, Requested: ₹${amount}`,
+         availableBalance: mainWalletBalance
+       };
+     }
+    
+    // Get or create third-party wallet
+    const walletResult = await getOrCreateWallet(userId, t);
+    if (!walletResult.success) {
+      await t.rollback();
+      return {
+        success: false,
+        message: 'Failed to get/create third-party wallet'
+      };
+    }
+    
+         const thirdPartyWallet = walletResult.wallet;
+     const currentThirdPartyBalance = parseFloat(thirdPartyWallet.balance || 0);
+     
+     console.log(`💳 Third-party wallet current balance: ₹${currentThirdPartyBalance}`);
+     console.log(`🔍 Current third-party balance type: ${typeof currentThirdPartyBalance}, value: ${currentThirdPartyBalance}`);
+     console.log(`🔍 Amount type: ${typeof amount}, value: ${amount}`);
+    
+         // Deduct from main wallet
+     const newMainBalance = parseFloat(mainWalletBalance) - parseFloat(amount);
+     await user.update({
+       wallet_balance: newMainBalance.toFixed(2)
+     }, { transaction: t });
+    
+         // Add to third-party wallet
+     const newThirdPartyBalance = parseFloat(currentThirdPartyBalance) + parseFloat(amount);
+     console.log(`🔍 New third-party balance calculation: ${currentThirdPartyBalance} + ${amount} = ${newThirdPartyBalance}`);
+     console.log(`🔍 New third-party balance type: ${typeof newThirdPartyBalance}, value: ${newThirdPartyBalance}`);
+     
+     await thirdPartyWallet.update({
+       balance: newThirdPartyBalance.toFixed(2),
+       last_updated: new Date()
+     }, { transaction: t });
+    
+    await t.commit();
+    
+    console.log(`✅ Auto-transfer successful!`);
+    console.log(`💰 Main wallet: ₹${mainWalletBalance} → ₹${newMainBalance}`);
+    console.log(`💳 Third-party wallet: ₹${currentThirdPartyBalance} → ₹${newThirdPartyBalance}`);
+    
+    return {
+      success: true,
+      message: `Successfully transferred ₹${amount} to third-party wallet`,
+      transferredAmount: amount,
+      mainWalletBalance: newMainBalance,
+      balance: newThirdPartyBalance,
+      currency: 'INR'
+    };
+    
+  } catch (error) {
+    await t.rollback();
+    console.error('❌ Auto-transfer error:', error);
+    
+    return {
+      success: false,
+      message: error.message || 'Failed to transfer funds',
+      error: error.message
     };
   }
 };
@@ -554,6 +633,7 @@ module.exports = {
   getOrCreateWallet,
   transferToThirdPartyWallet,
   transferToMainWallet,
+  transferFromMainWallet, // ADDED: Auto-transfer method
   getBalance,
   updateBalance,
   walletExists // ADDED: Helper method

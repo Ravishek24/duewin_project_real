@@ -308,6 +308,28 @@ async function processUsdtwgPayDepositCallback(req) {
     }
   } else {
     await recharge.update({ status: 'failed' });
+    
+    // ✅ Create transaction record for failed deposit
+    await Transaction.create({
+        user_id: recharge.user_id,
+        type: 'deposit_failed',
+        amount: parseFloat(recharge.amount),
+        status: 'failed',
+        payment_gateway_id: recharge.payment_gateway_id,
+        order_id: orderId,
+        transaction_id: data.orderno || orderId,
+        description: 'USDTWGPAY deposit failed',
+        reference_id: `usdtwgpay_deposit_failed_${orderId}`,
+        metadata: {
+            gateway: 'USDTWGPAY',
+            original_status: status,
+            failure_reason: 'Payment failed or pending',
+            processed_at: new Date().toISOString()
+        },
+        created_at: new Date(),
+        updated_at: new Date()
+    });
+    
     console.log('❌ Payment failed or pending. Status:', status);
     console.log('--- USDTWG Callback End: Fail ---');
     return { success: false, message: 'Payment failed or pending' };
@@ -419,18 +441,40 @@ async function processUsdtwgPayWithdrawalCallback(req) {
   } else {
     await withdrawal.update({ status: 'failed' });
     
-    // ✅ Create transaction record for failed withdrawal
-    await Transaction.create({
-        user_id: withdrawal.user_id,
-        type: 'withdrawal',
-        amount: parseFloat(withdrawal.amount),
-        status: 'failed',
-        payment_gateway_id: withdrawal.payment_gateway_id,
-        order_id: withdrawal.order_id,
-        transaction_id: data.orderno,
-        created_at: new Date(),
-        updated_at: new Date()
-    });
+    // ✅ FAILURE: Refund money to user wallet and create failed transaction
+    const User = require('../models/User');
+    const user = await User.findByPk(withdrawal.user_id);
+    if (user) {
+        const currentBalance = parseFloat(user.wallet_balance) || 0;
+        const refundAmount = parseFloat(withdrawal.amount);
+        const newBalance = currentBalance + refundAmount;
+        
+        await user.update({ wallet_balance: newBalance });
+        
+        // Create withdrawal failed transaction
+        await Transaction.create({
+            user_id: withdrawal.user_id,
+            type: 'withdrawal_failed',
+            amount: refundAmount,
+            status: 'failed',
+            payment_gateway_id: withdrawal.payment_gateway_id,
+            order_id: withdrawal.order_id,
+            transaction_id: data.orderno,
+            description: 'USDTWGPAY withdrawal failed - amount refunded',
+            reference_id: `usdtwgpay_withdrawal_failed_${withdrawal.order_id}`,
+            metadata: {
+                gateway: 'USDTWGPAY',
+                original_status: status,
+                refunded_amount: refundAmount,
+                original_balance: currentBalance,
+                new_balance: newBalance,
+                processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        });
+        console.log(`✅ USDTWGPAY withdrawal failed - ₹${refundAmount} refunded to user wallet`);
+    }
     
     return { success: false, message: 'Withdrawal failed or pending' };
   }

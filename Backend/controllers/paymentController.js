@@ -1406,6 +1406,40 @@ const pay101PayinCallbackController = async (req, res) => {
           } catch (referralError) {
             console.error('Failed to process referral for 101PAY deposit:', referralError.message);
           }
+
+          // ✅ Add attendance logic for 101PAY
+          try {
+            const AttendanceRecord = require('../models/AttendanceRecord');
+            const moment = require('moment-timezone');
+            const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
+            const [attendance, created] = await AttendanceRecord.findOrCreate({
+              where: { user_id: user.user_id, attendance_date: todayIST },
+              defaults: {
+                user_id: user.user_id,
+                attendance_date: todayIST,
+                date: todayIST,
+                streak_count: 1,
+                has_recharged: true,
+                recharge_amount: depositAmount,
+                claim_eligible: true,
+                bonus_amount: 0,
+                bonus_claimed: false,
+                created_at: new Date(),
+                updated_at: new Date()
+              }
+            });
+            if (!created) {
+              await attendance.update({
+                has_recharged: true,
+                recharge_amount: (parseFloat(attendance.recharge_amount) || 0) + depositAmount,
+                claim_eligible: true,
+                updated_at: new Date()
+              });
+            }
+            console.log('✅ 101PAY: Attendance record updated for user', user.user_id);
+          } catch (attendanceError) {
+            console.error('Failed to process attendance for 101PAY deposit:', attendanceError.message);
+          }
         }
         
         console.log('✅ Success response sent');
@@ -1519,26 +1553,39 @@ const pay101PayoutCallbackController = async (req, res) => {
       } else if (status === 'failure' || status === 'failed') {
         await withdrawal.update({ status: 'failed', updated_at: new Date() });
         
-        // ✅ Create transaction record for failed withdrawal
-        await Transaction.create({
-            user_id: withdrawal.user_id,
-            type: 'withdrawal_failed',
-            amount: parseFloat(withdrawal.amount),
-            status: 'failed',
-            payment_gateway_id: withdrawal.payment_gateway_id,
-            order_id: withdrawal.order_id,
-            transaction_id: orderNo || null,
-            description: '101PAY withdrawal failed',
-            reference_id: `101pay_withdrawal_failed_${withdrawal.order_id}`,
-            metadata: {
-              gateway: '101PAY',
-              original_status: status,
-              failure_reason: 'Withdrawal failed',
-              processed_at: new Date().toISOString()
-            },
-            created_at: new Date(),
-            updated_at: new Date()
-        });
+        // ✅ FAILURE: Refund money to user wallet and create failed transaction
+        const user = await User.findByPk(withdrawal.user_id);
+        if (user) {
+          const currentBalance = parseFloat(user.wallet_balance) || 0;
+          const refundAmount = parseFloat(withdrawal.amount);
+          const newBalance = currentBalance + refundAmount;
+          
+          await user.update({ wallet_balance: newBalance });
+          
+          // Create withdrawal failed transaction
+          await Transaction.create({
+              user_id: withdrawal.user_id,
+              type: 'withdrawal_failed',
+              amount: refundAmount,
+              status: 'failed',
+              payment_gateway_id: withdrawal.payment_gateway_id,
+              order_id: withdrawal.order_id,
+              transaction_id: orderNo || null,
+              description: '101PAY withdrawal failed - amount refunded',
+              reference_id: `101pay_withdrawal_failed_${withdrawal.order_id}`,
+              metadata: {
+                gateway: '101PAY',
+                original_status: status,
+                refunded_amount: refundAmount,
+                original_balance: currentBalance,
+                new_balance: newBalance,
+                processed_at: new Date().toISOString()
+              },
+              created_at: new Date(),
+              updated_at: new Date()
+          });
+          console.log(`✅ 101PAY withdrawal failed - ₹${refundAmount} refunded to user wallet`);
+        }
         
         return res.status(200).send('fail');
       } else {

@@ -3,6 +3,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const { Op } = require('sequelize');
 const playwin6Config = require('../config/playwin6Config');
+const { updateWalletBalance } = require('./walletBalanceUtils');
 const {
   generateAESHash,
   decryptAESHash,
@@ -170,6 +171,7 @@ const launchGame = async (userId, gameUid, walletAmount, token = null, additiona
       user_id: credentials.username,
       wallet_amount: formatAmount(walletAmount),
       game_uid: gameUid,
+      token: apiToken,
       timestamp: timestamp,
       ...additionalData
     };
@@ -195,13 +197,19 @@ const launchGame = async (userId, gameUid, walletAmount, token = null, additiona
     // Create game session
     const sessionToken = generateSessionToken();
     const sessionData = {
-      userId: userId,
-      gameUid: gameUid,
-      sessionToken: sessionToken,
-      launchUrl: launchUrl,
-      walletAmount: walletAmount,
-      timestamp: timestamp,
-      status: 'launched'
+      user_id: user.user_id,
+      game_id: gameUid,
+      provider: additionalData.provider || 'JiliGaming',
+      game_type: additionalData.game_type || 'Slot Game',
+      launch_token: sessionToken,
+      session_token: null,
+      player_username: credentials.username,
+      currency: getUserCurrency(user),
+      language: 'en',
+      platform: additionalData.platform || 'desktop',
+      game_url: launchUrl,
+      status: 'active',
+      started_at: new Date()
     };
 
     // Store session in database if model exists
@@ -337,6 +345,26 @@ const handleCallback = async (callbackData, ipAddress) => {
     // Generate operator transaction ID
     const operatorTxId = `PW6_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+    // Idempotency: avoid processing duplicate provider transactions
+    if (transaction_id) {
+      const existingTx = await PlayWin6Transaction.findOne({
+        where: { provider_tx_id: transaction_id }
+      });
+      if (existingTx) {
+        console.log('⚠️ Duplicate PlayWin6 callback detected, skipping wallet update:', transaction_id);
+        return {
+          success: true,
+          message: 'Duplicate callback ignored',
+          transactionId: transaction_id,
+          operatorTxId: existingTx.operator_tx_id,
+          userId: user.user_id,
+          sessionId: existingTx.session_id,
+          transactionType: existingTx.type,
+          amount: existingTx.amount
+        };
+      }
+    }
+
     // Process transaction
     const transactionData = {
       user_id: user.user_id,
@@ -374,19 +402,36 @@ const handleCallback = async (callbackData, ipAddress) => {
       });
     }
 
-    // Update user wallet if needed (integrate with your wallet service)
-    if (parseFloat(win_amount) > 0 || parseFloat(bet_amount) > 0) {
-      console.log('💰 Wallet update needed:', { 
-        betAmount: bet_amount, 
-        winAmount: win_amount, 
-        walletAmount: wallet_amount,
-        oldBalance: old_balance,
-        newBalance: new_balance
+    // Update main wallet if needed
+    let walletUpdate = null;
+    const betNumeric = parseAmount(bet_amount || '0');
+    const winNumeric = parseAmount(win_amount || '0');
+    const netDelta = winNumeric - betNumeric; // positive = credit, negative = debit
+
+    if (netDelta !== 0) {
+      console.log('💰 Main wallet update required:', {
+        userId: user.user_id,
+        betNumeric,
+        winNumeric,
+        netDelta
       });
-      
-      // TODO: Integrate with your wallet service here
-      // Example:
-      // await walletService.updateBalance(user.user_id, parseFloat(new_balance));
+
+      try {
+        // Apply balance change to main wallet
+        if (netDelta > 0) {
+          walletUpdate = await updateWalletBalance(user.user_id, netDelta, 'add');
+        } else {
+          walletUpdate = await updateWalletBalance(user.user_id, Math.abs(netDelta), 'subtract');
+        }
+
+        if (!walletUpdate || !walletUpdate.success) {
+          console.warn('⚠️ Main wallet update failed:', walletUpdate);
+        } else {
+          console.log('✅ Main wallet updated:', walletUpdate);
+        }
+      } catch (walletError) {
+        console.warn('⚠️ Main wallet update error:', walletError.message);
+      }
     }
 
     console.log('✅ PlayWin6 callback processed successfully');
@@ -399,7 +444,8 @@ const handleCallback = async (callbackData, ipAddress) => {
       userId: user.user_id,
       sessionId: gameSession.id,
       transactionType: transactionType,
-      amount: transactionData.amount
+      amount: transactionData.amount,
+      walletUpdate
     };
   } catch (error) {
     console.error('❌ Error processing PlayWin6 callback:', error);
@@ -494,7 +540,7 @@ const getGameSession = async (sessionToken) => {
     }
 
     const session = await PlayWin6GameSession.findOne({
-      where: { sessionToken }
+      where: { session_token: sessionToken }
     });
 
     if (!session) {
@@ -534,7 +580,7 @@ const endGameSession = async (sessionToken) => {
     }
 
     const session = await PlayWin6GameSession.findOne({
-      where: { sessionToken }
+      where: { session_token: sessionToken }
     });
 
     if (!session) {
@@ -544,7 +590,7 @@ const endGameSession = async (sessionToken) => {
     // Update session status
     await session.update({
       status: 'ended',
-      endedAt: new Date()
+      ended_at: new Date()
     });
 
     console.log('✅ PlayWin6 game session ended successfully');

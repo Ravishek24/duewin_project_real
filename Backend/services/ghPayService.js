@@ -167,12 +167,10 @@ async function processGhPayCallback(callbackData) {
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
 
-        // Create transaction record for both success and failure
-        if (Transaction && typeof Transaction.create === 'function') {
-            const transactionType = isDeposit ? 
-                (orderStatus === 'completed' ? 'deposit' : 'deposit_failed') :
-                (orderStatus === 'completed' ? 'withdrawal' : 'withdrawal_failed');
-            
+        // ✅ Handle withdrawal and deposit properly with refunds
+        if (isDeposit) {
+            // Deposit logic - create transaction record
+            const transactionType = orderStatus === 'completed' ? 'deposit' : 'deposit_failed';
             await Transaction.create({
                 user_id: order.user_id,
                 type: transactionType,
@@ -181,46 +179,78 @@ async function processGhPayCallback(callbackData) {
                 payment_gateway_id: order.payment_gateway_id,
                 order_id: orderId,
                 transaction_id: callbackData.transactionNo || orderId,
-                description: `GHPAY ${isDeposit ? 'deposit' : 'withdrawal'} ${orderStatus === 'completed' ? 'successful' : 'failed'}`,
-                reference_id: `ghpay_${isDeposit ? 'deposit' : 'withdrawal'}_${orderStatus === 'completed' ? 'success' : 'failed'}_${orderId}`,
+                description: `GHPAY deposit ${orderStatus === 'completed' ? 'successful' : 'failed'}`,
+                reference_id: `ghpay_deposit_${orderStatus === 'completed' ? 'success' : 'failed'}_${orderId}`,
                 metadata: {
                     gateway: 'GHPAY',
-                    transaction_type: isDeposit ? 'deposit' : 'withdrawal',
                     original_status: status,
                     processed_at: new Date().toISOString()
                 },
                 created_at: new Date(),
                 updated_at: new Date()
             });
-            console.log(`✅ Transaction record created for GHPAY ${transactionType}`);
+        } else {
+            // Withdrawal logic - handle success/failure with refunds
+            if (orderStatus === 'completed') {
+                // SUCCESS: Create withdrawal success transaction
+                await Transaction.create({
+                    user_id: order.user_id,
+                    type: 'withdrawal',
+                    amount: parseFloat(order.amount),
+                    status: 'completed',
+                    payment_gateway_id: order.payment_gateway_id,
+                    order_id: orderId,
+                    transaction_id: callbackData.transactionNo || orderId,
+                    description: 'GHPAY withdrawal successful',
+                    reference_id: `ghpay_withdrawal_${orderId}`,
+                    metadata: {
+                        gateway: 'GHPAY',
+                        original_status: status,
+                        processed_at: new Date().toISOString()
+                    },
+                    created_at: new Date(),
+                    updated_at: new Date()
+                });
+                console.log(`✅ GHPAY withdrawal completed successfully`);
+            } else if (orderStatus === 'failed') {
+                // FAILURE: Refund money to user wallet and create failed transaction
+                const User = require('../models/User');
+                const user = await User.findByPk(order.user_id);
+                if (user) {
+                    const currentBalance = parseFloat(user.wallet_balance) || 0;
+                    const refundAmount = parseFloat(order.amount);
+                    const newBalance = currentBalance + refundAmount;
+                    
+                    await user.update({ wallet_balance: newBalance });
+                    
+                    // Create withdrawal failed transaction
+                    await Transaction.create({
+                        user_id: order.user_id,
+                        type: 'withdrawal_failed',
+                        amount: refundAmount,
+                        status: 'failed',
+                        payment_gateway_id: order.payment_gateway_id,
+                        order_id: orderId,
+                        transaction_id: callbackData.transactionNo || orderId,
+                        description: 'GHPAY withdrawal failed - amount refunded',
+                        reference_id: `ghpay_withdrawal_failed_${orderId}`,
+                        metadata: {
+                            gateway: 'GHPAY',
+                            original_status: status,
+                            refunded_amount: refundAmount,
+                            original_balance: currentBalance,
+                            new_balance: newBalance,
+                            processed_at: new Date().toISOString()
+                        },
+                        created_at: new Date(),
+                        updated_at: new Date()
+                    });
+                    console.log(`✅ GHPAY withdrawal failed - ₹${refundAmount} refunded to user wallet`);
+                }
+            }
         }
         
-        // ✅ Create transaction record
-        if (orderStatus === 'completed') {
-            await Transaction.create({
-                user_id: order.user_id,
-                type: isDeposit ? 'deposit' : 'withdrawal',
-                amount: parseFloat(order.amount),
-                status: 'completed',
-                payment_gateway_id: order.payment_gateway_id,
-                order_id: order.order_id,
-                transaction_id: order.transaction_id,
-                created_at: new Date(),
-                updated_at: new Date()
-            });
-        } else if (orderStatus === 'failed') {
-            await Transaction.create({
-                user_id: order.user_id,
-                type: isDeposit ? 'deposit' : 'withdrawal',
-                amount: parseFloat(order.amount),
-                status: 'failed',
-                payment_gateway_id: order.payment_gateway_id,
-                order_id: order.order_id,
-                transaction_id: order.transaction_id,
-                created_at: new Date(),
-                updated_at: new Date()
-            });
-        }
+        // Transaction record already created above for both success and failure
         
         // If deposit completed, update user wallet
         if (isDeposit && orderStatus === 'completed') {

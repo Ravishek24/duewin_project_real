@@ -232,6 +232,29 @@ async function processWowPayDepositCallback(callbackData) {
             
             await order.update({ status: orderStatus, updated_at: new Date() });
             console.log(`✅ Order status updated to: ${orderStatus}`);
+
+            // Create transaction record for both success and failure
+            if (Transaction && typeof Transaction.create === 'function') {
+                await Transaction.create({
+                    user_id: order.user_id,
+                    type: orderStatus === 'completed' ? 'deposit' : 'deposit_failed',
+                    amount: parseFloat(order.amount),
+                    status: orderStatus === 'completed' ? 'completed' : 'failed',
+                    payment_gateway_id: 'WOWPAY',
+                    order_id: orderId,
+                    transaction_id: callbackData.order_sn || orderId,
+                    description: orderStatus === 'completed' ? 'WOWPAY deposit successful' : 'WOWPAY deposit failed',
+                    reference_id: orderStatus === 'completed' ? `wowpay_deposit_${orderId}` : `wowpay_deposit_failed_${orderId}`,
+                    metadata: {
+                        gateway: 'WOWPAY',
+                        original_status: status,
+                        processed_at: new Date().toISOString()
+                    },
+                    created_at: new Date(),
+                    updated_at: new Date()
+                });
+                console.log(`✅ Transaction record created for WOWPAY ${orderStatus === 'completed' ? 'deposit' : 'deposit_failed'}`);
+            }
             
             // Update user wallet if completed
             if (orderStatus === 'completed') {
@@ -246,20 +269,7 @@ async function processWowPayDepositCallback(callbackData) {
                               actual_deposit_amount: newActualDeposit
                             });
                             
-                            // ✅ Create transaction record for deposit
-                            if (Transaction && typeof Transaction.create === 'function') {
-                                await Transaction.create({
-                                    user_id: order.user_id,
-                                    type: 'deposit',
-                                    amount: parseFloat(order.amount),
-                                    status: 'completed',
-                                    payment_gateway_id: 'WOWPAY',
-                                    order_id: orderId,
-                                    transaction_id: callbackData.order_sn || orderId,
-                                    created_at: new Date(),
-                                    updated_at: new Date()
-                                });
-                            }
+                            // Transaction record already created above for both success and failure
                             
                             // First recharge bonus logic
                             const referralService = require('./referralService');
@@ -450,18 +460,19 @@ async function processWowPayWithdrawalCallback(callbackData) {
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
 
-        // Create transaction record for both success and failure
-        if (Transaction && typeof Transaction.create === 'function') {
+        // ✅ Handle withdrawal success/failure with proper refunds
+        if (orderStatus === 'completed') {
+            // SUCCESS: Create withdrawal success transaction
             await Transaction.create({
                 user_id: order.user_id,
-                type: orderStatus === 'completed' ? 'deposit' : 'deposit_failed',
+                type: 'withdrawal',
                 amount: parseFloat(order.amount),
-                status: orderStatus === 'completed' ? 'completed' : 'failed',
+                status: 'completed',
                 payment_gateway_id: 'WOWPAY',
                 order_id: orderId,
                 transaction_id: callbackData.order_sn || orderId,
-                description: orderStatus === 'completed' ? 'WOWPAY deposit successful' : 'WOWPAY deposit failed',
-                reference_id: orderStatus === 'completed' ? `wowpay_deposit_${orderId}` : `wowpay_deposit_failed_${orderId}`,
+                description: 'WOWPAY withdrawal successful',
+                reference_id: `wowpay_withdrawal_${orderId}`,
                 metadata: {
                     gateway: 'WOWPAY',
                     original_status: status,
@@ -470,30 +481,42 @@ async function processWowPayWithdrawalCallback(callbackData) {
                 created_at: new Date(),
                 updated_at: new Date()
             });
-            console.log(`✅ Transaction record created for WOWPAY ${orderStatus === 'completed' ? 'deposit' : 'deposit_failed'}`);
-        }
-        
-        // ✅ Create transaction record for withdrawal (both success and failure)
-        if (Transaction && typeof Transaction.create === 'function') {
-            await Transaction.create({
-                user_id: order.user_id,
-                type: orderStatus === 'completed' ? 'withdrawal' : 'withdrawal_failed',
-                amount: parseFloat(order.withdrawal_amount),
-                status: orderStatus === 'completed' ? 'completed' : 'failed',
-                payment_gateway_id: 'WOWPAY',
-                order_id: orderId,
-                transaction_id: callbackData.order_sn || orderId,
-                description: orderStatus === 'completed' ? 'WOWPAY withdrawal successful' : 'WOWPAY withdrawal failed',
-                reference_id: orderStatus === 'completed' ? `wowpay_withdrawal_${orderId}` : `wowpay_withdrawal_failed_${orderId}`,
-                metadata: {
-                    gateway: 'WOWPAY',
-                    original_status: status,
-                    processed_at: new Date().toISOString()
-                },
-                created_at: new Date(),
-                updated_at: new Date()
-            });
-            console.log(`✅ Transaction record created for WOWPAY ${orderStatus === 'completed' ? 'withdrawal' : 'withdrawal_failed'}`);
+            console.log(`✅ WOWPAY withdrawal completed successfully`);
+        } else if (orderStatus === 'failed' || orderStatus === 'rejected') {
+            // FAILURE: Refund money to user wallet and create failed transaction
+            const User = require('../models/User');
+            const user = await User.findByPk(order.user_id);
+            if (user) {
+                const currentBalance = parseFloat(user.wallet_balance) || 0;
+                const refundAmount = parseFloat(order.amount);
+                const newBalance = currentBalance + refundAmount;
+                
+                await user.update({ wallet_balance: newBalance });
+                
+                // Create withdrawal failed transaction
+                await Transaction.create({
+                    user_id: order.user_id,
+                    type: 'withdrawal_failed',
+                    amount: refundAmount,
+                    status: 'failed',
+                    payment_gateway_id: 'WOWPAY',
+                    order_id: orderId,
+                    transaction_id: callbackData.order_sn || orderId,
+                    description: `WOWPAY withdrawal failed - amount refunded (${orderStatus})`,
+                    reference_id: `wowpay_withdrawal_failed_${orderId}`,
+                    metadata: {
+                        gateway: 'WOWPAY',
+                        original_status: status,
+                        refunded_amount: refundAmount,
+                        original_balance: currentBalance,
+                        new_balance: newBalance,
+                        processed_at: new Date().toISOString()
+                    },
+                    created_at: new Date(),
+                    updated_at: new Date()
+                });
+                console.log(`✅ WOWPAY withdrawal failed - ₹${refundAmount} refunded to user wallet`);
+            }
         }
         
         return { success: true, message: 'success' }; // Must return 'success' for WOWPAY

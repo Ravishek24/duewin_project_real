@@ -213,6 +213,40 @@ const processMxPayCollectionCallback = async (callbackData) => {
           updated_at: new Date()
       }, { transaction: t });
       
+      // ✅ Add attendance logic for MXPAY
+      try {
+        const AttendanceRecord = require('../models/AttendanceRecord');
+        const moment = require('moment-timezone');
+        const todayIST = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
+        const [attendance, created] = await AttendanceRecord.findOrCreate({
+          where: { user_id: user.user_id, attendance_date: todayIST },
+          defaults: {
+            user_id: user.user_id,
+            attendance_date: todayIST,
+            date: todayIST,
+            streak_count: 1,
+            has_recharged: true,
+            recharge_amount: addAmount,
+            claim_eligible: true,
+            bonus_amount: 0,
+            bonus_claimed: false,
+            created_at: new Date(),
+            updated_at: new Date()
+          }
+        }, { transaction: t });
+        if (!created) {
+          await attendance.update({
+            has_recharged: true,
+            recharge_amount: (parseFloat(attendance.recharge_amount) || 0) + addAmount,
+            claim_eligible: true,
+            updated_at: new Date()
+          }, { transaction: t });
+        }
+        console.log('✅ MXPAY: Attendance record updated for user', user.user_id);
+      } catch (attendanceError) {
+        console.error('Failed to process attendance for MXPAY deposit:', attendanceError.message);
+      }
+
       await t.commit();
       
       return {
@@ -574,12 +608,20 @@ const processMxPayTransferCallback = async (callbackData) => {
       // ✅ Create transaction record for failed withdrawal
       await Transaction.create({
           user_id: withdrawalRecord.user_id,
-          type: 'withdrawal',
+          type: 'withdrawal_failed',
           amount: parseFloat(withdrawalRecord.withdrawal_amount),
           status: 'failed',
           payment_gateway_id: withdrawalRecord.payment_gateway,
           order_id: withdrawalRecord.order_id,
           transaction_id: withdrawalRecord.transaction_id,
+          description: 'MXPAY withdrawal failed - amount refunded',
+          reference_id: `mxpay_withdrawal_failed_${withdrawalRecord.order_id}`,
+          metadata: {
+              gateway: 'MXPAY',
+              return_code: callbackData.returncode,
+              refunded_amount: parseFloat(withdrawalRecord.withdrawal_amount),
+              processed_at: new Date().toISOString()
+          },
           created_at: new Date(),
           updated_at: new Date()
       }, { transaction: t });

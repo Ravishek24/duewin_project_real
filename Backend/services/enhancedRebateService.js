@@ -222,15 +222,8 @@ class EnhancedRebateService {
                 }
             }
 
-            // Update user's wallet if commission earned
-            if (totalCommission > 0) {
-                await models.User.increment('wallet_balance', {
-                    by: totalCommission,
-                    where: { user_id: userId },
-                    transaction
-                });
-
-                // Create individual commission records for each team member who placed bets
+            // Create individual commission records for each team member who placed bets
+            let actualTotalCommission = 0;
                 for (const [referredUserId, betAmount] of Object.entries(allDailyBets)) {
                     if (betAmount > 0) {
                         // Find which level this user belongs to
@@ -246,9 +239,15 @@ class EnhancedRebateService {
                             }
                         }
                         
-                        // Calculate this user's contribution to total commission
-                        const totalTeamBets = Object.values(allDailyBets).reduce((sum, amount) => sum + amount, 0);
-                        const userCommissionShare = (betAmount / totalTeamBets) * totalCommission;
+                        // Calculate commission based on this user's specific level rate
+                        const levelRateField = `lottery_l${userLevel}_rebate`;
+                        const levelRate = parseFloat(rebateLevel[levelRateField] || 0);
+                        const userCommissionShare = betAmount * levelRate;
+                        
+                        console.log(`💰 User ${referredUserId} (Level ${userLevel}): ${betAmount} × ${levelRate} = ${userCommissionShare}`);
+                        
+                        // Add to actual total commission
+                        actualTotalCommission += userCommissionShare;
                         
                         await models.ReferralCommission.create({
                             user_id: userId,
@@ -262,8 +261,37 @@ class EnhancedRebateService {
                             status: 'paid',
                             created_at: new Date()
                         }, { transaction });
+
+                        // 🆕 CREATE TRANSACTION RECORD FOR AUDIT TRAIL
+                        await models.Transaction.create({
+                            user_id: userId,
+                            type: 'rebate',
+                            amount: userCommissionShare,
+                            status: 'completed',
+                            description: `Daily rebate commission from user ${referredUserId} (Level ${userLevel})`,
+                            reference_id: `rebate_${processDate}_${userId}_${referredUserId}_${Date.now()}`,
+                            metadata: {
+                                rebate_type: 'lottery',
+                                referred_user_id: parseInt(referredUserId),
+                                referral_level: userLevel,
+                                bet_amount: betAmount,
+                                commission_share: userCommissionShare,
+                                process_date: processDate,
+                                distribution_batch_id: `rebate-${processDate}-${Date.now()}`
+                            }
+                        }, { transaction });
                     }
                 }
+                
+            // Update user's wallet with actual total commission earned
+            if (actualTotalCommission > 0) {
+                await models.User.increment('wallet_balance', {
+                    by: actualTotalCommission,
+                    where: { user_id: userId },
+                    transaction
+                });
+                
+                console.log(`💳 Updated wallet for user ${userId}: +${actualTotalCommission} (Total earned from ${Object.keys(allDailyBets).length} team members)`);
             }
 
             // Update rebate team data
@@ -273,7 +301,7 @@ class EnhancedRebateService {
 
             return {
                 success: true,
-                commission: totalCommission,
+                commission: actualTotalCommission,
                 levelCommissions
             };
 

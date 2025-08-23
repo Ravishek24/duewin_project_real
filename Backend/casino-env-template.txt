@@ -1,0 +1,36 @@
+##################################################
+#           Casino API Environment Variables     #
+##################################################
+
+# Casino API Credentials
+CASINO_AGENCY_UID=8dee1e401b87408cca3ca813c2250cb4
+CASINO_AES_KEY=68b074393ec7c5a975856a90bd6fdf47
+CASINO_SERVER_URL=https://jsgame.live
+
+# Casino Callback URL (your server's callback endpoint)
+CASINO_CALLBACK_URL=https://your-domain.com/api/casino/callback
+
+# Optional: Override default settings
+CASINO_DEFAULT_CURRENCY=USD
+CASINO_DEFAULT_LANGUAGE=en
+CASINO_ENABLE_LOGGING=true
+CASINO_LOG_LEVEL=info
+
+# Your existing environment variables (keep these)
+BACKEND_URL=https://your-domain.com
+FRONTEND_URL=https://your-domain.com
+
+##################################################
+#           How to Use                           #
+##################################################
+
+# 1. Copy these variables to your .env file
+# 2. Replace the placeholder values with your actual credentials
+# 3. Ensure your server is accessible from the internet for callbacks
+# 4. The callback URL should point to: /api/casino/callback
+
+# Example .env entry:
+# CASINO_AGENCY_UID=your_actual_agency_uid
+# CASINO_AES_KEY=your_actual_aes_key
+# CASINO_SERVER_URL=https://your_casino_server.com
+# CASINO_CALLBACK_URL=https://yourdomain.com/api/casino/callback

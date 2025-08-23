@@ -176,7 +176,11 @@ const initializeModels = async () => {
                 'Game5DSummaryStats',
                 
                 // 🎯 WAGERING SYSTEM MODELS
-'CreditTransaction',
+                'CreditTransaction',
+                
+                // 🎰 CASINO INTEGRATION MODELS
+                'CasinoGameSession',
+                'CasinoTransaction',
 
             ];
 

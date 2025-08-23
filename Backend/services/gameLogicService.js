@@ -3749,7 +3749,11 @@ async function selectProtectedResultWithExposure(gameType, duration, periodId, t
 
             case 'k3':
                 // Find zero exposure combination
-                const k3Exposures = await redis.hgetall(exposureKey);
+                // Ensure combinations are initialized and get Redis helper
+                if (!global.k3Combinations) {
+                    await initializeGameCombinations();
+                }
+                const k3Exposures = await (await getRedisHelper()).hgetall(exposureKey);
                 const zeroExposureK3 = [];
 
                 for (const [key, combo] of Object.entries(global.k3Combinations)) {
@@ -4680,6 +4684,7 @@ const getUniqueUserCount = async (gameType, duration, periodId, timeline = 'defa
     try {
         // FIXED: Use correct Redis hash key pattern that matches bet storage
         const betHashKey = `bets:${gameType}:${duration}:${timeline}:${periodId}`;
+        const redis = await getRedisHelper();
         const betsData = await redis.hgetall(betHashKey);
         const uniqueUsers = new Set();
 

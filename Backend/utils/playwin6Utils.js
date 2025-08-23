@@ -12,21 +12,34 @@ const playwin6Config = require('../config/playwin6Config');
  */
 const generateAESHash = (data, key = playwin6Config.aesKey, iv = playwin6Config.aesIv) => {
   try {
-    if (!key || !iv) {
-      throw new Error('AES key and IV are required for encryption');
+    const mode = (playwin6Config.aesMode === 'ecb') ? 'aes-256-ecb' : 'aes-256-cbc';
+    if (!key) {
+      throw new Error('AES key is required for encryption');
+    }
+    if (mode === 'aes-256-cbc' && !iv) {
+      throw new Error('AES IV is required for CBC encryption');
     }
 
-    // Convert data to JSON string
+    // Prepare key/iv buffers. Support hex (64/32 chars) or utf8 strings
+    const keyBuf = Buffer.from(key, /^[0-9a-fA-F]{64}$/.test(key) ? 'hex' : 'utf8');
+    const ivBuf = mode === 'aes-256-cbc'
+      ? Buffer.from(iv, /^[0-9a-fA-F]{32}$/.test(iv) ? 'hex' : 'utf8')
+      : null;
+
+    if (keyBuf.length !== 32) {
+      throw new Error('PLAYWIN6_AES_KEY must be 32 bytes');
+    }
+    if (mode === 'aes-256-cbc' && ivBuf && ivBuf.length !== 16) {
+      throw new Error('PLAYWIN6_AES_IV must be 16 bytes');
+    }
+
     const jsonData = JSON.stringify(data);
-    
-    // Create cipher
-    const cipher = crypto.createCipher('aes-256-cbc', key);
+    const cipher = crypto.createCipheriv(mode, keyBuf, mode === 'aes-256-ecb' ? null : ivBuf);
     cipher.setAutoPadding(true);
-    
-    // Encrypt the data
-    let encrypted = cipher.update(jsonData, 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-    
+
+    const outEnc = (playwin6Config.payloadEncoding === 'hex') ? 'hex' : 'base64';
+    let encrypted = cipher.update(jsonData, 'utf8', outEnc);
+    encrypted += cipher.final(outEnc);
     return encrypted;
   } catch (error) {
     console.error('Error generating AES hash:', error);
@@ -43,18 +56,31 @@ const generateAESHash = (data, key = playwin6Config.aesKey, iv = playwin6Config.
  */
 const decryptAESHash = (encryptedData, key = playwin6Config.aesKey, iv = playwin6Config.aesIv) => {
   try {
-    if (!key || !iv) {
-      throw new Error('AES key and IV are required for decryption');
+    const mode = (playwin6Config.aesMode === 'ecb') ? 'aes-256-ecb' : 'aes-256-cbc';
+    if (!key) {
+      throw new Error('AES key is required for decryption');
+    }
+    if (mode === 'aes-256-cbc' && !iv) {
+      throw new Error('AES IV is required for CBC decryption');
     }
 
-    // Create decipher
-    const decipher = crypto.createDecipher('aes-256-cbc', key);
+    const keyBuf = Buffer.from(key, /^[0-9a-fA-F]{64}$/.test(key) ? 'hex' : 'utf8');
+    const ivBuf = mode === 'aes-256-cbc'
+      ? Buffer.from(iv, /^[0-9a-fA-F]{32}$/.test(iv) ? 'hex' : 'utf8')
+      : null;
+
+    if (keyBuf.length !== 32) {
+      throw new Error('PLAYWIN6_AES_KEY must be 32 bytes');
+    }
+    if (mode === 'aes-256-cbc' && ivBuf && ivBuf.length !== 16) {
+      throw new Error('PLAYWIN6_AES_IV must be 16 bytes');
+    }
+
+    const decipher = crypto.createDecipheriv(mode, keyBuf, mode === 'aes-256-ecb' ? null : ivBuf);
     decipher.setAutoPadding(true);
-    
-    // Decrypt the data
-    let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+    const inEnc = (playwin6Config.payloadEncoding === 'hex') ? 'hex' : 'base64';
+    let decrypted = decipher.update(encryptedData, inEnc, 'utf8');
     decrypted += decipher.final('utf8');
-    
     return JSON.parse(decrypted);
   } catch (error) {
     console.error('Error decrypting AES hash:', error);

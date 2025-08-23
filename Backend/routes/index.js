@@ -32,6 +32,7 @@ const giftRoutes = require('./giftRoutes');
 const ppayproRoutes = require('./ppayproRoutes'); // Add PPayPro routes
 const playwin6Routes = require('./playwin6Routes'); // Add PlayWin6 routes
 const wageringRoutes = require('./wageringRoutes'); // Add Wagering routes
+const casinoRoutes = require('./casinoRoutes'); // Add Casino routes
 const { paymentCallbackWhitelist } = require('../middleware/paymentCallbackWhitelist');
 
 // Remove direct import of auth, isAdmin
@@ -182,6 +183,11 @@ module.exports = (authMiddleware) => {
 
   // Wagering routes (protected)
   router.use('/wagering', authMiddleware.auth, wageringRoutes);
+  router.use('/casino', casinoRoutes(authMiddleware)); // Casino routes (some public, some protected)
+
+  // 🔓 PUBLIC MONITORING ROUTES (No Auth Required) - For monitoring and debugging
+  const monitoringRoutes = require('./monitoringRoutes');
+  router.use('/monitoring', monitoringRoutes);
 
   // Admin routes (handle their own auth internally)
   router.use('/admin', adminRoutes(authMiddleware));

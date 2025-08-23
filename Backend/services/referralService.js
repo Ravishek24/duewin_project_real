@@ -9,7 +9,7 @@ const WalletRecharge = require('../models/WalletRecharge');
 const WalletWithdrawal = require('../models/WalletWithdrawal');
 
 // Import models that exist in your codebase, but handle gracefully if they don't exist
-let ReferralTree, ReferralCommission, VipLevel, RebateLevel, UserRebateLevel, AttendanceRecord, ValidReferral, VipReward, Transaction;
+let ReferralTree, ReferralCommission, VipLevel, RebateLevel, UserRebateLevel, AttendanceRecord, ValidReferral, VipReward, Transaction, RebateTeam;
 
 // Try to import models, but handle gracefully if they don't exist
 try {
@@ -64,6 +64,12 @@ try {
     Transaction = require('../models/Transaction');
 } catch (e) {
     console.warn('Transaction model not found - using fallback logic');
+}
+
+try {
+    RebateTeam = require('../models/RebateTeam');
+} catch (e) {
+    console.warn('RebateTeam model not found - using fallback logic');
 }
 
 // Import self rebate service
@@ -233,14 +239,22 @@ const processRebateCommission = async (gameType) => {
                 const referrer = referrerMap.get(user.referral_code);
                 if (!referrer) continue;
 
-                const rebateLevel = referrer.UserRebateLevel?.rebate_level || 'L0';
+                // Get referrer's rebate level from RebateTeam (consistent approach)
+                const referrerRebateTeam = await RebateTeam.findOne({
+                    where: { user_id: referrer.user_id },
+                    transaction: t
+                });
+                
+                if (!referrerRebateTeam) continue;
+                
+                const rebateLevel = referrerRebateTeam.current_rebet_level;
                 const rebateLevelDetails = rebateLevelMap.get(rebateLevel);
 
                 if (!rebateLevelDetails) continue;
 
                 const level1Rate = gameType === 'lottery' ? 
-                    parseFloat(rebateLevelDetails.lottery_l1_rebate) / 100 : 
-                    parseFloat(rebateLevelDetails.casino_l1_rebate) / 100;
+                    parseFloat(rebateLevelDetails.lottery_l1_rebate) : 
+                    parseFloat(rebateLevelDetails.casino_l1_rebate);
 
                 const level1Commission = betAmount * level1Rate;
 
@@ -1617,7 +1631,7 @@ const processFirstRechargeBonus = async (userId, rechargeAmount) => {
         }
 
         // Get user data for balance tracking
-        const user = await sequelizeInstance.models.User.findByPk(userId, { 
+        const user = await sequelizeInstance.models.User.findByPk(userId, {
             attributes: ['wallet_balance'],
             transaction: t 
         });
@@ -1625,15 +1639,45 @@ const processFirstRechargeBonus = async (userId, rechargeAmount) => {
         // Award bonus
         await updateWalletBalance(userId, applicableTier.bonus, 'add', t);
 
-        // 🎯 Create credit transaction for wagering tracking
-        await CreditService.addCredit(
-            userId,
-            applicableTier.bonus,
-            'welcome_bonus',
-            'external',
-            `first_deposit_bonus_${userId}_${Date.now()}`,
-            `First deposit bonus for ₹${rechargeAmount} deposit`
-        );
+        // 🎯 Create credit transaction for wagering tracking (using existing transaction)
+        try {
+            await CreditService.addCreditWithTransaction(
+                userId,
+                applicableTier.bonus,
+                'welcome_bonus',
+                'external',
+                `first_deposit_bonus_${userId}_${Date.now()}`,
+                `First deposit bonus for ₹${rechargeAmount} deposit`,
+                t  // Pass existing transaction
+            );
+        } catch (creditError) {
+            console.error(`❌ [REFERRAL_SERVICE] Credit service failed for first recharge bonus:`, creditError.message);
+            
+            // Even if credit service fails, we need to mark user as ineligible for future first bonuses
+            // This prevents users from getting stuck in a loop where they can't receive the bonus
+            await sequelizeInstance.models.User.update({
+                has_received_first_bonus: true,
+                bonus_amount: parseFloat(user?.bonus_amount || 0) + applicableTier.bonus
+            }, {
+                where: { user_id: userId },
+                transaction: t
+            });
+            
+            console.log(`⚠️ [REFERRAL_SERVICE] Marked user ${userId} as ineligible for future first bonuses due to credit service failure`);
+            
+            // Rollback the wallet balance update since credit service failed
+            await updateWalletBalance(userId, applicableTier.bonus, 'subtract', t);
+            
+            await t.commit();
+            
+            return {
+                success: false,
+                message: `First recharge bonus failed: ${creditError.message}`,
+                rechargeAmount,
+                bonusAmount: applicableTier.bonus,
+                markedIneligible: true
+            };
+        }
 
         // Create transaction record for first deposit bonus
         const Transaction = require('../models/Transaction');
@@ -1655,7 +1699,18 @@ const processFirstRechargeBonus = async (userId, rechargeAmount) => {
             new_balance: parseFloat(user?.wallet_balance || 0) + applicableTier.bonus
         }, { transaction: t });
 
+        // Update user to mark first bonus as received
+        await sequelizeInstance.models.User.update({
+            has_received_first_bonus: true,
+            bonus_amount: parseFloat(user?.bonus_amount || 0) + applicableTier.bonus
+        }, {
+            where: { user_id: userId },
+            transaction: t
+        });
+
         await t.commit();
+
+        console.log(`🎁 [REFERRAL_SERVICE] First recharge bonus successfully awarded to user ${userId}: ${applicableTier.bonus}`);
 
         return {
             success: true,
@@ -1667,10 +1722,29 @@ const processFirstRechargeBonus = async (userId, rechargeAmount) => {
         if (t) {
             await t.rollback();
         }
-        console.error('Error processing first recharge bonus:', error);
+        
+        console.error(`❌ [REFERRAL_SERVICE] Error processing first recharge bonus for user ${userId}:`, error);
+        
+        // Even if everything fails, we should try to mark the user as ineligible for future first bonuses
+        // This prevents the system from getting stuck in a loop
+        try {
+            const sequelizeInstance = await getSequelizeInstance();
+            if (sequelizeInstance) {
+                await sequelizeInstance.models.User.update({
+                    has_received_first_bonus: true
+                }, {
+                    where: { user_id: userId }
+                });
+                console.log(`⚠️ [REFERRAL_SERVICE] Emergency: Marked user ${userId} as ineligible for future first bonuses due to critical error`);
+            }
+        } catch (emergencyError) {
+            console.error(`💥 [REFERRAL_SERVICE] Emergency update failed for user ${userId}:`, emergencyError.message);
+        }
+        
         return {
             success: false,
-            message: 'Error processing first recharge bonus'
+            message: `Error processing first recharge bonus: ${error.message}`,
+            error: error.message
         };
     }
 };
@@ -2213,14 +2287,15 @@ const claimInvitationBonus = async (userId) => {
             t
         );
 
-        // 🎯 Create credit transaction for wagering tracking
-        await CreditService.addCredit(
+        // 🎯 Create credit transaction for wagering tracking (using existing transaction)
+        await CreditService.addCreditWithTransaction(
             userId,
             parseFloat(eligibleTier.amount),
             'referral_reward',
             'external',
             `direct_bonus_${userId}_${Date.now()}`,
-            `Direct invitation bonus for ${eligibleTier.invitees} referrals`
+            `Direct invitation bonus for ${eligibleTier.invitees} referrals`,
+            t  // Pass existing transaction
         );
 
         console.log('💰 Added', eligibleTier.amount, 'to user wallet');
@@ -3209,22 +3284,16 @@ const processMultiLevelRebateCommission = async (gameType) => {
         for (const referrerTree of allReferrers) {
             const referrerId = referrerTree.user_id;
             
-            // Get referrer's rebate level
-            const referrer = await User.findOne({
+            // Get referrer's rebate level from RebateTeam (consistent with enhancedRebateService)
+            const referrerRebateTeam = await RebateTeam.findOne({
                 where: { user_id: referrerId },
-                include: UserRebateLevel ? [
-                    {
-                        model: UserRebateLevel,
-                        required: false
-                    }
-                ] : [],
                 transaction: t
             });
 
-            if (!referrer) continue;
+            if (!referrerRebateTeam) continue;
 
-            // Get rebate level details
-            const rebateLevel = referrer.UserRebateLevel?.rebate_level || 'L0';
+            // Get rebate level details using current_rebet_level
+            const rebateLevel = referrerRebateTeam.current_rebet_level;
             const rebateLevelDetails = await RebateLevel.findOne({
                 where: { level: rebateLevel },
                 transaction: t
@@ -3493,25 +3562,19 @@ const getRebateCommissionStats = async (userId, dateFilter = null) => {
     try {
         console.log('📊 Getting rebate commission stats for user:', userId);
 
-        // Get user's rebate level
-        const user = await User.findOne({
-            where: { user_id: userId },
-            include: UserRebateLevel ? [
-                {
-                    model: UserRebateLevel,
-                    required: false
-                }
-            ] : []
+        // Get user's rebate level from RebateTeam (consistent approach)
+        const userRebateTeam = await RebateTeam.findOne({
+            where: { user_id: userId }
         });
 
-        if (!user) {
+        if (!userRebateTeam) {
             return {
                 success: false,
-                message: 'User not found'
+                message: 'User rebate team not found'
             };
         }
 
-        const rebateLevel = user.UserRebateLevel?.rebate_level || 'L0';
+        const rebateLevel = userRebateTeam.current_rebet_level;
         
         // Get rebate level details
         let rebateLevelDetails = null;

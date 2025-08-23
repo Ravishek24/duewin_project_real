@@ -14,8 +14,8 @@ const playwin6Config = {
   
   // Game Launch Configuration
   gameLaunchUrl: process.env.PLAYWIN6_GAME_LAUNCH_URL || 'https://playwin6.com/launchGame',
-  providerGameUrl: process.env.PLAYWIN6_PROVIDER_GAME_URL || 'https://playwin6.com/api/providerGame',
-  getProviderUrl: process.env.PLAYWIN6_GET_PROVIDER_URL || 'https://playwin6.com/api/getProvider',
+  providerGameUrl: process.env.PLAYWIN6_PROVIDER_GAME_URL || 'https://playwin6.com/providerGame',
+  getProviderUrl: process.env.PLAYWIN6_GET_PROVIDER_URL || 'https://playwin6.com/getProvider',
   
   // Callback URLs
   callbackUrl: process.env.PLAYWIN6_CALLBACK_URL || 
@@ -176,6 +176,8 @@ const playwin6Config = {
   // AES Encryption Configuration
   aesKey: process.env.PLAYWIN6_AES_KEY?.trim(),
   aesIv: process.env.PLAYWIN6_AES_IV?.trim(),
+  aesMode: (process.env.PLAYWIN6_AES_MODE || 'cbc').toLowerCase(), // cbc | ecb
+  payloadEncoding: (process.env.PLAYWIN6_PAYLOAD_ENCODING || 'base64').toLowerCase(), // base64 | hex
   
   // Request Configuration
   timeout: 30000, // 30 seconds
@@ -207,10 +209,14 @@ const validateConfig = () => {
     }
   }
   
-  // Validate AES configuration
-  if (!playwin6Config.aesKey || !playwin6Config.aesIv) {
-    console.warn('⚠️ PLAYWIN6 CONFIG WARNING: AES encryption key or IV not configured');
-    console.warn('⚠️ Please set PLAYWIN6_AES_KEY and PLAYWIN6_AES_IV environment variables');
+  // Validate AES configuration (IV only needed for CBC)
+  if (!playwin6Config.aesKey) {
+    console.warn('⚠️ PLAYWIN6 CONFIG WARNING: AES encryption key not configured');
+    console.warn('⚠️ Please set PLAYWIN6_AES_KEY environment variable');
+  }
+  if (playwin6Config.aesMode !== 'ecb' && !playwin6Config.aesIv) {
+    console.warn('⚠️ PLAYWIN6 CONFIG WARNING: AES IV not configured for CBC mode');
+    console.warn('⚠️ Please set PLAYWIN6_AES_IV environment variable or switch to ECB');
   }
   
   return playwin6Config;

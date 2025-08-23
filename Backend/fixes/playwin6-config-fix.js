@@ -14,8 +14,8 @@ const fixedPlaywin6Config = {
   // FIXED: Correct API endpoints
   apiBaseUrl: process.env.PLAYWIN6_API_BASE_URL || 'https://playwin6.com',
   gameLaunchUrl: process.env.PLAYWIN6_GAME_LAUNCH_URL || 'https://playwin6.com/launchGame',
-  providerGameUrl: process.env.PLAYWIN6_PROVIDER_GAME_URL || 'https://playwin6.com/api/providerGame',
-  getProviderUrl: process.env.PLAYWIN6_GET_PROVIDER_URL || 'https://playwin6.com/api/getProvider',
+  providerGameUrl: process.env.PLAYWIN6_PROVIDER_GAME_URL || 'https://playwin6.com/providerGame',
+  getProviderUrl: process.env.PLAYWIN6_GET_PROVIDER_URL || 'https://playwin6.com/getProvider',
   
   // FIXED: Authentication
   apiToken: process.env.PLAYWIN6_API_TOKEN?.trim(),

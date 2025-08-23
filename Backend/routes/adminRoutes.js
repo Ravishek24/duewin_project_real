@@ -69,6 +69,7 @@ const {
   getPaymentGatewayStatsController
 } = require('../controllers/adminController/paymentGatewayController');
 const { getBlockedEntities, unblockEntity, getViolationHistory } = require('../controllers/adminController/blockedEntitiesController');
+const { getPeriodBetsController } = require('../controllers/adminController/periodBetsController');
 const { createGiftCode, getGiftCodeByCode, getGiftCodeStatus, getAllGiftCodes, getGiftCodeStats } = require('../controllers/adminController/giftCodeController');
 const { 
   getSpribeTransactionStatsController,
@@ -170,6 +171,9 @@ router.post('/direct-login', async (req, res) => {
 // System Config Login Route (no auth required)
 router.post('/system-config/login', loginSystemConfig);
 
+// 🔓 Monitoring routes moved to separate file: /monitoring/*
+// See: routes/monitoringRoutes.js for public monitoring endpoints
+
 // Apply IP whitelist, auth middleware, and admin authorization to protected routes
 router.use(adminIpWhitelist);
 router.use(auth);
@@ -263,6 +267,60 @@ router.get('/gift-codes/:code/status', getGiftCodeStatus);
 router.get('/stats/games/spribe', getSpribeTransactionStatsController);
 router.get('/stats/games/seamless', getSeamlessTransactionStatsController);
 router.get('/stats/games/combined', getCombinedTransactionStatsController);
+
+// Admin game period bets (filtered by periodId and duration) - paginated 20 by default
+router.get('/games/period-bets', getPeriodBetsController);
+
+// 🔐 PROTECTED ADMIN ROUTES (Auth Required) - For administrative actions
+// Emergency database cleanup endpoint
+router.post('/emergency-cleanup', async (req, res) => {
+    try {
+        const CreditService = require('../services/creditService');
+        console.log('🚨 [ADMIN_ROUTES] Emergency cleanup requested by admin');
+        
+        const result = await CreditService.emergencyDatabaseCleanup();
+        
+        res.json({
+            success: true,
+            result,
+            message: 'Emergency cleanup completed',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [ADMIN_ROUTES] Emergency cleanup error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
+// Force cleanup of stuck operations endpoint
+router.post('/credit-service/force-cleanup', async (req, res) => {
+    try {
+        const CreditService = require('../services/creditService');
+        console.log('🧹 [ADMIN_ROUTES] Force cleanup requested by admin');
+        
+        const cleanedOperations = CreditService.cleanupAllActiveOperations();
+        const cleanedStatuses = CreditService.cleanupStaleProcessingStatus();
+        
+        res.json({
+            success: true,
+            cleanedOperations,
+            cleanedStatuses,
+            message: 'Force cleanup completed',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [ADMIN_ROUTES] Force cleanup error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
 
 return router;
 };

@@ -463,8 +463,9 @@ async function processPpayProWithdrawalCallback(callbackData) {
         }
         await order.update({ status: orderStatus, updated_at: new Date() });
         
-        // ✅ Create transaction record for withdrawal
+        // ✅ Handle withdrawal success/failure with proper refunds
         if (orderStatus === 'completed') {
+            // SUCCESS: Create withdrawal success transaction
             await Transaction.create({
                 user_id: order.user_id,
                 type: 'withdrawal',
@@ -473,21 +474,52 @@ async function processPpayProWithdrawalCallback(callbackData) {
                 payment_gateway_id: order.payment_gateway_id,
                 order_id: order.order_id,
                 transaction_id: order.transaction_id,
+                description: 'PPAYPRO withdrawal successful',
+                reference_id: `ppaypro_withdrawal_${order.order_id}`,
+                metadata: {
+                    gateway: 'PPAYPRO',
+                    original_state: state,
+                    processed_at: new Date().toISOString()
+                },
                 created_at: new Date(),
                 updated_at: new Date()
             });
+            console.log(`✅ PPAYPRO withdrawal completed successfully`);
         } else if (orderStatus === 'failed') {
-            await Transaction.create({
-                user_id: order.user_id,
-                type: 'withdrawal',
-                amount: parseFloat(order.amount),
-                status: 'failed',
-                payment_gateway_id: order.payment_gateway_id,
-                order_id: order.order_id,
-                transaction_id: order.transaction_id,
-                created_at: new Date(),
-                updated_at: new Date()
-            });
+            // FAILURE: Refund money to user wallet and create failed transaction
+            const User = require('../models/User');
+            const user = await User.findByPk(order.user_id);
+            if (user) {
+                const currentBalance = parseFloat(user.wallet_balance) || 0;
+                const refundAmount = parseFloat(order.amount);
+                const newBalance = currentBalance + refundAmount;
+                
+                await user.update({ wallet_balance: newBalance });
+                
+                // Create withdrawal failed transaction
+                await Transaction.create({
+                    user_id: order.user_id,
+                    type: 'withdrawal_failed',
+                    amount: refundAmount,
+                    status: 'failed',
+                    payment_gateway_id: order.payment_gateway_id,
+                    order_id: order.order_id,
+                    transaction_id: order.transaction_id,
+                    description: 'PPAYPRO withdrawal failed - amount refunded',
+                    reference_id: `ppaypro_withdrawal_failed_${order.order_id}`,
+                    metadata: {
+                        gateway: 'PPAYPRO',
+                        original_state: state,
+                        refunded_amount: refundAmount,
+                        original_balance: currentBalance,
+                        new_balance: newBalance,
+                        processed_at: new Date().toISOString()
+                    },
+                    created_at: new Date(),
+                    updated_at: new Date()
+                });
+                console.log(`✅ PPAYPRO withdrawal failed - ₹${refundAmount} refunded to user wallet`);
+            }
         }
         
         return { success: true, message: 'success' }; // Must return 'success' for PPayPro

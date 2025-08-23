@@ -25,7 +25,7 @@ class ThirdPartyWallet extends Model {
       currency: {
         type: DataTypes.STRING(3),
         allowNull: false,
-        defaultValue: 'USD'
+        defaultValue: 'INR'
       },
       is_active: {
         type: DataTypes.BOOLEAN,

@@ -78,7 +78,19 @@ const getServices = () => {
  */
 const getCreditService = () => {
     try {
-        return require('../services/creditService');
+        // Ensure models are initialized before importing creditService
+        if (!isInitialized) {
+            throw new Error('Database not initialized. Call getDatabaseInstances() first.');
+        }
+        
+        const CreditService = require('../services/creditService');
+        
+        // Verify the creditService has the required methods
+        if (!CreditService.addCredit) {
+            throw new Error('CreditService.addCredit method not found');
+        }
+        
+        return CreditService;
     } catch (error) {
         console.error('❌ Error importing CreditService:', error);
         throw error;
@@ -663,7 +675,13 @@ const processVipLevelUpRewards = async () => {
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
+        // Initialize Redis manager if not already initialized
         const unifiedRedis = require('../config/unifiedRedisManager');
+        if (!unifiedRedis.isInitialized) {
+            await unifiedRedis.initialize();
+            console.log('✅ Redis manager initialized for VIP processing');
+        }
+        
         const redis = await unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
@@ -724,16 +742,8 @@ const processVipLevelUpRewards = async () => {
                     transaction: t
                 });
 
-                // 🎯 Create credit transaction for wagering tracking
-                const CreditService = getCreditService();
-                await CreditService.addCredit(
-                    userId,
-                    rewardAmount,
-                    'vip_reward',
-                    'external',
-                    `vip_levelup_${reward.id}_${Date.now()}`,
-                    `VIP Level ${reward.level} upgrade bonus`
-                );
+                // 🎯 VIP rewards are processed as wallet credits (no separate credit tracking needed)
+                console.log(`💰 Added ₹${rewardAmount} VIP Level ${reward.level} reward to user ${userId}`);
 
                 // Mark reward as completed
                 await reward.update({
@@ -823,7 +833,13 @@ const processMonthlyVipRewards = async () => {
         // Initialize database if needed
         const { sequelize: db, models: dbModels } = await getDatabaseInstances();
         
+        // Initialize Redis manager if not already initialized
         const unifiedRedis = require('../config/unifiedRedisManager');
+        if (!unifiedRedis.isInitialized) {
+            await unifiedRedis.initialize();
+            console.log('✅ Redis manager initialized for monthly VIP processing');
+        }
+        
         const redis = await unifiedRedis.getHelper();
         const acquired = await redis.set(lockKey, lockValue, 'EX', 1800, 'NX');
         
@@ -1026,6 +1042,11 @@ const initializeMasterCronJobs = async () => {
         // Initialize database connection first
         await initializeDatabaseForCron();
         console.log('✅ Database initialized for cron jobs');
+        
+        // Initialize Redis manager for cron jobs
+        const unifiedRedis = require('../config/unifiedRedisManager');
+        await unifiedRedis.initialize();
+        console.log('✅ Redis manager initialized for cron jobs');
 
         // Daily cron at 12:30 AM IST
         cron.schedule('30 0 * * *', async () => {

@@ -221,12 +221,14 @@ const initiateWithdrawal = async (userId, bankAccountId, amount, withdrawalType 
       notes: `Withdrawal request initiated by user. Amount: ${amount} INR.`
     }, { transaction: t });
     
-    // Deduct amount from wallet
+    // ✅ DEDUCT MONEY IMMEDIATELY when user creates withdrawal request
     const newBalance = parseFloat(user.wallet_balance) - parseFloat(amount);
     await User.update(
       { wallet_balance: newBalance },
       { where: { user_id: userId }, transaction: t }
     );
+    
+    // ✅ NO TRANSACTION RECORD YET - Only create on final outcome (success/failed/rejected)
     
     await t.commit();
     
@@ -336,9 +338,12 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
           message: 'Selected payment gateway not found.'
         };
       }
-      // Update withdrawal with correct gateway and gateway_id
+      
+      // ✅ MONEY ALREADY DEDUCTED - Just update status (no transaction record yet)
+      
+      // Update withdrawal status to processing
       await withdrawal.update({
-        status: 'approved',
+        status: 'processing',
         payment_gateway_id: gatewayRecord.gateway_id
       }, { transaction: t });
       
@@ -507,51 +512,45 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
       }
       return transferResult;
     } else {
-      // Rejection - refund the user's wallet
-      const user = await User.findByPk(withdrawal.user_id, {
-        transaction: t
-      });
+      // ✅ REJECTION FLOW - REFUND THE ALREADY DEDUCTED AMOUNT
+      const User = require('../models/User');
+      const Transaction = require('../models/Transaction');
       
+      const user = await User.findByPk(withdrawal.user_id, { transaction: t });
       if (!user) {
         await t.rollback();
         return {
           success: false,
-          message: "User not found for refund"
+          message: 'User not found for refund.'
         };
       }
       
-      // Get current balance before update
-      const currentBalance = parseFloat(user.wallet_balance);
+      // Refund the already deducted amount
+      const currentBalance = parseFloat(user.wallet_balance) || 0;
       const refundAmount = parseFloat(withdrawal.amount);
       const newBalance = currentBalance + refundAmount;
       
-      // Update user wallet balance (refund)
-      await User.update(
-        { wallet_balance: newBalance },
-        { 
-          where: { user_id: withdrawal.user_id },
-          transaction: t 
-        }
-      );
+      await user.update({ wallet_balance: newBalance }, { transaction: t });
       
-      // Create transaction record for admin credit (refund)
+      // Create transaction record for withdrawal rejection with refund
       await Transaction.create({
         user_id: withdrawal.user_id,
-        type: 'admin_credit',
+        type: 'withdrawal_rejected',
         amount: refundAmount,
-        status: 'completed',
-        description: `Withdrawal rejected - amount refunded to wallet. Reason: ${notes}`,
-        reference_id: `withdrawal_refund_${withdrawal.id}_${Date.now()}`,
-        created_by: adminId,
-        previous_balance: currentBalance,
-        new_balance: newBalance,
+        status: 'failed',
+        description: `Withdrawal rejected by admin - amount refunded. Reason: ${notes}`,
+        reference_id: `withdrawal_rejected_${withdrawal.id}_${Date.now()}`,
         metadata: {
           admin_id: adminId,
-          operation_type: 'withdrawal_refund',
           withdrawal_id: withdrawal.id,
           reason: notes || 'Withdrawal rejected by admin',
+          refunded_amount: refundAmount,
+          original_balance: currentBalance,
+          new_balance: newBalance,
           processed_at: new Date().toISOString()
-        }
+        },
+        created_at: new Date(),
+        updated_at: new Date()
       }, { transaction: t });
       
       // Update withdrawal status
@@ -563,7 +562,7 @@ const processWithdrawalAdminAction = async (adminId, withdrawalId, action, notes
       
       return {
         success: true,
-        message: "Withdrawal rejected and amount refunded to user's wallet"
+        message: `Withdrawal rejected and ₹${refundAmount} refunded to user's wallet.`
       };
     }
   } catch (error) {
@@ -1202,6 +1201,28 @@ const processPayOutCallback = async (callbackData) => {
           transaction: t
         });
         
+        // ✅ Create transaction record for successful withdrawal
+        const Transaction = require('../models/Transaction');
+        await Transaction.create({
+            user_id: withdrawalRecord.user_id,
+            type: 'withdrawal',
+            amount: parseFloat(withdrawalRecord.amount),
+            status: 'completed',
+            payment_gateway_id: withdrawalRecord.payment_gateway_id,
+            order_id: withdrawalRecord.order_id,
+            transaction_id: transaction_Id,
+            description: 'OKPAY withdrawal successful',
+            reference_id: `okpay_withdrawal_${withdrawalRecord.order_id}`,
+            metadata: {
+                gateway: 'OKPAY',
+                original_status: status,
+                mch_id: mchId,
+                processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        }, { transaction: t });
+        
         await t.commit();
         
         return {
@@ -1224,7 +1245,9 @@ const processPayOutCallback = async (callbackData) => {
         }
         
         // Refund wallet balance
-        const newBalance = parseFloat(user.wallet_balance) + parseFloat(withdrawalRecord.amount);
+        const currentBalance = parseFloat(user.wallet_balance);
+        const refundAmount = parseFloat(withdrawalRecord.amount);
+        const newBalance = currentBalance + refundAmount;
         
         await User.update({
           wallet_balance: newBalance
@@ -1240,6 +1263,31 @@ const processPayOutCallback = async (callbackData) => {
           where: { transaction_id: out_trade_no },
           transaction: t
         });
+        
+        // ✅ Create transaction record for failed withdrawal
+        const Transaction = require('../models/Transaction');
+        await Transaction.create({
+            user_id: withdrawalRecord.user_id,
+            type: 'withdrawal_failed',
+            amount: refundAmount,
+            status: 'failed',
+            payment_gateway_id: withdrawalRecord.payment_gateway_id,
+            order_id: withdrawalRecord.order_id,
+            transaction_id: transaction_Id || out_trade_no,
+            description: 'OKPAY withdrawal failed - amount refunded',
+            reference_id: `okpay_withdrawal_failed_${withdrawalRecord.order_id}`,
+            metadata: {
+                gateway: 'OKPAY',
+                original_status: status,
+                mch_id: mchId,
+                refunded_amount: refundAmount,
+                original_balance: currentBalance,
+                new_balance: newBalance,
+                processed_at: new Date().toISOString()
+            },
+            created_at: new Date(),
+            updated_at: new Date()
+        }, { transaction: t });
         
         await t.commit();
         

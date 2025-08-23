@@ -302,11 +302,11 @@ const getAllWalletBalances = async (req, res) => {
       success: true,
       mainWallet: {
         balance: parseFloat(user.wallet_balance),
-        currency: user.currency || 'EUR'
+        currency: user.currency || 'INR'
       },
       thirdPartyWallet: {
         balance: thirdPartyWallet.success ? parseFloat(thirdPartyWallet.balance) : 0,
-        currency: thirdPartyWallet.success ? thirdPartyWallet.currency : 'EUR',
+        currency: thirdPartyWallet.success ? thirdPartyWallet.currency : 'INR',
         exists: thirdPartyWallet.success
       }
     });
