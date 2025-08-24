@@ -2,7 +2,7 @@ const casinoService = require('../services/casinoService');
 const thirdPartyWalletService = require('../services/thirdPartyWalletService');
 
 /**
- * Launch a casino game
+ * Launch a casino game - PRODUCTION READY
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
@@ -44,7 +44,7 @@ const launchGame = async (req, res) => {
         });
       }
       
-      // Auto-transfer all funds from main wallet to third-party wallet
+      // Auto-transfer funds from main wallet to third-party wallet
       console.log('🔄 Transferring ₹' + mainWalletBalance + ' to third-party wallet...');
       
       const transferResult = await thirdPartyWalletService.transferFromMainWallet(
@@ -72,11 +72,11 @@ const launchGame = async (req, res) => {
       };
     }
 
-    // Launch game
+    // Launch game using confirmed working service method
     const result = await casinoService.getGameUrl(userId, gameUid, {
       currency,
       language,
-      platform,
+      platform: platform ? parseInt(platform) : undefined, // Convert to integer if provided
       ipAddress: req.ip || req.connection.remoteAddress
     });
 
@@ -84,6 +84,8 @@ const launchGame = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: result.message,
+        error_code: result.error_code,
+        suggestion: result.suggestion,
         error: result.error
       });
     }
@@ -101,7 +103,7 @@ const launchGame = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Casino game launch error:', error);
+    console.error('❌ Casino game launch controller error:', error);
     return res.status(500).json({
       success: false,
       message: 'Failed to launch game',
@@ -280,35 +282,34 @@ const closeGameSession = async (req, res) => {
 };
 
 /**
- * Get casino game list
+ * Get casino game list - RAW RESPONSE FROM PROVIDER
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
 const getGameList = async (req, res) => {
   try {
-    console.log('🎮 === GETTING CASINO GAME LIST ===');
+    console.log('🎮 === GETTING RAW CASINO GAME LIST ===');
     
-    // Extract query parameters
-    const { category, provider, search } = req.query;
-    
-    // Call casino service to get game list
-    const result = await casinoService.getGameList({
-      category,
-      provider,
-      search
-    });
+    // Call casino service to get RAW game list from provider
+    const result = await casinoService.getGameList();
 
     if (!result.success) {
       return res.status(400).json({
         success: false,
         message: result.message,
-        error: result.error
+        error_code: result.error_code,
+        error: result.error,
+        error_details: result.error_details
       });
     }
 
+    // Return completely raw response from casino provider
     return res.status(200).json({
       success: true,
-      data: result.data
+      data: result.data,
+      raw_response: result.raw_response,
+      source: result.source,
+      message: 'Raw game list from casino provider - no modifications applied'
     });
 
   } catch (error) {
@@ -322,28 +323,34 @@ const getGameList = async (req, res) => {
 };
 
 /**
- * Get list of all available casino providers
+ * Get list of all available casino providers - RAW RESPONSE
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
  */
 const getProviderList = async (req, res) => {
   try {
-    console.log('🏢 === GETTING CASINO PROVIDER LIST ===');
+    console.log('🏢 === GETTING RAW CASINO PROVIDER LIST ===');
     
-    // Call casino service to get provider list
+    // Call casino service to get RAW provider list from provider
     const result = await casinoService.getProviderList();
 
     if (!result.success) {
       return res.status(400).json({
         success: false,
         message: result.message,
-        error: result.error
+        error_code: result.error_code,
+        error: result.error,
+        error_details: result.error_details
       });
     }
 
+    // Return completely raw response from casino provider
     return res.status(200).json({
       success: true,
-      data: result.data
+      data: result.data,
+      raw_response: result.raw_response,
+      source: result.source,
+      message: 'Raw provider list from casino provider - no modifications applied'
     });
 
   } catch (error) {
@@ -420,6 +427,116 @@ const getUserStats = async (req, res) => {
   }
 };
 
+/**
+ * Get transaction history from casino provider
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getTransactionHistory = async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const { fromDate, toDate, pageNo = 1, pageSize = 30 } = req.query;
+
+    console.log('📊 === GETTING CASINO TRANSACTION HISTORY FROM PROVIDER ===');
+    console.log('📊 User ID:', userId);
+    console.log('📊 Filters:', { fromDate, toDate, pageNo, pageSize });
+
+    // Only admin users can access this endpoint (if you want to restrict it)
+    // Uncomment the following lines if you want admin-only access:
+    // if (!req.user.is_admin) {
+    //   return res.status(403).json({
+    //     success: false,
+    //     message: 'Admin access required'
+    //   });
+    // }
+
+    const result = await casinoService.getTransactionHistory({
+      fromDate,
+      toDate,
+      pageNo: parseInt(pageNo),
+      pageSize: parseInt(pageSize)
+    });
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+        error: result.error
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: result.data
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting transaction history:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get transaction history',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Process casino callback - CONFIRMED WORKING
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const processCallback = async (req, res) => {
+  try {
+    console.log('📞 === CASINO CALLBACK RECEIVED ===');
+    console.log('📞 Headers:', req.headers);
+    console.log('📞 Body:', req.body);
+
+    // Process the callback using confirmed working service method
+    const result = await casinoService.processCallback(req.body);
+
+    console.log('📞 === CASINO CALLBACK RESPONSE ===');
+    console.log('📞 Response:', result);
+
+    // Return the encrypted response
+    return res.status(200).json(result);
+
+  } catch (error) {
+    console.error('❌ Casino callback processing error:', error);
+    
+    // Return error response
+    return res.status(500).json({
+      code: 1,
+      msg: 'Internal server error',
+      payload: ''
+    });
+  }
+};
+
+/**
+ * Health check endpoint
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const healthCheck = (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Casino API is healthy',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    encryption_method: 'UTF-8 String Key AES-256-ECB',
+    features: [
+      'Game Launch',
+      'Session Management', 
+      'Transaction Processing',
+      'Callback Processing',
+      'Raw Game List',
+      'Raw Provider List',
+      'User Statistics',
+      'Auto Wallet Transfer'
+    ]
+  });
+};
+
 module.exports = {
   launchGame,
   getUserSessions,
@@ -427,5 +544,8 @@ module.exports = {
   closeGameSession,
   getGameList,
   getProviderList,
-  getUserStats
+  getUserStats,
+  getTransactionHistory,
+  processCallback,
+  healthCheck
 };

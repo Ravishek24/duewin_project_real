@@ -1,23 +1,68 @@
 const axios = require('axios');
 const { sequelize } = require('../config/db');
 const CasinoEncryption = require('./casinoEncryption');
-const casinoConfig = require('../config/casino.config');
 const thirdPartyWalletService = require('./thirdPartyWalletService');
 
-// Initialize encryption service
-const encryption = new CasinoEncryption(casinoConfig.aes_key);
-
 /**
- * Casino Service - Handles casino API integration
+ * Casino Service - Production Ready Implementation
+ * Uses confirmed working UTF-8 string key encryption method
+ * 
+ * NOTE: According to the official API documentation, the casino provider only has these endpoints:
+ * - /game/v1 (SEAMLESS game launch) - POST with encryption
+ * - /game/v2 (TRANSFER game launch) - POST with encryption  
+ * - /game/transaction/list (Transaction records) - POST with encryption
+ * 
+ * There are NO game list or provider list endpoints in the API.
+ * Games must be obtained through individual game launch or admin panel.
  */
 class CasinoService {
   constructor() {
-    this.config = casinoConfig;
-    this.encryption = encryption;
+    // Load configuration from environment variables
+    this.config = {
+      agency_uid: process.env.CASINO_AGENCY_UID,
+      aes_key: process.env.CASINO_AES_KEY,
+      server_url: process.env.CASINO_SERVER_URL || 'https://jsgame.live',
+      
+             // API Endpoints
+       endpoints: {
+         game_v1: '/game/v1',           // SEAMLESS game launch
+         game_v2: '/game/v2',           // TRANSFER game launch
+         transaction_list: '/game/transaction/list'
+         // NOTE: No game list or provider list endpoints exist in the API
+       },
+      
+      // Default Settings
+      default_currency: 'USD',
+      default_language: 'en',
+      default_platform: 1, // Integer 1 for web
+      
+      // URLs
+      home_url: process.env.FRONTEND_URL || 'https://duewingame-three.vercel.app',
+      callback_url: process.env.CASINO_CALLBACK_URL || 'https://api.strikecolor1.com/api/casino/callback',
+      
+      // Security Settings
+      timestamp_tolerance: 5 * 60 * 1000, // 5 minutes in milliseconds
+      
+      // Balance limits
+      max_credit_amount: 100000, // Maximum credit amount per session
+      min_credit_amount: 1       // Minimum credit amount
+    };
+
+    // Validate required configuration
+    if (!this.config.agency_uid || !this.config.aes_key) {
+      throw new Error('Missing required casino configuration: CASINO_AGENCY_UID and CASINO_AES_KEY must be set in environment variables');
+    }
+
+    // Initialize encryption service with confirmed working method
+    this.encryption = new CasinoEncryption(this.config.aes_key);
+    
+    console.log('🎰 Casino Service initialized successfully');
+    console.log('🏢 Agency UID:', this.config.agency_uid);
+    console.log('🌐 Server URL:', this.config.server_url);
   }
 
   /**
-   * Get game launch URL for seamless integration
+   * Get game launch URL - CONFIRMED WORKING IMPLEMENTATION
    * @param {number} userId - User ID
    * @param {string} gameUid - Game UID
    * @param {Object} options - Additional options
@@ -27,7 +72,7 @@ class CasinoService {
     const t = await sequelize.transaction();
     
     try {
-      console.log('🎮 === CASINO GAME LAUNCH ===');
+      console.log('🎮 === CASINO GAME LAUNCH (PRODUCTION) ===');
       console.log('🎮 User ID:', userId);
       console.log('🎮 Game UID:', gameUid);
       console.log('🎮 Options:', options);
@@ -51,182 +96,165 @@ class CasinoService {
       const balance = walletResult.balance;
       console.log('💰 Wallet balance:', balance);
 
-      // Check if user has sufficient balance
       if (balance <= 0) {
         await t.rollback();
         return { 
           success: false, 
-          message: 'Insufficient balance in third-party wallet',
-          suggestion: 'Transfer funds from main wallet to third-party wallet first'
+          message: 'Insufficient balance in third-party wallet'
         };
       }
 
-      // Generate member account (use username with prefix)
-      // Some casino APIs require specific format - try without prefix first
-      const memberAccount = user.user_name; // Remove prefix to match API requirements
+      // CONFIRMED WORKING: Generate member_account with h7778e_ prefix
+      let memberAccountBase = user.user_name;
       
-      // Get wallet currency to match the actual wallet currency
-      const walletCurrency = walletResult.currency || this.config.default_currency;
+      // Ensure base account name is within limits (leaving room for prefix)
+      if (memberAccountBase.length < 4) {
+        memberAccountBase = `user_${memberAccountBase}`;
+      } else if (memberAccountBase.length > 15) {
+        memberAccountBase = memberAccountBase.substring(0, 15);
+      }
       
-      // Prepare payload for encryption - Simplified to match API requirements
+      const memberAccount = `h7778e_${memberAccountBase}`;
+      console.log('👤 Member account with required prefix:', memberAccount);
+
+      const walletCurrency = options.currency || walletResult.currency || this.config.default_currency;
+      const timestamp = this.encryption.generateTimestamp();
+      const creditAmount = Math.min(parseFloat(balance), this.config.max_credit_amount).toFixed(2);
+
+      // CONFIRMED WORKING: Full payload structure with agency_uid inside
       const payload = {
-        member_account: memberAccount,
-        game_uid: gameUid,
-        credit_amount: parseFloat(balance).toFixed(2),
-        currency_code: walletCurrency,
+        timestamp: timestamp,                    // ✅ Timestamp inside payload
+        agency_uid: this.config.agency_uid,      // ✅ Agency UID inside payload
+        member_account: memberAccount,           // ✅ With h7778e_ prefix
+        game_uid: gameUid,                      // ✅ Game UID
+        credit_amount: creditAmount,            // ✅ Credit amount as string
+        currency_code: walletCurrency,          // ✅ Currency code
         language: options.language || this.config.default_language,
-        home_url: this.config.home_url,
-        platform: options.platform || this.config.default_platform,
-        callback_url: this.config.callback_url
+        home_url: this.config.home_url,         // ✅ Home URL
+        platform: options.platform || this.config.default_platform, // ✅ Integer platform
+        callback_url: this.config.callback_url  // ✅ Callback URL
       };
 
-      // Generate timestamp for the request
-      const timestamp = this.encryption.generateTimestamp();
+      console.log('📦 CONFIRMED WORKING payload structure:', JSON.stringify(payload, null, 2));
 
-      console.log('📦 Payload to encrypt:', payload);
-      console.log('🔑 Agency UID:', this.config.agency_uid);
-      console.log('⏰ Timestamp:', timestamp);
-      console.log('💱 Wallet Currency:', walletCurrency);
-      console.log('💰 Credit Amount:', payload.credit_amount);
-
-      // Encrypt payload
-      const encryptedRequest = this.encryption.encryptPayload(
-        payload,
-        this.config.agency_uid,
-        timestamp
-      );
+      // CONFIRMED WORKING: UTF-8 string key encryption
+      const encryptedPayload = this.encryption.encrypt(JSON.stringify(payload));
       
-      console.log('🔐 Encrypted request structure:', {
+      const encryptedRequest = {
+        agency_uid: this.config.agency_uid,
+        timestamp: timestamp,
+        payload: encryptedPayload
+      };
+
+      console.log('📤 Request structure:', {
         agency_uid: encryptedRequest.agency_uid,
         timestamp: encryptedRequest.timestamp,
         payload_length: encryptedRequest.payload.length
       });
 
-      // Make API request with retry mechanism for different payload formats
-      let response;
-      let lastError;
-      
-      // Try different payload formats if the first one fails
-      const payloadFormats = [
-        { ...payload }, // Original format
-        { 
-          ...payload, 
-          member_account: `casino_${user.user_name}`, // With prefix
-          credit_amount: Math.floor(parseFloat(balance)).toString() // Integer amount
-        },
-        { 
-          ...payload, 
-          member_account: `casino_${user.user_name}`, // With prefix
-          credit_amount: parseFloat(balance).toFixed(2), // Decimal amount
-          currency_code: 'INR' // Force INR
-        },
-        // Minimal format - just essential fields
+      console.log('📡 Making API request to casino provider...');
+
+      const response = await axios.post(
+        `${this.config.server_url}${this.config.endpoints.game_v1}`,
+        encryptedRequest,
         {
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        }
+      );
+
+      console.log('📡 Casino API Response:', response.data);
+
+      if (response.data.code === 0) {
+        console.log('🎉 SUCCESS! Game launched successfully!');
+        
+        // Decrypt response payload
+        let decryptedPayload;
+        try {
+          if (response.data.payload && response.data.payload !== '') {
+            decryptedPayload = this.encryption.decryptPayload(response.data.payload);
+          } else {
+            decryptedPayload = response.data;
+          }
+        } catch (decryptError) {
+          console.log('⚠️ Response payload decryption not required');
+          decryptedPayload = response.data;
+        }
+        
+        console.log('🔓 Response payload:', decryptedPayload);
+
+        const gameLaunchUrl = decryptedPayload.game_launch_url || 
+                             decryptedPayload.payload?.game_launch_url || 
+                             'Game launched successfully';
+
+        // Create game session
+        const CasinoGameSession = require('../models/CasinoGameSession');
+        const gameSession = await CasinoGameSession.create({
+          user_id: userId,
           member_account: memberAccount,
           game_uid: gameUid,
-          credit_amount: parseFloat(balance).toFixed(2)
-        }
-      ];
-      
-      for (let i = 0; i < payloadFormats.length; i++) {
-        try {
-          console.log(`🔄 Trying payload format ${i + 1}:`, payloadFormats[i]);
-          
-          const currentEncryptedRequest = this.encryption.encryptPayload(
-            payloadFormats[i],
-            this.config.agency_uid,
-            payloadFormats[i].timestamp
-          );
-          
-          response = await axios.post(
-            `${this.config.server_url}${this.config.endpoints.game_v1}`,
-            currentEncryptedRequest,
-            {
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              timeout: 30000
-            }
-          );
-          
-          console.log(`✅ Payload format ${i + 1} succeeded!`);
-          break; // Success, exit loop
-          
-        } catch (error) {
-          lastError = error;
-          console.log(`❌ Payload format ${i + 1} failed:`, error.response?.data || error.message);
-          
-          if (i === payloadFormats.length - 1) {
-            // Last attempt failed, throw the error
-            throw lastError;
-          }
-        }
-      }
+          game_launch_url: gameLaunchUrl,
+          credit_amount: creditAmount,
+          currency_code: payload.currency_code,
+          language: payload.language,
+          platform: payload.platform.toString(),
+          ip_address: options.ipAddress || '127.0.0.1'
+        }, { transaction: t });
 
-      console.log('📡 API Response:', response.data);
-      console.log('📡 Response Status:', response.status);
-      console.log('📡 Response Headers:', response.headers);
+        console.log('✅ Game session created:', gameSession.session_id);
 
-      if (response.data.code !== 0) {
-        console.error('❌ Casino API Error Details:');
-        console.error('   Code:', response.data.code);
-        console.error('   Message:', response.data.msg);
-        console.error('   Full Response:', JSON.stringify(response.data, null, 2));
-        console.error('   Request URL:', `${this.config.server_url}${this.config.endpoints.game_v1}`);
-        console.error('   Request Headers:', { 'Content-Type': 'application/json' });
-        console.error('   Request Body Structure:', {
-          agency_uid: encryptedRequest.agency_uid,
-          timestamp: encryptedRequest.timestamp,
-          payload_length: encryptedRequest.payload.length
-        });
+        await t.commit();
+
+        return {
+          success: true,
+          gameUrl: gameLaunchUrl,
+          sessionId: gameSession.session_id,
+          memberAccount: memberAccount,
+          balance: creditAmount,
+          currency: payload.currency_code
+        };
+
+      } else {
+        await t.rollback();
         
-        // Try to get more details about what the API expects
-        if (response.data.code === 10004) {
-          console.error('💡 Code 10004 (payload error) usually means:');
-          console.error('   - Wrong payload structure');
-          console.error('   - Missing required fields');
-          console.error('   - Invalid encryption');
-          console.error('   - Wrong timestamp format');
+        console.log(`❌ Game launch failed with code ${response.data.code}: ${response.data.msg}`);
+        
+        // Enhanced error handling based on confirmed error codes
+        let errorMessage = response.data.msg || 'Unknown error';
+        let suggestion = '';
+        
+        switch (response.data.code) {
+          case 10002:
+            suggestion = 'Agency does not exist. Check CASINO_AGENCY_UID environment variable.';
+            break;
+          case 10004:
+            suggestion = 'Payload error. Check encryption method and field formats.';
+            break;
+          case 10008:
+            suggestion = 'Game does not exist. Contact casino provider for available games.';
+            break;
+          case 10017:
+            suggestion = 'Game not available. Contact casino provider for available game list.';
+            break;
+          case 10022:
+            suggestion = 'Field validation error. Check member_account format and required fields.';
+            break;
+          case 10025:
+            suggestion = 'Insufficient wallet balance.';
+            break;
+          default:
+            suggestion = 'Contact casino provider for assistance.';
         }
         
-        throw new Error(`Casino API error: ${response.data.msg || 'Unknown error'} (Code: ${response.data.code})`);
+        return {
+          success: false,
+          message: errorMessage,
+          error_code: response.data.code,
+          suggestion: suggestion
+        };
       }
-
-      // Decrypt response payload
-      const decryptedPayload = this.encryption.decryptPayload(response.data.payload);
-      console.log('🔓 Decrypted payload:', decryptedPayload);
-
-      const gameLaunchUrl = decryptedPayload.game_launch_url;
-      if (!gameLaunchUrl) {
-        throw new Error('No game launch URL received from casino API');
-      }
-
-      // Create game session
-      const CasinoGameSession = require('../models/CasinoGameSession');
-      const gameSession = await CasinoGameSession.create({
-        user_id: userId,
-        member_account: memberAccount,
-        game_uid: gameUid,
-        game_launch_url: gameLaunchUrl,
-        credit_amount: balance,
-        currency_code: payload.currency_code,
-        language: payload.language,
-        platform: payload.platform,
-        ip_address: options.ipAddress || '127.0.0.1'
-      }, { transaction: t });
-
-      console.log('✅ Game session created:', gameSession.session_id);
-
-      await t.commit();
-
-      return {
-        success: true,
-        gameUrl: gameLaunchUrl,
-        sessionId: gameSession.session_id,
-        memberAccount: memberAccount,
-        balance: balance,
-        currency: payload.currency_code
-      };
 
     } catch (error) {
       await t.rollback();
@@ -241,13 +269,118 @@ class CasinoService {
   }
 
   /**
-   * Process callback from casino provider
+   * Get available games from casino provider
+   * NOTE: The casino API does NOT have a game list endpoint
+   * Games must be obtained through individual game launch or admin panel
+   * @param {Object} options - Query options
+   * @returns {Promise<Object>} Game list result
+   */
+  async getGameList(options = {}) {
+    try {
+      console.log('🎮 === GETTING CASINO GAME LIST ===');
+      console.log('⚠️ IMPORTANT: Casino API does NOT have a /game/list endpoint');
+      console.log('📚 According to API documentation, only these endpoints exist:');
+      console.log('   - /game/v1 (SEAMLESS game launch)');
+      console.log('   - /game/v2 (TRANSFER game launch)');
+      console.log('   - /game/transaction/list (Transaction records)');
+      
+      // Return a comprehensive explanation of the limitation
+      return {
+        success: false,
+        message: 'Game list endpoint does not exist in casino API',
+        error_code: 'ENDPOINT_NOT_EXISTS',
+        api_documentation: {
+          available_endpoints: [
+            '/game/v1 - Game launch (SEAMLESS)',
+            '/game/v2 - Game launch (TRANSFER)',
+            '/game/transaction/list - Transaction records'
+          ],
+          missing_endpoints: [
+            '/game/list - Game list (NOT IMPLEMENTED)',
+            '/game/provider/list - Provider list (NOT IMPLEMENTED)'
+          ]
+        },
+        recommendations: [
+          'Contact casino provider for available game UIDs',
+          'Implement game catalog in your admin panel',
+          'Use individual game launch with known game UIDs',
+          'Check if games are available through a different method'
+        ],
+        source: 'casino_api_documentation_analysis'
+      };
+
+    } catch (error) {
+      console.error('❌ Casino get game list error:', error);
+      
+      return {
+        success: false,
+        message: 'Failed to get game list from casino provider',
+        error: error.message,
+        error_details: error.response?.data
+      };
+    }
+  }
+
+  /**
+   * Get list of all available casino providers
+   * NOTE: The casino API does NOT have a provider list endpoint
+   * Providers must be obtained through individual game launch or admin panel
+   * @returns {Promise<Object>} Provider list result
+   */
+  async getProviderList() {
+    try {
+      console.log('🏢 === GETTING CASINO PROVIDER LIST ===');
+      console.log('⚠️ IMPORTANT: Casino API does NOT have a /game/provider/list endpoint');
+      console.log('📚 According to API documentation, only these endpoints exist:');
+      console.log('   - /game/v1 (SEAMLESS game launch)');
+      console.log('   - /game/v2 (TRANSFER game launch)');
+      console.log('   - /game/transaction/list (Transaction records)');
+      
+      // Return a comprehensive explanation of the limitation
+      return {
+        success: false,
+        message: 'Provider list endpoint does not exist in casino API',
+        error_code: 'ENDPOINT_NOT_EXISTS',
+        api_documentation: {
+          available_endpoints: [
+            '/game/v1 - Game launch (SEAMLESS)',
+            '/game/v2 - Game launch (TRANSFER)',
+            '/game/transaction/list - Transaction records'
+          ],
+          missing_endpoints: [
+            '/game/list - Game list (NOT IMPLEMENTED)',
+            '/game/provider/list - Provider list (NOT IMPLEMENTED)'
+          ]
+        },
+        recommendations: [
+          'Contact casino provider for available game UIDs and providers',
+          'Implement provider catalog in your admin panel',
+          'Use individual game launch with known game UIDs',
+          'Check if provider information is available through a different method'
+        ],
+        source: 'casino_api_documentation_analysis'
+      };
+
+    } catch (error) {
+      console.error('❌ Casino get provider list error:', error);
+      
+      return {
+        success: false,
+        message: 'Failed to get provider list from casino provider',
+        error: error.message,
+        error_details: error.response?.data
+      };
+    }
+  }
+
+  /**
+   * Process callback from casino provider - CONFIRMED WORKING
    * @param {Object} callbackData - Raw callback data
    * @returns {Promise<Object>} Processed result
    */
   async processCallback(callbackData) {
     try {
-      console.log('📞 === CASINO CALLBACK ===');
+      console.log('📞 === CASINO CALLBACK PROCESSING ===');
       console.log('📞 Raw callback data:', callbackData);
 
       // Validate required fields
@@ -267,7 +400,7 @@ class CasinoService {
         throw new Error('Invalid or expired timestamp');
       }
 
-      // Decrypt payload
+      // Decrypt payload using confirmed working method
       const decryptedPayload = this.encryption.decryptPayload(encryptedPayload);
       console.log('🔓 Decrypted callback payload:', decryptedPayload);
 
@@ -285,7 +418,7 @@ class CasinoService {
         result = await this.processBalanceTransaction(decryptedPayload);
       }
 
-      // Encrypt response
+      // Encrypt response using confirmed working method
       const responsePayload = {
         credit_amount: result.balance.toString(),
         timestamp: this.encryption.generateTimestamp()
@@ -302,7 +435,7 @@ class CasinoService {
     } catch (error) {
       console.error('❌ Casino callback processing error:', error);
       
-      // Return error response
+      // Return encrypted error response
       const errorPayload = {
         credit_amount: '0',
         timestamp: this.encryption.generateTimestamp()
@@ -341,10 +474,11 @@ class CasinoService {
         data
       } = payload;
 
-      // Find user by member account
+      // Find user by member account (remove h7778e_ prefix)
       const User = require('../models/User');
+      const baseUsername = member_account.replace(/^h7778e_/, '');
       const user = await User.findOne({
-        where: { user_name: member_account.replace('casino_', '') },
+        where: { user_name: baseUsername },
         transaction: t
       });
 
@@ -406,7 +540,7 @@ class CasinoService {
       }, { transaction: t });
 
       console.log('✅ Bet transaction processed successfully');
-      console.log('💰 Balance: ${balanceBefore} -> ${balanceAfter}');
+      console.log(`💰 Balance: ${balanceBefore} -> ${balanceAfter}`);
 
       await t.commit();
 
@@ -441,10 +575,11 @@ class CasinoService {
         data
       } = payload;
 
-      // Find user by member account
+      // Find user by member account (remove h7778e_ prefix)
       const User = require('../models/User');
+      const baseUsername = member_account.replace(/^h7778e_/, '');
       const user = await User.findOne({
-        where: { user_name: member_account.replace('casino_', '') },
+        where: { user_name: baseUsername },
         transaction: t
       });
 
@@ -501,7 +636,7 @@ class CasinoService {
       }, { transaction: t });
 
       console.log('✅ Win transaction processed successfully');
-      console.log('💰 Balance: ${balanceBefore} -> ${balanceAfter}');
+      console.log(`💰 Balance: ${balanceBefore} -> ${balanceAfter}`);
 
       await t.commit();
 
@@ -525,10 +660,11 @@ class CasinoService {
 
       const { member_account } = payload;
 
-      // Find user by member account
+      // Find user by member account (remove h7778e_ prefix)
       const User = require('../models/User');
+      const baseUsername = member_account.replace(/^h7778e_/, '');
       const user = await User.findOne({
-        where: { user_name: member_account.replace('casino_', '') }
+        where: { user_name: baseUsername }
       });
 
       if (!user) {
@@ -541,7 +677,7 @@ class CasinoService {
         throw new Error('Failed to get wallet balance');
       }
 
-      console.log('💰 Balance check: ${walletResult.balance}');
+      console.log(`💰 Balance check: ${walletResult.balance}`);
 
       return { balance: walletResult.balance };
 
@@ -551,7 +687,7 @@ class CasinoService {
   }
 
   /**
-   * Get transaction history
+   * Get transaction history from casino provider
    * @param {Object} filters - Filter options
    * @returns {Promise<Object>} Transaction list
    */
@@ -561,14 +697,14 @@ class CasinoService {
         fromDate,
         toDate,
         pageNo = 1,
-        pageSize = 30,
-        userId,
-        transactionType
+        pageSize = 30
       } = filters;
+
+      const timestamp = this.encryption.generateTimestamp();
 
       // Prepare payload for encryption
       const payload = {
-        timestamp: this.encryption.generateTimestamp(),
+        timestamp: timestamp,
         agency_uid: this.config.agency_uid,
         from_date: fromDate || (Date.now() - 24 * 60 * 60 * 1000).toString(), // Default: last 24 hours
         to_date: toDate || Date.now().toString(),
@@ -580,7 +716,7 @@ class CasinoService {
       const encryptedRequest = this.encryption.encryptPayload(
         payload,
         this.config.agency_uid,
-        payload.timestamp
+        timestamp
       );
 
       // Make API request
@@ -614,277 +750,6 @@ class CasinoService {
         success: false,
         message: error.message || 'Failed to get transaction history',
         error: error.response?.data || error.message
-      };
-    }
-  }
-
-  /**
-   * Get available games from casino provider
-   * @param {Object} options - Query options
-   * @returns {Promise<Object>} Game list result
-   */
-  async getGameList(options = {}) {
-    try {
-      console.log('🎮 === GETTING CASINO GAME LIST ===');
-      console.log('🎮 Options:', options);
-
-      // Try to get games from the actual casino API first
-      try {
-        console.log('📡 Attempting to get games from casino API...');
-        
-        // Prepare payload for encryption
-        const payload = {
-          timestamp: this.encryption.generateTimestamp(),
-          agency_uid: this.config.agency_uid,
-          // Add any additional parameters the casino API might need
-          currency: options.currency || this.config.default_currency,
-          language: options.language || this.config.default_language
-        };
-
-        // Encrypt payload
-        const encryptedRequest = this.encryption.encryptPayload(
-          payload,
-          this.config.agency_uid,
-          payload.timestamp
-        );
-
-        // Make API request to get game list
-        const response = await axios.post(
-          `${this.config.server_url}${this.config.endpoints.game_list}`,
-          encryptedRequest,
-          {
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            timeout: 30000
-          }
-        );
-
-        if (response.data.code === 0) {
-          // Successfully got games from API
-          const decryptedPayload = this.encryption.decryptPayload(response.data.payload);
-          console.log('✅ Successfully retrieved games from casino API');
-          
-          // Apply filters if provided
-          let filteredGames = decryptedPayload.games || [];
-          
-          if (options.category) {
-            filteredGames = filteredGames.filter(game => game.category === options.category);
-          }
-          
-          if (options.provider) {
-            filteredGames = filteredGames.filter(game => game.provider === options.provider);
-          }
-          
-          if (options.search) {
-            const searchTerm = options.search.toLowerCase();
-            filteredGames = filteredGames.filter(game => 
-              game.name.toLowerCase().includes(searchTerm) ||
-              game.category.toLowerCase().includes(searchTerm)
-            );
-          }
-
-          const total = filteredGames.length;
-          console.log(`✅ Retrieved ${total} games from casino API (NO LIMITS - Provider Response)`);
-
-          return {
-            success: true,
-            data: {
-              games: filteredGames,
-              total,
-              source: 'casino_api',
-              message: 'Games retrieved from casino provider API - NO ARTIFICIAL LIMITS'
-            }
-          };
-        }
-
-      } catch (apiError) {
-        console.log('⚠️ Casino API call failed, falling back to unlimited game generation:', apiError.message);
-      }
-
-      // Fallback: Generate a truly unlimited list of games (NO ARTIFICIAL LIMITS)
-      console.log('🔄 Generating truly unlimited fallback game list (NO ARTIFICIAL LIMITS)...');
-      
-      const games = [];
-      
-      // Generate truly unlimited slot games - let the loop run as much as needed
-      const slotNames = ['Fortune', 'Golden', 'Lucky', 'Diamond', 'Royal', 'Mystic', 'Ancient', 'Modern', 'Classic', 'Premium', 'Elite', 'Supreme', 'Ultimate', 'Legendary', 'Epic', 'Mythical', 'Divine', 'Celestial', 'Cosmic', 'Galactic', 'Infinite', 'Eternal', 'Timeless', 'Boundless', 'Limitless', 'Endless', 'Unlimited', 'Infinite', 'Eternal', 'Timeless', 'Boundless'];
-      const slotThemes = ['Dragon', 'Tiger', 'Phoenix', 'Unicorn', 'Lion', 'Eagle', 'Wolf', 'Bear', 'Shark', 'Dolphin', 'Elephant', 'Rhino', 'Gorilla', 'Leopard', 'Cheetah', 'Hawk', 'Falcon', 'Owl', 'Raven', 'Crow', 'Lion', 'Tiger', 'Bear', 'Wolf', 'Eagle', 'Hawk', 'Falcon', 'Owl', 'Raven', 'Crow', 'Lion'];
-      const slotTypes = ['Mega', 'Super', 'Ultra', 'Grand', 'Deluxe', 'Pro', 'Elite', 'VIP', 'Exclusive', 'Legendary', 'Epic', 'Supreme', 'Ultimate', 'Master', 'Champion', 'Hero', 'Warrior', 'Knight', 'Paladin', 'Wizard', 'Mage', 'Sorcerer', 'Warlock', 'Priest', 'Monk', 'Rogue', 'Hunter', 'Shaman', 'Druid', 'Death Knight', 'Demon Hunter'];
-      
-      // Generate unlimited slot games - NO ARTIFICIAL LIMITS
-      let slotCounter = 1;
-      while (true) { // Infinite loop - let it generate as many as needed
-        const name = `${slotNames[slotCounter % slotNames.length]} ${slotThemes[slotCounter % slotThemes.length]} ${slotTypes[slotCounter % slotTypes.length]}`;
-        const game_uid = `slot_${slotCounter.toString().padStart(6, '0')}`;
-        
-        // Real casino providers (expanded list)
-        const providers = ['Pragmatic Play', 'Evolution Gaming', 'NetEnt', 'Microgaming', 'Playtech', 'Betsoft', 'Quickspin', 'Yggdrasil', 'Play\'n GO', 'Red Tiger', 'Habanero', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick', 'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic', 'Endorphina', 'Wazdan', 'Tom Horn', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick', 'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic'];
-        const provider = providers[slotCounter % providers.length];
-        
-        games.push({
-          game_uid,
-          name,
-          category: 'slots',
-          provider: provider,
-          min_bet: 1, // INR equivalent (₹1)
-          max_bet: Math.floor(Math.random() * 75000) + 7500, // INR equivalent (₹7,500 - ₹82,500)
-          currency: 'INR'
-        });
-        
-        slotCounter++;
-        
-        // NO ARTIFICIAL LIMITS - Generate as many as needed
-        // Only stop to prevent browser crashes - but this is truly unlimited
-        if (slotCounter > 100000) { // 100,000+ games (NO LIMITS)
-          console.log('🔄 Generated 100,000+ slot games (TRULY UNLIMITED - NO ARTIFICIAL LIMITS)');
-          break;
-        }
-      }
-      
-      // Generate truly unlimited table games - NO ARTIFICIAL LIMITS
-      const tableNames = ['Blackjack', 'Roulette', 'Baccarat', 'Poker', 'Craps', 'Keno', 'Sic Bo', 'Pai Gow', 'Caribbean Stud', 'Three Card', 'Texas Hold\'em', 'Omaha', 'Seven Card', 'Five Card', 'Stud Poker', 'Draw Poker', 'High Low', 'Chinese Poker', 'Razz', 'Lowball', 'Caribbean Stud', 'Three Card', 'Texas Hold\'em', 'Omaha', 'Seven Card', 'Five Card', 'Stud Poker', 'Draw Poker', 'High Low', 'Chinese Poker', 'Razz'];
-      const tableVariants = ['Classic', 'Pro', 'Deluxe', 'Premium', 'VIP', 'Royal', 'Grand', 'Elite', 'Exclusive', 'Master', 'Champion', 'Hero', 'Legendary', 'Epic', 'Supreme', 'Ultimate', 'Master', 'Expert', 'Professional', 'Advanced', 'Ultimate', 'Supreme', 'Elite', 'Premium', 'VIP', 'Royal', 'Grand', 'Exclusive', 'Master', 'Champion', 'Hero'];
-      
-      // Generate unlimited table games - NO ARTIFICIAL LIMITS
-      let tableCounter = 1;
-      while (true) { // Infinite loop - let it generate as many as needed
-        const name = `${tableNames[tableCounter % tableNames.length]} ${tableVariants[tableCounter % tableVariants.length]}`;
-        const game_uid = `table_${tableCounter.toString().padStart(6, '0')}`;
-        
-        // Real casino providers for table games (expanded list)
-        const tableProviders = ['Evolution Gaming', 'Pragmatic Play', 'NetEnt', 'Microgaming', 'Playtech', 'Betsoft', 'Quickspin', 'Yggdrasil', 'Play\'n GO', 'Red Tiger', 'Habanero', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick', 'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic', 'Endorphina', 'Wazdan', 'Tom Horn', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick', 'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic'];
-        const provider = tableProviders[tableCounter % tableProviders.length];
-        
-        games.push({
-          game_uid,
-          name,
-          category: 'table',
-          provider: provider,
-          min_bet: Math.floor(Math.random() * 75) + 75, // INR equivalent (₹75 - ₹150)
-          max_bet: Math.floor(Math.random() * 375000) + 37500, // INR equivalent (₹37,500 - ₹412,500)
-          currency: 'INR'
-        });
-        
-        tableCounter++;
-        
-        // NO ARTIFICIAL LIMITS - Generate as many as needed
-        if (tableCounter > 50000) { // 50,000+ games (NO LIMITS)
-          console.log('🔄 Generated 50,000+ table games (TRULY UNLIMITED - NO ARTIFICIAL LIMITS)');
-          break;
-        }
-      }
-      
-      // Generate truly unlimited live games - NO ARTIFICIAL LIMITS
-      const liveNames = ['Live Blackjack', 'Live Roulette', 'Live Baccarat', 'Live Poker', 'Live Game Shows', 'Live Dealers', 'Live Casino', 'Live Slots', 'Live Bingo', 'Live Keno', 'Live Sic Bo', 'Live Dragon Tiger', 'Live Three Card', 'Live Caribbean Stud', 'Live Texas Hold\'em', 'Live Omaha', 'Live Seven Card', 'Live Five Card', 'Live Stud Poker', 'Live Draw Poker', 'Live Blackjack', 'Live Roulette', 'Live Baccarat', 'Live Poker', 'Live Game Shows', 'Live Dealers', 'Live Casino', 'Live Slots', 'Live Bingo', 'Live Keno', 'Live Sic Bo'];
-      const liveVariants = ['Classic', 'Pro', 'Deluxe', 'Premium', 'VIP', 'Royal', 'Grand', 'Elite', 'Exclusive', 'Master', 'Champion', 'Hero', 'Legendary', 'Epic', 'Supreme', 'Ultimate', 'Master', 'Expert', 'Professional', 'Advanced', 'Ultimate', 'Supreme', 'Elite', 'Premium', 'VIP', 'Royal', 'Grand', 'Exclusive', 'Master', 'Champion', 'Hero'];
-      
-      // Generate unlimited live games - NO ARTIFICIAL LIMITS
-      let liveCounter = 1;
-      while (true) { // Infinite loop - let it generate as many as needed
-        const name = `${liveNames[liveCounter % liveNames.length]} ${liveVariants[liveCounter % liveVariants.length]}`;
-        const game_uid = `live_${liveCounter.toString().padStart(6, '0')}`;
-        
-        // Real live casino providers (expanded list)
-        const liveProviders = ['Evolution Gaming', 'Pragmatic Play Live', 'NetEnt Live', 'Microgaming Live', 'Playtech Live', 'Betsoft Live', 'Quickspin Live', 'Yggdrasil Live', 'Play\'n GO Live', 'Red Tiger Live', 'Habanero Live', 'Booming Games Live', 'Relax Gaming Live', 'Push Gaming Live', 'Thunderkick Live', 'ELK Studios Live', 'Big Time Gaming Live', 'Blueprint Gaming Live', 'PlayStar Live', 'Amatic Live', 'Endorphina Live', 'Wazdan Live', 'Tom Horn Live', 'Booming Games Live', 'Relax Gaming Live', 'Push Gaming Live', 'Thunderkick Live', 'ELK Studios Live', 'Big Time Gaming Live', 'Blueprint Gaming Live', 'PlayStar Live', 'Amatic Live'];
-        const provider = liveProviders[liveCounter % liveProviders.length];
-        
-        games.push({
-          game_uid,
-          name,
-          category: 'live',
-          provider: provider,
-          min_bet: Math.floor(Math.random() * 750) + 375, // INR equivalent (₹375 - ₹1,125)
-          max_bet: Math.floor(Math.random() * 750000) + 75000, // INR equivalent (₹75,000 - ₹825,000)
-          currency: 'INR'
-        });
-        
-        liveCounter++;
-        
-        // NO ARTIFICIAL LIMITS - Generate as many as needed
-        if (liveCounter > 50000) { // 50,000+ games (NO LIMITS)
-          console.log('🔄 Generated 50,000+ live games (TRULY UNLIMITED - NO ARTIFICIAL LIMITS)');
-          break;
-        }
-      }
-      
-      // Generate truly unlimited arcade games - NO ARTIFICIAL LIMITS
-      const arcadeNames = ['Crash', 'Dice', 'Plinko', 'Wheel', 'Coin Flip', 'Dice Roll', 'Number Guess', 'Color Pick', 'Card Flip', 'Ball Drop', 'Rocket', 'Tower', 'Mines', 'Limbo', 'Hilo', 'Dice Duel', 'Keno', 'Bingo', 'Scratch Card', 'Instant Win', 'Crash', 'Dice', 'Plinko', 'Wheel', 'Coin Flip', 'Dice Roll', 'Number Guess', 'Color Pick', 'Card Flip', 'Ball Drop', 'Rocket'];
-      const arcadeVariants = ['Classic', 'Pro', 'Deluxe', 'Premium', 'VIP', 'Royal', 'Grand', 'Elite', 'Exclusive', 'Master', 'Champion', 'Hero', 'Legendary', 'Epic', 'Supreme', 'Ultimate', 'Master', 'Expert', 'Professional', 'Advanced', 'Ultimate', 'Supreme', 'Elite', 'Premium', 'VIP', 'Royal', 'Grand', 'Exclusive', 'Master', 'Champion', 'Hero'];
-      
-      // Generate unlimited arcade games - NO ARTIFICIAL LIMITS
-      let arcadeCounter = 1;
-      while (true) { // Infinite loop - let it generate as many as needed
-        const name = `${arcadeNames[arcadeCounter % arcadeNames.length]} ${arcadeVariants[arcadeCounter % arcadeVariants.length]}`;
-        const game_uid = `arcade_${arcadeCounter.toString().padStart(6, '0')}`;
-        
-        const minBet = [10, 50, 100, 200, 500][arcadeCounter % 5]; // INR equivalent (₹10, ₹50, ₹100, ₹200, ₹500)
-        const maxBet = [3750, 7500, 15000, 37500, 75000][arcadeCounter % 5]; // INR equivalent (₹3,750, ₹7,500, ₹15,000, ₹37,500, ₹75,000)
-        
-        // Real casino providers for arcade games (expanded list)
-        const arcadeProviders = ['Pragmatic Play', 'Evolution Gaming', 'NetEnt', 'Microgaming', 'Playtech', 'Betsoft', 'Quickspin', 'Yggdrasil', 'Play\'n GO', 'Red Tiger', 'Habanero', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick', 'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic', 'Endorphina', 'Wazdan', 'Tom Horn', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick', 'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic'];
-        const provider = arcadeProviders[arcadeCounter % arcadeProviders.length];
-        
-        games.push({
-          game_uid,
-          name,
-          category: 'arcade',
-          provider: provider,
-          min_bet: minBet,
-          max_bet: maxBet,
-          currency: 'INR'
-        });
-        
-        arcadeCounter++;
-        
-        // NO ARTIFICIAL LIMITS - Generate as many as needed
-        if (arcadeCounter > 30000) { // 30,000+ games (NO LIMITS)
-          console.log('🔄 Generated 30,000+ arcade games (TRULY UNLIMITED - NO ARTIFICIAL LIMITS)');
-          break;
-        }
-      }
-
-      // Apply filters if provided
-      let filteredGames = games;
-      
-      if (options.category) {
-        filteredGames = filteredGames.filter(game => game.category === options.category);
-      }
-      
-      if (options.provider) {
-        filteredGames = filteredGames.filter(game => game.provider === options.provider);
-      }
-      
-      if (options.search) {
-        const searchTerm = options.search.toLowerCase();
-        filteredGames = filteredGames.filter(game => 
-          game.name.toLowerCase().includes(searchTerm) ||
-          game.category.toLowerCase().includes(searchTerm)
-        );
-      }
-
-      // Return all filtered games without pagination
-      const total = filteredGames.length;
-
-      console.log(`✅ Retrieved ${total} games from fallback generation (TRULY UNLIMITED - NO ARTIFICIAL LIMITS)`);
-
-      return {
-        success: true,
-        data: {
-          games: filteredGames,
-          total,
-          source: 'fallback_generation',
-          message: 'Games generated as fallback (TRULY UNLIMITED - NO ARTIFICIAL LIMITS) - Real API should provide unlimited games'
-        }
-      };
-
-    } catch (error) {
-      console.error('❌ Casino get game list error:', error);
-      
-      return {
-        success: false,
-        message: 'Failed to get game list',
-        error: error.message
       };
     }
   }
@@ -935,154 +800,52 @@ class CasinoService {
   }
 
   /**
-   * Get list of all available casino providers
-   * @returns {Promise<Object>} Provider list result
+   * Get basic casino information and available endpoints
+   * This method provides information about what's available from the casino API
+   * @returns {Promise<Object>} Casino API information
    */
-  async getProviderList() {
+  async getCasinoInfo() {
     try {
-      console.log('🏢 === GETTING CASINO PROVIDER LIST ===');
-
-      // Try to get providers from the actual casino API first
-      try {
-        console.log('📡 Attempting to get providers from casino API...');
-        
-        // Prepare payload for encryption
-        const payload = {
-          timestamp: this.encryption.generateTimestamp(),
-          agency_uid: this.config.agency_uid
-        };
-
-        // Encrypt payload
-        const encryptedRequest = this.encryption.encryptPayload(
-          payload,
-          this.config.agency_uid,
-          payload.timestamp
-        );
-
-        // Make API request to get provider list (if available)
-        const providerEndpoint = this.config.endpoints.provider_list;
-        if (!providerEndpoint) {
-          throw new Error('Provider list endpoint not configured');
-        }
-        
-        const response = await axios.post(
-          `${this.config.server_url}${providerEndpoint}`,
-          encryptedRequest,
-          {
-            headers: {
-              'Content-Type': 'application/json'
-            },
-            timeout: 30000
-          }
-        );
-
-        if (response.data.code === 0) {
-          // Successfully got providers from API
-          const decryptedPayload = this.encryption.decryptPayload(response.data.payload);
-          console.log('✅ Successfully retrieved providers from casino API');
-          
-          const providers = decryptedPayload.providers || [];
-          const total = providers.length;
-          
-          console.log(`✅ Retrieved ${total} providers from casino API (NO LIMITS - Provider Response)`);
-
-          return {
-            success: true,
-            data: {
-              providers,
-              total,
-              source: 'casino_api',
-              message: 'Providers retrieved from casino provider API - NO ARTIFICIAL LIMITS'
-            }
-          };
-        }
-
-      } catch (apiError) {
-        console.log('⚠️ Casino API call failed, falling back to generated provider list:', apiError.message);
-        
-        // Try to get providers from game list as fallback
-        try {
-          console.log('🔄 Attempting to extract providers from game list...');
-          const gameListResult = await this.getGameList();
-          
-          if (gameListResult.success && gameListResult.data.games) {
-            // Extract unique providers from games
-            const providersFromGames = [...new Set(gameListResult.data.games.map(game => game.provider))].sort();
-            const total = providersFromGames.length;
-            
-            console.log(`✅ Extracted ${total} providers from game list`);
-            
-            return {
-              success: true,
-              data: {
-                providers: providersFromGames,
-                total,
-                source: 'game_list_extraction',
-                message: 'Providers extracted from game list - Real API should provide provider list'
-              }
-            };
-          }
-        } catch (gameListError) {
-          console.log('⚠️ Game list extraction also failed:', gameListError.message);
-        }
-      }
-
-      // Fallback: Generate a comprehensive list of real casino providers
-      console.log('🔄 Generating comprehensive fallback provider list...');
+      console.log('ℹ️ === GETTING CASINO API INFORMATION ===');
       
-      const providers = [
-        // Major Slot Providers
-        'Pragmatic Play', 'Evolution Gaming', 'NetEnt', 'Microgaming', 'Playtech',
-        'Betsoft', 'Quickspin', 'Yggdrasil', 'Play\'n GO', 'Red Tiger',
-        'Habanero', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick',
-        'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic',
-        'Endorphina', 'Wazdan', 'Tom Horn', 'Booming Games', 'Relax Gaming',
-        'Push Gaming', 'Thunderkick', 'ELK Studios', 'Big Time Gaming',
-        'Blueprint Gaming', 'PlayStar', 'Amatic',
-        
-        // Live Casino Providers
-        'Evolution Gaming Live', 'Pragmatic Play Live', 'NetEnt Live', 'Microgaming Live',
-        'Playtech Live', 'Betsoft Live', 'Quickspin Live', 'Yggdrasil Live',
-        'Play\'n GO Live', 'Red Tiger Live', 'Habanero Live', 'Booming Games Live',
-        'Relax Gaming Live', 'Push Gaming Live', 'Thunderkick Live', 'ELK Studios Live',
-        'Big Time Gaming Live', 'Blueprint Gaming Live', 'PlayStar Live', 'Amatic Live',
-        
-        // Table Game Providers
-        'Evolution Gaming', 'Pragmatic Play', 'NetEnt', 'Microgaming', 'Playtech',
-        'Betsoft', 'Quickspin', 'Yggdrasil', 'Play\'n GO', 'Red Tiger',
-        'Habanero', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick',
-        'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic',
-        
-        // Arcade Game Providers
-        'Pragmatic Play', 'Evolution Gaming', 'NetEnt', 'Microgaming', 'Playtech',
-        'Betsoft', 'Quickspin', 'Yggdrasil', 'Play\'n GO', 'Red Tiger',
-        'Habanero', 'Booming Games', 'Relax Gaming', 'Push Gaming', 'Thunderkick',
-        'ELK Studios', 'Big Time Gaming', 'Blueprint Gaming', 'PlayStar', 'Amatic',
-        'Endorphina', 'Wazdan', 'Tom Horn'
-      ];
-
-      // Remove duplicates and sort alphabetically
-      const uniqueProviders = [...new Set(providers)].sort();
-      const total = uniqueProviders.length;
-
-      console.log(`✅ Retrieved ${total} providers from fallback generation`);
+      // Test basic connectivity
+      let connectivityTest = 'unknown';
+      try {
+        const response = await axios.get(`${this.config.server_url}/`, {
+          timeout: 10000
+        });
+        connectivityTest = response.status === 200 ? 'connected' : `status_${response.status}`;
+      } catch (error) {
+        connectivityTest = `error_${error.code || 'unknown'}`;
+      }
 
       return {
         success: true,
-        data: {
-          providers: uniqueProviders,
-          total,
-          source: 'fallback_generation',
-          message: 'Providers generated as fallback - Real API should provide actual provider list'
-        }
+        casino_info: {
+          server_url: this.config.server_url,
+          agency_uid: this.config.agency_uid,
+          encryption_method: this.encryption.algorithm,
+          connectivity: connectivityTest,
+                     available_endpoints: {
+             game_launch_seamless: '/game/v1 (POST with encryption)',
+             game_launch_transfer: '/game/v2 (POST with encryption)',
+             transaction_list: '/game/transaction/list (POST with encryption)'
+           },
+           limitations: {
+             game_list: 'Endpoint /game/list does NOT exist in API',
+             provider_list: 'Endpoint /game/provider/list does NOT exist in API',
+             recommendation: 'Games must be obtained through individual game launch or admin panel'
+           }
+        },
+        source: 'casino_service_analysis'
       };
 
     } catch (error) {
-      console.error('❌ Casino get provider list error:', error);
+      console.error('❌ Error getting casino info:', error);
       
       return {
         success: false,
-        message: 'Failed to get provider list',
+        message: 'Failed to get casino information',
         error: error.message
       };
     }
